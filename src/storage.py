@@ -191,7 +191,16 @@ class DuckDBCatalog:
         pattern = os.path.join(self.raw_base_dir, "**/*.parquet")
         files = glob.glob(pattern, recursive=True)
         if not files:
-            return {"total_records": 0, "total_files": 0, "total_bytes": 0}
+            return {
+                "total_rows": 0,
+                "distinct_trips": 0,
+                "distinct_routes": 0,
+                "avg_delay_sec": 0.0,
+                "min_delay_sec": None,
+                "max_delay_sec": None,
+                "total_files": 0,
+                "total_bytes": 0,
+            }
 
         total_bytes = sum(os.path.getsize(f) for f in files)
         con = self.get_connection()
