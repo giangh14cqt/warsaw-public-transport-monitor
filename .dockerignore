@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.git/
+.gitignore
+.DS_Store
+data/
+logs/
+data_sample_warsaw.zip

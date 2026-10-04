@@ -1,0 +1,25 @@
+services:
+  collector:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: warsaw_telemetry_daemon
+    restart: unless-stopped
+    stop_grace_period: 30s
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    environment:
+      - HEARTBEAT_URL=${HEARTBEAT_URL:-}
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '0.50'
+        reservations:
+          memory: 256M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "5"
