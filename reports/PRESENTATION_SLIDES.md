@@ -33,7 +33,7 @@
    └── OSMnx Road Corridor Topology (Al. Jerozolimskie, Puławska, Trasa W-Z)
                   │
                   ▼
-[Unified Feature Mart (2,023,818 rows)]
+[Unified Feature Mart (4,015,785 rows)]
                   │
                   ▼
 [Purged Temporal Block Validation (30m Embargo)]
@@ -46,12 +46,12 @@
 
 ## Slide 3: Telemetry & Feature Engineering Scale
 
-- **Live Ingestion**: 72+ continuous operational hours writing partitioned Parquet.
+- **Live Ingestion**: Continuous 24/7 ingestion writing Hive-partitioned Parquet (`data/raw/`).
 - **Multi-Source Spatiotemporal Mart**:
   - Operational: `prev_stop_delay`, `prev2_stop_delay`, `headway_deviation`, `trip_progress`.
   - Infrastructural: `is_dedicated_right_of_way`, `signalized_intersection_count`, `segment_length_meters`.
   - Meteorological: `precipitation_mm`, `temperature_c`, `relative_humidity`, `freezing_rain_flag`.
-- **Total Dataset Size**: **2,023,818 spatiotemporally aligned transit observations**.
+- **Total Dataset Size**: **4,015,785 spatiotemporally aligned transit observations** with balanced weekday parity (~740k–780k/day).
 
 ---
 
@@ -62,25 +62,26 @@
 - **Methodology**:
   - **Trip Boundary Purging**: Vehicle trips spanning split boundaries are purged from evaluation splits.
   - **Embargo Buffering**: Enforces a 30-minute blackout window between training, validation, and test sets.
-- **Audit Verification**: 100% zero-leakage verified across all 59,826 train, 19,062 val, and 18,687 test records.
+- **Audit Verification**: 100% zero-leakage verified across all training, validation, and testing blocks.
 
 ---
 
 ## Slide 5: Model Benchmark Performance
 
-### Hold-Out Validation Results ($N=100,000$, Cleaned Layovers)
+### Hold-Out Validation Results ($N=50,000$ Evaluation Sample, Cleaned Layovers)
 
 | Model / Cohort | MAE (seconds) | RMSE (seconds) | Median AE (seconds) | WAPE (%) | Validation $R^2$ |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Pooled: TWFE Panel** | 29.08s | 47.73s | 21.20s | 103.38% | -0.0206 |
-| **Pooled: LightGBM** | 28.32s | 46.83s | 20.61s | 100.65% | +0.0173 |
-| **Pooled: CatBoost** | **28.18s** | **46.81s** | **20.52s** | **100.18%** | **+0.0182** |
-| **Urban Tram (LightGBM)** | **27.02s** | 53.28s | **19.42s** | **97.01%** | **+0.0268** |
-| **Suburban Bus (LightGBM)** | **28.01s** | **43.96s** | 20.29s | 100.79% | +0.0138 |
+| **Pooled: TWFE Panel** | 31.26s | 58.61s | 21.72s | 100.68% | +0.0036 |
+| **Pooled: LightGBM** | 30.84s | 58.42s | 21.08s | 99.32% | +0.0100 |
+| **Pooled: CatBoost** | **30.69s** | **58.28s** | **20.82s** | **98.86%** | **+0.0147** |
+| **Urban Tram (CatBoost)** | **26.64s** | **40.70s** | **19.99s** | **96.68%** | **+0.0536** |
+| **Urban Bus (CatBoost)** | 32.60s | 63.73s | 21.82s | 99.27% | +0.0096 |
+| **Suburban Bus (CatBoost)**| 30.10s | 70.84s | **18.47s** | 100.89% | +0.0052 |
 
 - **Key Insights**:
   - **Terminal Layover Filtering**: Purging resting vehicles at termini prevents false stop-delay inflation, isolating pure running transit friction.
-  - **Operational Homogeneity**: Urban Trams achieve the lowest error network-wide (**MAE: 27.02s, MedAE: 19.42s, WAPE: 97.01%**), demonstrating the protective value of segregated rail tracks.
+  - **Operational Homogeneity**: Urban Trams achieve the lowest error network-wide (**CatBoost MAE: 26.64s, MedAE: 19.99s, WAPE: 96.68%, R²: +0.0536**), demonstrating the protective value of segregated rail tracks.
   - **Tree Models Outperform TWFE**: Gradient boosted trees consistently beat linear TWFE panel regression across all cohorts, capturing non-linear congestion thresholds.
 
 ---

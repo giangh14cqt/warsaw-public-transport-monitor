@@ -1,8 +1,8 @@
 {
   "total_incidents_analyzed": 50,
-  "mean_observed_delay": 3370.62,
-  "mean_predicted_delay": -49.867803821734945,
-  "mean_predicted_arrival_delay": 3376.552196178265,
+  "mean_observed_delay": 3090.72,
+  "mean_predicted_delay": -66.73903581665054,
+  "mean_predicted_arrival_delay": 3054.34096418335,
   "on_time_recovery_rates": {
     "dedicated_row_upgrade": 0.0,
     "headway_regularization": 0.0,
@@ -11,10 +11,10 @@
     "joint_multimodal_remedy": 1.0
   },
   "mean_delay_reduction_seconds": {
-    "dedicated_row_upgrade": 0.16933131491088002,
-    "headway_regularization": 48.44587088211272,
+    "dedicated_row_upgrade": 5.0813197419292555,
+    "headway_regularization": 7.348756530733303,
     "upstream_delay_absorption": 0.0,
-    "transit_signal_priority": 0.034956855970106344,
-    "joint_multimodal_remedy": 0.09094252938909535
+    "transit_signal_priority": 1.2163110583086065,
+    "joint_multimodal_remedy": 0.0
   }
 }

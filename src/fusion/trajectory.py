@@ -56,21 +56,28 @@ class TrajectoryReconstructor:
 
         df = df.copy()
 
-        # Deduplicate to ensure strictly one observation per (trip_id, stop_sequence)
+        # Determine trip instance grouping key (safely handles multi-day datasets)
+        if "start_date" in df.columns:
+            trip_inst = df["trip_id"].astype(str) + "_" + df["start_date"].astype(str)
+        else:
+            trip_inst = df["trip_id"].astype(str)
+        df["_trip_instance"] = trip_inst
+
+        # Deduplicate to ensure strictly one observation per (trip_instance, stop_sequence)
         if "feed_timestamp" in df.columns:
             df = df.sort_values(
-                by=["trip_id", "stop_sequence", "feed_timestamp"]
-            ).drop_duplicates(subset=["trip_id", "stop_sequence"], keep="last")
+                by=["_trip_instance", "stop_sequence", "feed_timestamp"]
+            ).drop_duplicates(subset=["_trip_instance", "stop_sequence"], keep="last")
         else:
-            df = df.drop_duplicates(subset=["trip_id", "stop_sequence"], keep="last")
+            df = df.drop_duplicates(subset=["_trip_instance", "stop_sequence"], keep="last")
 
         # Ensure correct sequential ordering
-        df = df.sort_values(by=["trip_id", "stop_sequence"]).reset_index(drop=True)
+        df = df.sort_values(by=["_trip_instance", "stop_sequence"]).reset_index(drop=True)
 
         # Preceding stop references (Lags)
-        df["prev_stop_id"] = df.groupby("trip_id")["stop_id"].shift(1)
-        df["prev_stop_delay"] = df.groupby("trip_id")["arrival_delay_seconds"].shift(1)
-        df["prev2_stop_delay"] = df.groupby("trip_id")["arrival_delay_seconds"].shift(2)
+        df["prev_stop_id"] = df.groupby("_trip_instance")["stop_id"].shift(1)
+        df["prev_stop_delay"] = df.groupby("_trip_instance")["arrival_delay_seconds"].shift(1)
+        df["prev2_stop_delay"] = df.groupby("_trip_instance")["arrival_delay_seconds"].shift(2)
 
         # Running segment delay delta: change in delay from stop s-1 to stop s
         df["delta_t_run"] = df["arrival_delay_seconds"] - df["prev_stop_delay"]
@@ -89,7 +96,7 @@ class TrajectoryReconstructor:
                 dep_time = df["rt_departure_time"].fillna(df["rt_arrival_time"])
             else:
                 dep_time = df["rt_arrival_time"]
-            prev_dep_time = df.groupby("trip_id")[dep_time.name].shift(1)
+            prev_dep_time = df.groupby("_trip_instance")[dep_time.name].shift(1)
             df["observed_run_time_s"] = df["rt_arrival_time"] - prev_dep_time
             # Negative observed runtime indicates sensor glitch or timestamp reversal
             df["observed_run_time_s"] = df["observed_run_time_s"].apply(
@@ -97,8 +104,8 @@ class TrajectoryReconstructor:
             )
 
         # Trip progress ratio [0.0, 1.0]
-        min_seq = df.groupby("trip_id")["stop_sequence"].transform("min")
-        max_seq = df.groupby("trip_id")["stop_sequence"].transform("max")
+        min_seq = df.groupby("_trip_instance")["stop_sequence"].transform("min")
+        max_seq = df.groupby("_trip_instance")["stop_sequence"].transform("max")
         seq_range = max_seq - min_seq
         df["trip_progress"] = np.where(
             seq_range > 0, (df["stop_sequence"] - min_seq) / seq_range, 0.0
@@ -122,8 +129,9 @@ class TrajectoryReconstructor:
             ].transform("median")
             df["headway_deviation"] = valid_headway - median_headway
             # Restore trip-based ordering
-            df = df.sort_values(by=["trip_id", "stop_sequence"]).reset_index(drop=True)
+            df = df.sort_values(by=["_trip_instance", "stop_sequence"]).reset_index(drop=True)
 
+        df = df.drop(columns=["_trip_instance"])
         return df
 
     # --------------------------------------------------------------------------
@@ -138,11 +146,35 @@ class TrajectoryReconstructor:
     ) -> str:
         """Construct the optimized SQL query for full-fleet trajectory reconstruction."""
         limit_clause = f"LIMIT {max_records}" if max_records else ""
+
+        # Inspect schema to check if start_date exists
+        con = duckdb.connect()
+        try:
+            cols = [
+                c[0] for c in con.execute(
+                    f"DESCRIBE SELECT * FROM read_parquet('{input_parquet_pattern}', hive_partitioning=true) LIMIT 1"
+                ).fetchall()
+            ]
+            has_start_date = "start_date" in cols
+        except Exception:
+            has_start_date = False
+        finally:
+            con.close()
+
+        if has_start_date:
+            trip_key_sql = "trip_id || '_' || COALESCE(start_date, CAST(to_timestamp(feed_timestamp) AS DATE)::VARCHAR)"
+            start_date_select = "start_date,"
+        else:
+            trip_key_sql = "trip_id || '_' || CAST(to_timestamp(COALESCE(rt_arrival_time, feed_timestamp)) AS DATE)::VARCHAR"
+            start_date_select = "CAST(to_timestamp(COALESCE(rt_arrival_time, feed_timestamp)) AS DATE)::VARCHAR AS start_date,"
+
         return f"""
             WITH deduped AS (
                 SELECT 
                     feed_timestamp,
                     trip_id,
+                    {trip_key_sql} AS trip_instance_key,
+                    {start_date_select}
                     route_id,
                     vehicle_id,
                     stop_sequence,
@@ -154,7 +186,7 @@ class TrajectoryReconstructor:
                 FROM read_parquet('{input_parquet_pattern}', hive_partitioning=true)
                 WHERE ABS(arrival_delay_seconds) <= {max_delay_seconds}
                 QUALIFY ROW_NUMBER() OVER (
-                    PARTITION BY trip_id, stop_sequence 
+                    PARTITION BY trip_instance_key, stop_sequence 
                     ORDER BY feed_timestamp DESC
                 ) = 1
                 {limit_clause}
@@ -163,6 +195,8 @@ class TrajectoryReconstructor:
                 SELECT 
                     feed_timestamp,
                     trip_id,
+                    trip_instance_key,
+                    start_date,
                     route_id,
                     vehicle_id,
                     stop_sequence,
@@ -172,12 +206,12 @@ class TrajectoryReconstructor:
                     rt_arrival_time,
                     COALESCE(rt_departure_time, rt_arrival_time) AS rt_departure_time,
                     -- Preceding Stop Lags
-                    LAG(stop_id) OVER (PARTITION BY trip_id ORDER BY stop_sequence) AS prev_stop_id,
-                    LAG(arrival_delay_seconds) OVER (PARTITION BY trip_id ORDER BY stop_sequence) AS prev_stop_delay,
-                    LAG(arrival_delay_seconds, 2) OVER (PARTITION BY trip_id ORDER BY stop_sequence) AS prev2_stop_delay,
-                    LAG(COALESCE(rt_departure_time, rt_arrival_time)) OVER (PARTITION BY trip_id ORDER BY stop_sequence) AS prev_rt_departure,
-                    MAX(stop_sequence) OVER (PARTITION BY trip_id) AS max_sequence,
-                    MIN(stop_sequence) OVER (PARTITION BY trip_id) AS min_sequence
+                    LAG(stop_id) OVER (PARTITION BY trip_instance_key ORDER BY stop_sequence) AS prev_stop_id,
+                    LAG(arrival_delay_seconds) OVER (PARTITION BY trip_instance_key ORDER BY stop_sequence) AS prev_stop_delay,
+                    LAG(arrival_delay_seconds, 2) OVER (PARTITION BY trip_instance_key ORDER BY stop_sequence) AS prev2_stop_delay,
+                    LAG(COALESCE(rt_departure_time, rt_arrival_time)) OVER (PARTITION BY trip_instance_key ORDER BY stop_sequence) AS prev_rt_departure,
+                    MAX(stop_sequence) OVER (PARTITION BY trip_instance_key) AS max_sequence,
+                    MIN(stop_sequence) OVER (PARTITION BY trip_instance_key) AS min_sequence
                 FROM deduped
             ),
             decomposed AS (

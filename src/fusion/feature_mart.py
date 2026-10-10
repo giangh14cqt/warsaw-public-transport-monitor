@@ -73,11 +73,34 @@ class FeatureMartAssembler:
             """
         )
 
+        # Inspect raw schema to check if start_date exists
+        con = duckdb.connect()
+        try:
+            cols = [
+                c[0] for c in con.execute(
+                    f"DESCRIBE SELECT * FROM read_parquet('{raw_pattern}', hive_partitioning=true) LIMIT 1"
+                ).fetchall()
+            ]
+            has_start_date = "start_date" in cols
+        except Exception:
+            has_start_date = False
+        finally:
+            con.close()
+
+        if has_start_date:
+            trip_key_sql = "trip_id || '_' || COALESCE(start_date, CAST(to_timestamp(feed_timestamp) AS DATE)::VARCHAR)"
+            start_date_select = "start_date,"
+        else:
+            trip_key_sql = "trip_id || '_' || CAST(to_timestamp(COALESCE(rt_arrival_time, feed_timestamp)) AS DATE)::VARCHAR"
+            start_date_select = "CAST(to_timestamp(COALESCE(rt_arrival_time, feed_timestamp)) AS DATE)::VARCHAR AS start_date,"
+
         return f"""
             WITH deduped AS (
                 SELECT 
                     feed_timestamp,
                     trip_id,
+                    {trip_key_sql} AS trip_instance_key,
+                    {start_date_select}
                     route_id,
                     vehicle_id,
                     stop_sequence,
@@ -89,7 +112,7 @@ class FeatureMartAssembler:
                 FROM read_parquet('{raw_pattern}', hive_partitioning=true)
                 WHERE ABS(arrival_delay_seconds) <= {max_delay_seconds}
                 QUALIFY ROW_NUMBER() OVER (
-                    PARTITION BY trip_id, stop_sequence 
+                    PARTITION BY trip_instance_key, stop_sequence 
                     ORDER BY feed_timestamp DESC
                 ) = 1
                 {limit_clause}
@@ -98,6 +121,8 @@ class FeatureMartAssembler:
                 SELECT 
                     feed_timestamp,
                     trip_id,
+                    trip_instance_key,
+                    start_date,
                     route_id,
                     vehicle_id,
                     stop_sequence,
@@ -107,17 +132,19 @@ class FeatureMartAssembler:
                     rt_arrival_time,
                     COALESCE(rt_departure_time, rt_arrival_time) AS rt_departure_time,
                     -- Preceding Stop Lags
-                    LAG(stop_id) OVER (PARTITION BY trip_id ORDER BY stop_sequence) AS prev_stop_id,
-                    LAG(arrival_delay_seconds) OVER (PARTITION BY trip_id ORDER BY stop_sequence) AS prev_stop_delay,
-                    LAG(arrival_delay_seconds, 2) OVER (PARTITION BY trip_id ORDER BY stop_sequence) AS prev2_stop_delay,
-                    LAG(COALESCE(rt_departure_time, rt_arrival_time)) OVER (PARTITION BY trip_id ORDER BY stop_sequence) AS prev_rt_departure,
-                    MAX(stop_sequence) OVER (PARTITION BY trip_id) AS max_seq,
-                    MIN(stop_sequence) OVER (PARTITION BY trip_id) AS min_seq
+                    LAG(stop_id) OVER (PARTITION BY trip_instance_key ORDER BY stop_sequence) AS prev_stop_id,
+                    LAG(arrival_delay_seconds) OVER (PARTITION BY trip_instance_key ORDER BY stop_sequence) AS prev_stop_delay,
+                    LAG(arrival_delay_seconds, 2) OVER (PARTITION BY trip_instance_key ORDER BY stop_sequence) AS prev2_stop_delay,
+                    LAG(COALESCE(rt_departure_time, rt_arrival_time)) OVER (PARTITION BY trip_instance_key ORDER BY stop_sequence) AS prev_rt_departure,
+                    MAX(stop_sequence) OVER (PARTITION BY trip_instance_key) AS max_seq,
+                    MIN(stop_sequence) OVER (PARTITION BY trip_instance_key) AS min_seq
                 FROM deduped
             ),
             trajectories AS (
                 SELECT 
                     trip_id,
+                    trip_instance_key,
+                    start_date,
                     route_id,
                     vehicle_id,
                     stop_sequence,
@@ -263,6 +290,9 @@ class FeatureMartAssembler:
 
         logger.info(f"Assembled feature mart written to: {out_path}")
         return out_path
+
+    # Backward-compatible alias
+    assemble = assemble_mart
 
     def get_summary(
         self, parquet_path: Optional[str] = None

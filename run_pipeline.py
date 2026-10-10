@@ -80,8 +80,10 @@ def run_stage_exogenous(args: argparse.Namespace) -> Dict[str, Any]:
     weather_path = "data/processed/imgw_weather_hourly.parquet"
     osm_path = "data/processed/osm_corridor_segments.parquet"
 
+    force_rebuild = getattr(args, "force_rebuild", False)
+
     # Weather check
-    if os.path.exists(weather_path) and not args.force_rebuild:
+    if os.path.exists(weather_path) and not force_rebuild:
         logger.info(f"Found active IMGW weather telemetry at {weather_path} ({os.path.getsize(weather_path):,} bytes).")
     else:
         logger.info("Harvesting IMGW-PIB hourly synoptic weather telemetry...")
@@ -89,7 +91,7 @@ def run_stage_exogenous(args: argparse.Namespace) -> Dict[str, Any]:
         fetch_imgw_synoptic_archive(output_path=weather_path)
 
     # OSM corridors check
-    if os.path.exists(osm_path) and not args.force_rebuild:
+    if os.path.exists(osm_path) and not force_rebuild:
         logger.info(f"Found active OSMnx road corridor topology at {osm_path} ({os.path.getsize(osm_path):,} bytes).")
     else:
         logger.info("Extracting OSMnx corridor infrastructure attributes...")
@@ -116,20 +118,27 @@ def run_stage_fusion(args: argparse.Namespace) -> Dict[str, Any]:
 
     max_records = args.sample_size if (args.sample_size and args.sample_size > 0) else None
 
-    if os.path.exists(mart_path) and not args.force_rebuild:
+    force_rebuild = getattr(args, "force_rebuild", False)
+    raw_pat = getattr(args, "raw_pattern", None)
+
+    if os.path.exists(mart_path) and not force_rebuild:
         logger.info(f"Existing feature mart verified at {mart_path} ({os.path.getsize(mart_path):,} bytes).")
         import duckdb
         con = duckdb.connect()
         total_rows = con.execute(f"SELECT count(*) FROM '{mart_path}'").fetchone()[0]
+        con.close()
         logger.info(f"Feature mart contains {total_rows:,} rows.")
     else:
         logger.info(f"Assembling unified feature mart into {mart_path}...")
-        df_mart = assembler.assemble(
-            raw_pattern=args.raw_pattern,
+        assembler.assemble_mart(
+            raw_pattern=raw_pat,
+            output_parquet=mart_path,
             max_records=max_records,
-            save_parquet=True,
         )
-        total_rows = len(df_mart)
+        import duckdb
+        con = duckdb.connect()
+        total_rows = con.execute(f"SELECT count(*) FROM '{mart_path}'").fetchone()[0]
+        con.close()
         logger.info(f"Successfully assembled {total_rows:,} feature records.")
 
     duration = time.time() - t0
