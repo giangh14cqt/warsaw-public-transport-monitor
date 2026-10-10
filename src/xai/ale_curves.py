@@ -354,6 +354,64 @@ class ALENonLinearDetector:
         return results
 
 
+def run_ale_pipeline(
+    feature_mart_path: str = "data/processed/feature_mart.parquet",
+    output_dir: str = "reports/figures/xai",
+    sample_size: int = 30000,
+) -> Dict[str, Any]:
+    """Execute end-to-end ALE non-linear curve diagnostics workflow."""
+    import duckdb
+    from src.models.gbm import GradientBoostingBenchmark
+    from src.models.validation import PurgedTemporalBlockSplitter
+
+    os.makedirs(output_dir, exist_ok=True)
+    con = duckdb.connect()
+    logger.info("Loading feature mart sample for ALE curve diagnostics...")
+    df = con.execute(f"SELECT * FROM '{feature_mart_path}' USING SAMPLE {sample_size} (reservoir, 42)").df()
+    if "is_terminal_stop" in df.columns:
+        df = df[df["is_terminal_stop"] == False].copy()
+    elif "trip_progress" in df.columns:
+        df = df[df["trip_progress"] < 0.99].copy()
+
+    feature_cols = [
+        "prev_stop_delay",
+        "signalized_intersection_count",
+        "segment_length_meters",
+        "is_dedicated_right_of_way",
+        "trip_progress",
+        "headway_deviation",
+        "hour_of_day",
+        "day_of_week",
+        "is_peak_hour",
+        "precipitation_mm",
+        "temperature_c",
+    ]
+    valid_features = [c for c in feature_cols if c in df.columns]
+
+    splitter = PurgedTemporalBlockSplitter(embargo_minutes=30.0, purge_trips=True)
+    train_df, val_df, test_df = splitter.split(df, train_ratio=0.6, val_ratio=0.2)
+
+    logger.info("Training gradient boosting model for ALE analysis...")
+    gbm = GradientBoostingBenchmark(target_col="delta_t_run", model_type="lightgbm")
+    gbm.train(train_df, val_df, valid_features, n_estimators=80)
+
+    detector = ALENonLinearDetector(gbm)
+    report = detector.run_suite(
+        test_df[valid_features],
+        features=[
+            "prev_stop_delay",
+            "trip_progress",
+            "signalized_intersection_count",
+            "segment_length_meters",
+            "is_dedicated_right_of_way",
+            "temperature_c",
+            "precipitation_mm",
+        ],
+        output_dir=output_dir,
+    )
+    return report
+
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
     mart_path = "data/processed/feature_mart.parquet"

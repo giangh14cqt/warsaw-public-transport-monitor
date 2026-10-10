@@ -72,15 +72,16 @@
 
 | Model / Cohort | MAE (seconds) | RMSE (seconds) | Median AE (seconds) | WAPE (%) | Validation $R^2$ |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Pooled: TWFE Panel** | 28.70s | 45.26s | 21.24s | 103.91% | -0.0305 |
-| **Pooled: LightGBM** | 27.86s | **44.08s** | 20.46s | 100.87% | **+0.0223** |
-| **Pooled: CatBoost** | **27.64s** | 44.26s | **20.34s** | **100.05%** | +0.0145 |
-| **Urban Tram (LightGBM)** | **26.83s** | **47.70s** | **19.47s** | **97.57%** | **+0.0256** |
-| **Suburban Bus (CatBoost)** | **28.52s** | **59.22s** | **20.02s** | **103.00%** | **+0.0336** |
+| **Pooled: TWFE Panel** | 29.08s | 47.73s | 21.20s | 103.38% | -0.0206 |
+| **Pooled: LightGBM** | 28.32s | 46.83s | 20.61s | 100.65% | +0.0173 |
+| **Pooled: CatBoost** | **28.18s** | **46.81s** | **20.52s** | **100.18%** | **+0.0182** |
+| **Urban Tram (LightGBM)** | **27.02s** | 53.28s | **19.42s** | **97.01%** | **+0.0268** |
+| **Suburban Bus (LightGBM)** | **28.01s** | **43.96s** | 20.29s | 100.79% | +0.0138 |
 
 - **Key Insights**:
-  - **Terminal Layover Filtering**: Purging resting vehicles at termini reduces forecast error by **1.21s to 1.88s** across all models.
-  - **Operational Homogeneity**: Urban Trams achieve the lowest error network-wide (**MAE: 26.83s, WAPE < 98%**), demonstrating the protective value of segregated rail tracks.
+  - **Terminal Layover Filtering**: Purging resting vehicles at termini prevents false stop-delay inflation, isolating pure running transit friction.
+  - **Operational Homogeneity**: Urban Trams achieve the lowest error network-wide (**MAE: 27.02s, MedAE: 19.42s, WAPE: 97.01%**), demonstrating the protective value of segregated rail tracks.
+  - **Tree Models Outperform TWFE**: Gradient boosted trees consistently beat linear TWFE panel regression across all cohorts, capturing non-linear congestion thresholds.
 
 ---
 
@@ -140,15 +141,16 @@ $$y_{ist} = \alpha_i + \lambda_t + \beta_1 \text{Signals}_{is} + \beta_2 \text{R
 
 ## Slide 10: Actionable Counterfactual Remedies (DiCE)
 
-### Transitioning Delayed States Back to On-Time ($\Delta t \le 120$s)
+### Operational Remediation for Delayed States
 
-| Operational Remedy | Mean Delay Reduction | On-Time Restoration Rate |
+| Operational Remedy | Segment Delay Reduction | On-Time Restoration Rate ($\le 120$s) |
 | :--- | :--- | :--- |
-| **Headway Regularization ($dev \to 0$)** | **+2.99s / stop** | **100.0%** |
-| **Dedicated ROW Upgrade ($ROW \to 1$)** | **+0.53s / stop** | **100.0%** |
-| **Joint Multimodal Optimization** | **+1.00s / stop** | **100.0%** |
+| **Dedicated ROW Upgrade ($ROW \to 1$)** | **+1.44s / stop** (buses) | **0.0%** (alone cannot erase 8m upstream) |
+| **Headway Regularization ($dev \to 0$)** | **+0.51s to +4.15s / stop** | **0.0%** (prevents downstream bunching) |
+| **Upstream Schedule Holding / Reset** | **+1.84s / stop** | **100.0%** (restores timetable adherence) |
+| **Joint Multimodal Remedy** | **+2.08s / stop** | **100.0%** (holding + pacing + ROW) |
 
-- **Key Takeaway**: Dynamic headway regularization is the single most cost-effective real-time dispatch intervention available to transit operators.
+- **Key Takeaway**: Single-segment infrastructure upgrades attenuate incremental running delay (+1.44s/stop) but cannot erase 8 minutes of accumulated upstream backlog in 400m; restoring schedule on-time status requires upstream dispatch holding and schedule recovery resets.
 
 *Exhibit*: `reports/figures/xai/counterfactual_policy_impact.png`
 
@@ -169,7 +171,7 @@ $$y_{ist} = \alpha_i + \lambda_t + \beta_1 \text{Signals}_{is} + \beta_2 \text{R
 
 - **Codebase**: Fully reproducible, modular Python package.
 - **Master Orchestrator**: `run_pipeline.py --stage all`
-- **Unit & Integration Test Suite**: **54/54 tests passing (100% test pass rate)**.
+- **Unit & Integration Test Suite**: **55/55 tests passing (100% test pass rate)**.
 - **Open Access**: Complete codebase, notebooks, and documentation hosted at:
   [`https://github.com/giangh14cqt/warsaw-public-transport-monitor`](https://github.com/giangh14cqt/warsaw-public-transport-monitor)
 

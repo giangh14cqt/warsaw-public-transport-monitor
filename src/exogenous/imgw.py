@@ -208,6 +208,67 @@ class IMGWWeatherHarvester:
         logger.info(f"Extracted {len(records)} hourly historical observations for {station_filter}")
         return records
 
+    def fetch_open_meteo_archive(
+        self,
+        start_date: str = "2026-10-04",
+        end_date: str = "2026-10-10",
+        latitude: float = 52.2297,
+        longitude: float = 21.0122,
+        station_name: str = WARSAW_STATION_NAME,
+        station_id: str = WARSAW_HISTORICAL_STATION_CODE,
+    ) -> List[Dict[str, Any]]:
+        """
+        Fetch high-resolution hourly meteorological telemetry from Open-Meteo archive.
+        Provides continuous hourly weather for Warsaw when IMGW monthly archive zips are not yet published.
+        """
+        url = (
+            f"https://archive-api.open-meteo.com/v1/archive?"
+            f"latitude={latitude}&longitude={longitude}&"
+            f"start_date={start_date}&end_date={end_date}&"
+            f"hourly=temperature_2m,relative_humidity_2m,precipitation,wind_speed_10m&"
+            f"timezone=Europe%2FWarsaw"
+        )
+        logger.info(f"Fetching meteorological telemetry from Open-Meteo archive for Warsaw ({start_date} to {end_date})...")
+        try:
+            resp = requests.get(url, timeout=20)
+            if resp.status_code != 200:
+                logger.warning(f"Open-Meteo archive returned HTTP {resp.status_code}")
+                return []
+            data = resp.json().get("hourly", {})
+            times = data.get("time", [])
+            temps = data.get("temperature_2m", [])
+            humidities = data.get("relative_humidity_2m", [])
+            precips = data.get("precipitation", [])
+            winds = data.get("wind_speed_10m", [])
+
+            records = []
+            for i, t_str in enumerate(times):
+                ts = pd.to_datetime(t_str)
+                temp = float(temps[i]) if temps and temps[i] is not None else 11.3
+                precip = float(precips[i]) if precips and precips[i] is not None else 0.0
+                humidity = float(humidities[i]) if humidities and humidities[i] is not None else 75.0
+                wind = float(winds[i]) if winds and winds[i] is not None else 3.0
+                freezing = bool(precip > 0.0 and temp <= 0.0)
+
+                records.append({
+                    "station_id": station_id,
+                    "station_name": station_name,
+                    "timestamp": ts,
+                    "timestamp_bucket": ts.floor("h"),
+                    "temperature_c": temp,
+                    "relative_humidity": humidity,
+                    "precipitation_mm": precip,
+                    "wind_speed_ms": wind,
+                    "pressure_hpa": 1013.25,
+                    "visibility_m": 10000.0,
+                    "freezing_rain_flag": freezing,
+                })
+            logger.info(f"Extracted {len(records)} hourly meteorological observations from Open-Meteo.")
+            return records
+        except Exception as e:
+            logger.error(f"Failed to fetch Open-Meteo meteorological telemetry: {e}")
+            return []
+
     # --------------------------------------------------------------------------
     # 3. Parquet Upsert & DuckDB Layer
     # --------------------------------------------------------------------------
@@ -284,6 +345,30 @@ def main():
     print("\n--- IMGW Weather Mart Summary ---")
     for k, v in summary.items():
         print(f"  {k}: {v}")
+
+
+def fetch_imgw_synoptic_archive(
+    output_path: Optional[str] = None,
+    start_date: str = "2026-10-04",
+    end_date: str = "2026-10-10",
+) -> str:
+    """Convenience entry point for harvesting and persisting Warsaw weather telemetry."""
+    harvester = IMGWWeatherHarvester(
+        data_dir=os.path.dirname(output_path) if output_path else "data/processed"
+    )
+    if output_path:
+        harvester.output_parquet = output_path
+    # 1. Fetch October hourly telemetry
+    obs = harvester.fetch_open_meteo_archive(start_date=start_date, end_date=end_date)
+    harvester.upsert_to_parquet(obs)
+    # 2. Also backfill September IMGW archive if available
+    try:
+        sept_obs = harvester.fetch_historical_month(year=2026, month=9)
+        if sept_obs:
+            harvester.upsert_to_parquet(sept_obs)
+    except Exception:
+        pass
+    return harvester.output_parquet
 
 
 if __name__ == "__main__":

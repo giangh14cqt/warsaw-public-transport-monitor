@@ -401,6 +401,19 @@ class OSMCorridorExtractor:
         }
 
 
+def extract_default_corridors(output_path: Optional[str] = None) -> str:
+    """Convenience helper to extract and save default study corridors."""
+    extractor = OSMCorridorExtractor(
+        data_dir=os.path.dirname(output_path) if output_path else "data/processed"
+    )
+    if output_path:
+        extractor.output_parquet = output_path
+    df_segments = extractor.process_corridors()
+    if not df_segments.empty:
+        extractor.save_segments(df_segments)
+    return extractor.output_parquet
+
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
     extractor = OSMCorridorExtractor()

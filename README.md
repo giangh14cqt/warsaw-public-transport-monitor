@@ -5,7 +5,7 @@
 [![Engine-DuckDB](https://img.shields.io/badge/analytics-DuckDB-yellow.svg)](https://duckdb.org/)
 [![Models-LightGBM%20%7C%20CatBoost](https://img.shields.io/badge/models-LightGBM%20%7C%20CatBoost-brightgreen.svg)](https://lightgbm.readthedocs.io/)
 [![xAI-SHAP%20%7C%20ALE%20%7C%20DiCE](https://img.shields.io/badge/xAI-SHAP%20%7C%20ALE%20%7C%20DiCE-purple.svg)](https://github.com/shap/shap)
-[![Tests-Passing](https://img.shields.io/badge/tests-54%2F54%20passing-success.svg)](tests/)
+[![Tests-Passing](https://img.shields.io/badge/tests-55%2F55%20passing-success.svg)](tests/)
 [![Docker](https://img.shields.io/badge/deployment-Docker%20Compose-2496ED.svg)](https://www.docker.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
@@ -130,23 +130,23 @@ We benchmarked classical econometrics against state-of-the-art gradient boosted 
 
 | Model Architecture | Specification / Regularization | Hold-Out MAE | Hold-Out RMSE | Median AE | WAPE (%) | Validation $R^2$ |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Econometric TWFE Baseline** | Within Route + Hour FE + HC1 Robust OLS | 28.70s | 45.26s | 21.24s | 103.91% | -0.0305 |
-| **LightGBM Regressor** | Tree-depth 7, LR 0.05, L2 Reg 1.0 | 27.86s | **44.08s** | 20.46s | 100.87% | **+0.0223** |
-| **CatBoost Regressor** | Symmetric Oblivious Trees, LR 0.05 | **27.64s** | 44.26s | **20.34s** | **100.05%** | +0.0145 |
+| **Econometric TWFE Baseline** | Within Route + Hour FE + HC1 Robust OLS | 29.08s | 47.73s | 21.20s | 103.38% | -0.0206 |
+| **LightGBM Regressor** | Tree-depth 7, LR 0.05, L2 Reg 1.0 | 28.32s | 46.83s | 20.61s | 100.65% | +0.0173 |
+| **CatBoost Regressor** | Symmetric Oblivious Trees, LR 0.05 | **28.18s** | **46.81s** | **20.52s** | **100.18%** | **+0.0182** |
 
 ### 5.2 Stratified Evaluation Across Transit Cohorts
 
 | Transit Cohort | Best Model | Hold-Out MAE | Hold-Out RMSE | Median AE | WAPE (%) | Validation $R^2$ |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Urban Trams (`urban_tram`)** | **LightGBM Regressor** | **26.83s** | **47.70s** | **19.47s** | **97.57%** | **+0.0256** |
-| **Core Urban Buses (`urban_bus`)** | **CatBoost Regressor** | 28.34s | 43.40s | 20.75s | 100.54% | -0.0054 |
-| **Suburban Feeders (`suburban_bus`)** | **CatBoost Regressor** | 28.52s | 59.22s | 20.02s | 103.00% | **+0.0336** |
+| **Urban Trams (`urban_tram`)** | **LightGBM Regressor** | **27.02s** | 53.28s | **19.42s** | **97.01%** | **+0.0268** |
+| **Core Urban Buses (`urban_bus`)** | **LightGBM / CatBoost** | 29.08s | 46.64s | 21.10s | 100.48% | +0.0144 |
+| **Suburban Feeders (`suburban_bus`)** | **LightGBM / CatBoost** | 28.01s | **43.96s** | 20.29s | 100.79% | +0.0138 |
 
 ### 5.3 Econometric Panel Insights (TWFE)
 $$y_{ist} = \alpha_i + \lambda_t + \beta X_{ist} + \epsilon_{ist}$$
 * **Traffic Signal Density**: Statistically significant at $p < 0.0001$ ($\beta = +1.1883\text{s}/\text{signal}, t = 10.74$). The estimated point elasticity is $\varepsilon = +0.5032$, indicating that a 10% increase in traffic signals induces a 5.03% increase in segment arrival delay.
 * **Dedicated Right-of-Way**: Statistically significant baseline reduction of $\beta = -1.8541\text{s}$ ($p < 0.0001$).
-* **Why Gradient Boosting Outperforms**: Linear specifications cannot capture saturation limits or interaction buffering. LightGBM and CatBoost capture threshold dynamics and achieve superior error reduction across all cohorts, driving tram WAPE down to **97.57%**.
+* **Why Gradient Boosting Outperforms**: Linear specifications cannot capture saturation limits or interaction buffering. LightGBM and CatBoost capture threshold dynamics and achieve superior error reduction across all cohorts, driving tram WAPE down to **97.56%**.
 
 ---
 
@@ -179,9 +179,9 @@ Pairwise SHAP interaction values $\Phi_{i,j}(x)$ evaluate whether dedicated infr
 ![Interaction Headway vs ROW](reports/figures/xai/interaction_headway_deviation_vs_dedicated_row.png)
 
 ### 6.4 Counterfactual Diagnostics (DiCE)
-Using Diverse Counterfactual Explanations (DiCE), we evaluated actionable remedies across severe delay incidents ($\Delta t > 300$s):
-* **Dynamic Headway Regularization**: Restoring dispatch spacing ($dev \to 0$) alone recovers **+2.99s per stop segment**.
-* **On-Time Recovery**: Combined operational pacing and dedicated ROW upgrades successfully restore **100%** of severe delay cases back to on-time arrival ($\Delta t \le 120$s).
+Using Diverse Counterfactual Explanations (DiCE), we evaluated actionable remedies across severe delay incidents:
+* **Segment Delay Attenuation**: Dedicated ROW conversion saves **+1.44s per stop** for mixed-traffic buses, and headway regularization recovers **+0.51s to +4.15s per stop** across bunched lines.
+* **On-Time Recovery**: Upstream schedule recovery holding and dispatch resets successfully restore **100%** of severe delay cases back to on-time arrival ($\Delta t \le 120$s).
 
 ![Counterfactual Policy Impact](reports/figures/xai/counterfactual_policy_impact.png)
 
@@ -229,7 +229,7 @@ python3 run_pipeline.py --stage benchmark --sample-size 50000
 │   ├── PROJECT_IMPROVEMENT_ROADMAP.md # Research roadmap & next upgrades
 │   ├── tables/               # Benchmark comparison CSVs and counterfactual metrics JSON
 │   └── figures/xai/          # 14 publication-grade xAI diagnostic figures
-├── tests/                    # 54 unit and E2E integration tests (100% passing)
+├── tests/                    # 55 unit and E2E integration tests (100% passing)
 ├── data/
 │   ├── raw/                  # Partitioned Parquet sink (year=YYYY/month=MM/day=DD/)
 │   ├── gtfs/                 # Archived weekly static GTFS timetable snapshots
@@ -286,7 +286,7 @@ python3 run_pipeline.py --stage xai
 The repository maintains an automated unit and end-to-end integration test suite covering all modules:
 
 ```bash
-# Run the complete test suite (54 tests in ~12 seconds)
+# Run the complete test suite (55 tests in ~21 seconds)
 .venv/bin/python3 -m unittest discover tests
 
 # Run specific E2E pipeline integration test suite
@@ -294,7 +294,7 @@ The repository maintains an automated unit and end-to-end integration test suite
 ```
 
 ```text
-Ran 54 tests in 12.371s
+Ran 55 tests in 21.123s
 OK (100% pass rate)
 ```
 

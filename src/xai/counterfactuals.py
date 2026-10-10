@@ -253,10 +253,16 @@ class CounterfactualDiagnostics:
         base_df = pd.DataFrame([row])
         current_pred = float(self.predict(base_df)[0])
 
+        orig_prev_delay = float(row.get("prev_stop_delay", 0.0))
+        orig_arrival_delay = orig_prev_delay + current_pred
+        observed_arrival = float(row.get("arrival_delay_seconds", orig_arrival_delay))
+
         results = {
             "original_prediction": current_pred,
+            "predicted_arrival_delay": orig_arrival_delay,
+            "observed_arrival_delay": observed_arrival,
             "on_time_target": target_on_time_threshold,
-            "is_currently_on_time": current_pred <= target_on_time_threshold,
+            "is_currently_on_time": orig_arrival_delay <= target_on_time_threshold,
             "scenarios": {},
         }
 
@@ -265,11 +271,13 @@ class CounterfactualDiagnostics:
         if "is_dedicated_right_of_way" in scen_row.columns:
             scen_row["is_dedicated_right_of_way"] = 1.0
             pred_row = float(self.predict(scen_row)[0])
+            pred_arr_row = orig_prev_delay + pred_row
             results["scenarios"]["dedicated_row_upgrade"] = {
                 "name": "Dedicated Transit Right-of-Way",
                 "predicted_delay": pred_row,
-                "delay_savings": current_pred - pred_row,
-                "achieves_on_time": pred_row <= target_on_time_threshold,
+                "predicted_arrival_delay": pred_arr_row,
+                "delay_savings": max(0.0, current_pred - pred_row),
+                "achieves_on_time": pred_arr_row <= target_on_time_threshold,
                 "mutations": {"is_dedicated_right_of_way": {"from": float(row.get("is_dedicated_right_of_way", 0.0)), "to": 1.0}},
             }
 
@@ -278,11 +286,13 @@ class CounterfactualDiagnostics:
         if "headway_deviation" in scen_hw.columns:
             scen_hw["headway_deviation"] = 0.0
             pred_hw = float(self.predict(scen_hw)[0])
+            pred_arr_hw = orig_prev_delay + pred_hw
             results["scenarios"]["headway_regularization"] = {
                 "name": "Dynamic Headway Regularization (No Bunching)",
                 "predicted_delay": pred_hw,
-                "delay_savings": current_pred - pred_hw,
-                "achieves_on_time": pred_hw <= target_on_time_threshold,
+                "predicted_arrival_delay": pred_arr_hw,
+                "delay_savings": max(0.0, current_pred - pred_hw),
+                "achieves_on_time": pred_arr_hw <= target_on_time_threshold,
                 "mutations": {"headway_deviation": {"from": float(row.get("headway_deviation", 0.0)), "to": 0.0}},
             }
 
@@ -291,12 +301,15 @@ class CounterfactualDiagnostics:
         if "prev_stop_delay" in scen_up.columns:
             scen_up["prev_stop_delay"] = 0.0
             pred_up = float(self.predict(scen_up)[0])
+            pred_arr_up = 0.0 + pred_up
             results["scenarios"]["upstream_delay_absorption"] = {
                 "name": "Upstream Schedule Recovery / Hub Holding",
                 "predicted_delay": pred_up,
-                "delay_savings": current_pred - pred_up,
-                "achieves_on_time": pred_up <= target_on_time_threshold,
-                "mutations": {"prev_stop_delay": {"from": float(row.get("prev_stop_delay", 0.0)), "to": 0.0}},
+                "predicted_arrival_delay": pred_arr_up,
+                "delay_savings": max(0.0, current_pred - pred_up),
+                "arrival_delay_savings": max(0.0, orig_arrival_delay - pred_arr_up),
+                "achieves_on_time": pred_arr_up <= target_on_time_threshold,
+                "mutations": {"prev_stop_delay": {"from": orig_prev_delay, "to": 0.0}},
             }
 
         # 4. Policy: Transit Signal Priority (TSP Green Wave)
@@ -304,11 +317,13 @@ class CounterfactualDiagnostics:
         if "signalized_intersection_count" in scen_tsp.columns:
             scen_tsp["signalized_intersection_count"] = 0.0
             pred_tsp = float(self.predict(scen_tsp)[0])
+            pred_arr_tsp = orig_prev_delay + pred_tsp
             results["scenarios"]["transit_signal_priority"] = {
                 "name": "Full Transit Signal Priority (TSP)",
                 "predicted_delay": pred_tsp,
-                "delay_savings": current_pred - pred_tsp,
-                "achieves_on_time": pred_tsp <= target_on_time_threshold,
+                "predicted_arrival_delay": pred_arr_tsp,
+                "delay_savings": max(0.0, current_pred - pred_tsp),
+                "achieves_on_time": pred_arr_tsp <= target_on_time_threshold,
                 "mutations": {"signalized_intersection_count": {"from": float(row.get("signalized_intersection_count", 0.0)), "to": 0.0}},
             }
 
@@ -322,29 +337,30 @@ class CounterfactualDiagnostics:
             scen_joint["headway_deviation"] = 0.0
             joint_mutations["headway_deviation"] = {"from": float(row.get("headway_deviation", 0.0)), "to": 0.0}
         if "prev_stop_delay" in scen_joint.columns:
-            # 50% upstream buffer absorption
-            orig_prev = float(row.get("prev_stop_delay", 0.0))
-            new_prev = max(0.0, orig_prev * 0.25)
-            scen_joint["prev_stop_delay"] = new_prev
-            joint_mutations["prev_stop_delay"] = {"from": orig_prev, "to": new_prev}
+            # Hub recovery resets prior accumulated delay to zero
+            joint_mutations["prev_stop_delay"] = {"from": orig_prev_delay, "to": 0.0}
+            scen_joint["prev_stop_delay"] = 0.0
         if "signalized_intersection_count" in scen_joint.columns:
             orig_sig = float(row.get("signalized_intersection_count", 0.0))
-            new_sig = max(0.0, orig_sig * 0.5)
+            new_sig = 0.0
             scen_joint["signalized_intersection_count"] = new_sig
             joint_mutations["signalized_intersection_count"] = {"from": orig_sig, "to": new_sig}
 
         pred_joint = float(self.predict(scen_joint)[0])
+        pred_arr_joint = 0.0 + pred_joint
         results["scenarios"]["joint_multimodal_remedy"] = {
             "name": "Joint Multimodal Operational & Infrastructure Remedy",
             "predicted_delay": pred_joint,
-            "delay_savings": current_pred - pred_joint,
-            "achieves_on_time": pred_joint <= target_on_time_threshold,
+            "predicted_arrival_delay": pred_arr_joint,
+            "delay_savings": max(0.0, current_pred - pred_joint),
+            "achieves_on_time": pred_arr_joint <= target_on_time_threshold,
             "mutations": joint_mutations,
         }
 
-        # Determine most efficient single intervention
+        # Determine most efficient single physical/dispatch intervention
         single_scenarios = [
-            k for k in results["scenarios"].keys() if k != "joint_multimodal_remedy"
+            k for k in ["headway_regularization", "dedicated_row_upgrade", "transit_signal_priority"]
+            if k in results["scenarios"]
         ]
         if single_scenarios:
             best_single = max(single_scenarios, key=lambda k: results["scenarios"][k]["delay_savings"])
@@ -356,7 +372,7 @@ class CounterfactualDiagnostics:
     def run_severe_delay_batch_diagnostics(
         self,
         df: pd.DataFrame,
-        delay_threshold: float = 600.0,
+        delay_threshold: float = 300.0,
         max_samples: int = 50,
         target_on_time: float = 120.0,
     ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
@@ -368,7 +384,7 @@ class CounterfactualDiagnostics:
         df : pd.DataFrame
             Validation or test set containing transit records.
         delay_threshold : float
-            Threshold identifying severe delay incidents (default 600s = 10 minutes).
+            Threshold identifying severe delay incidents (default 300s = 5 minutes).
         max_samples : int
             Maximum severe delay cases to evaluate.
         target_on_time : float
@@ -379,14 +395,14 @@ class CounterfactualDiagnostics:
         Tuple[pd.DataFrame, Dict[str, Any]]
             Per-sample scenario results dataframe and aggregate policy impact metrics.
         """
-        target_col = self.target_col if self.target_col in df.columns else "arrival_delay_seconds"
-        severe_df = df[df[target_col] >= delay_threshold].copy()
+        filter_col = "arrival_delay_seconds" if "arrival_delay_seconds" in df.columns else self.target_col
+        severe_df = df[df[filter_col] >= delay_threshold].copy()
 
         if len(severe_df) == 0:
-            logger.warning(f"No records found with {target_col} >= {delay_threshold}s. Subsampling top delays.")
-            severe_df = df.sort_values(by=target_col, ascending=False).head(max_samples).copy()
+            logger.warning(f"No records found with {filter_col} >= {delay_threshold}s. Subsampling top delays.")
+            severe_df = df.sort_values(by=filter_col, ascending=False).head(max_samples).copy()
         elif len(severe_df) > max_samples:
-            severe_df = severe_df.sort_values(by=target_col, ascending=False).head(max_samples).copy()
+            severe_df = severe_df.sort_values(by=filter_col, ascending=False).head(max_samples).copy()
 
         logger.info(f"Evaluating counterfactual diagnostics across {len(severe_df)} severe delay incidents...")
 
@@ -395,13 +411,15 @@ class CounterfactualDiagnostics:
             diag = self.generate_actionable_interventions(row, target_on_time_threshold=target_on_time)
             rec = {
                 "route_id": str(row.get("route_id", "unknown")),
-                "observed_delay": float(row.get(target_col, 0.0)),
+                "observed_delay": float(row.get(filter_col, 0.0)),
                 "predicted_delay": diag["original_prediction"],
+                "predicted_arrival_delay": diag["predicted_arrival_delay"],
                 "most_effective_single_lever": diag.get("most_effective_single_lever", "none"),
                 "max_single_savings": diag.get("max_single_delay_savings", 0.0),
             }
             for k, sc in diag["scenarios"].items():
                 rec[f"{k}_pred"] = sc["predicted_delay"]
+                rec[f"{k}_arrival_pred"] = sc["predicted_arrival_delay"]
                 rec[f"{k}_savings"] = sc["delay_savings"]
                 rec[f"{k}_on_time"] = sc["achieves_on_time"]
             records.append(rec)
@@ -414,6 +432,7 @@ class CounterfactualDiagnostics:
             "total_incidents_analyzed": n,
             "mean_observed_delay": float(results_df["observed_delay"].mean()),
             "mean_predicted_delay": float(results_df["predicted_delay"].mean()),
+            "mean_predicted_arrival_delay": float(results_df["predicted_arrival_delay"].mean()),
             "on_time_recovery_rates": {
                 "dedicated_row_upgrade": float(results_df.get("dedicated_row_upgrade_on_time", pd.Series([False])).mean()),
                 "headway_regularization": float(results_df.get("headway_regularization_on_time", pd.Series([False])).mean()),
@@ -439,10 +458,10 @@ class CounterfactualDiagnostics:
         title: Optional[str] = None,
     ) -> str:
         """
-        Plot bar chart comparing predicted delay under various policy interventions for a single case.
+        Plot bar chart comparing predicted arrival delay under various policy interventions for a single case.
         """
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
-        orig_delay = instance_dict["original_prediction"]
+        orig_delay = instance_dict.get("predicted_arrival_delay", instance_dict["original_prediction"])
         target = instance_dict["on_time_target"]
 
         labels = ["Baseline (Status Quo)"]
@@ -459,13 +478,13 @@ class CounterfactualDiagnostics:
 
         for k, sc in instance_dict["scenarios"].items():
             labels.append(sc["name"])
-            values.append(sc["predicted_delay"])
+            values.append(sc.get("predicted_arrival_delay", sc["predicted_delay"]))
             colors.append(scenario_colors.get(k, "#6c757d"))
 
         fig, ax = plt.subplots(figsize=(10, 6))
         bars = ax.barh(labels, values, color=colors, edgecolor="black", alpha=0.85, height=0.55)
         ax.axvline(target, color="green", linestyle="--", linewidth=2.0, label=f"On-Time Threshold ({target:.0f}s)")
-        ax.set_xlabel("Predicted Delay Delta $\\Delta t$ (seconds)", fontsize=12, fontweight="bold")
+        ax.set_xlabel("Predicted Arrival Delay at Stop (seconds)", fontsize=12, fontweight="bold")
         ax.set_title(
             title or "Counterfactual Policy Interventions for Severe Transit Delay",
             fontsize=13,
@@ -535,20 +554,23 @@ class CounterfactualDiagnostics:
         ax1.set_title("Average Delay Attenuation by Intervention", fontsize=12, fontweight="bold")
         ax1.grid(axis="y", linestyle=":", alpha=0.6)
 
+        ax1.set_ylim(0, max(max(savings_vals) * 1.25, 1.0) if savings_vals else 5.0)
+
         for bar in bars1:
             h = bar.get_height()
-            ax1.text(bar.get_x() + bar.get_width() / 2, h + 1.0, f"+{h:.1f}s", ha="center", va="bottom", fontweight="bold")
+            offset = max(h * 0.04, 0.1)
+            ax1.text(bar.get_x() + bar.get_width() / 2, h + offset, f"+{h:.1f}s", ha="center", va="bottom", fontweight="bold", fontsize=10)
 
         # Panel 2: On-Time Recovery Rate (%)
         bars2 = ax2.bar(policy_names, recovery_vals, color=bar_colors, edgecolor="black", alpha=0.85, width=0.55)
         ax2.set_ylabel("On-Time Restoration Rate (%)", fontsize=11, fontweight="bold")
         ax2.set_title("Probability of Achieving On-Time Status ($\\Delta t \\leq 120$s)", fontsize=12, fontweight="bold")
         ax2.grid(axis="y", linestyle=":", alpha=0.6)
-        ax2.set_ylim(0, 105)
+        ax2.set_ylim(0, 115)
 
         for bar in bars2:
             h = bar.get_height()
-            ax2.text(bar.get_x() + bar.get_width() / 2, h + 1.5, f"{h:.1f}%", ha="center", va="bottom", fontweight="bold")
+            ax2.text(bar.get_x() + bar.get_width() / 2, h + 2.0, f"{h:.1f}%", ha="center", va="bottom", fontweight="bold", fontsize=10)
 
         plt.suptitle(
             "Empirical Policy Efficacy: Transit Delay Counterfactual Remedies (N = {})".format(
@@ -580,7 +602,7 @@ def run_counterfactual_pipeline(
 
     con = duckdb.connect()
     logger.info(f"Loading feature mart from {feature_mart_path}...")
-    sample_df = con.execute(f"SELECT * FROM '{feature_mart_path}' USING SAMPLE 100000").df()
+    sample_df = con.execute(f"SELECT * FROM '{feature_mart_path}' USING SAMPLE 100000 (reservoir, 42)").df()
 
     target_col = "delta_t_run" if "delta_t_run" in sample_df.columns else "arrival_delay_seconds"
     feature_cols = [

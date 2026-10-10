@@ -158,7 +158,7 @@ def run_stage_benchmark(args: argparse.Namespace) -> Dict[str, Any]:
 
     con = duckdb.connect()
     logger.info(f"Loading {sample_size:,} sample rows from {mart_path}...")
-    df_sample = con.execute(f"SELECT * FROM '{mart_path}' USING SAMPLE {sample_size}").df()
+    df_sample = con.execute(f"SELECT * FROM '{mart_path}' USING SAMPLE {sample_size} (reservoir, 42)").df()
 
     tables_dir = os.path.join(args.output_dir, "tables")
     os.makedirs(tables_dir, exist_ok=True)

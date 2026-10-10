@@ -200,7 +200,7 @@ if __name__ == "__main__":
     if os.path.exists(mart_path):
         con = duckdb.connect()
         logger.info(f"Loading feature mart from {mart_path}...")
-        df_sample = con.execute(f"SELECT * FROM '{mart_path}' USING SAMPLE 100000").df()
+        df_sample = con.execute(f"SELECT * FROM '{mart_path}' USING SAMPLE 100000 (reservoir, 42)").df()
         summary = run_benchmark(df_sample)
         print("\n" + "=" * 78)
         print("MODEL BENCHMARK COMPARISON SUMMARY (HOLD-OUT VALIDATION)")
