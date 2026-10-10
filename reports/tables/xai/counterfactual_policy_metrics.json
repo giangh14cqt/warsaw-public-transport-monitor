@@ -1,0 +1,19 @@
+{
+  "total_incidents_analyzed": 45,
+  "mean_observed_delay": 482.22222222222223,
+  "mean_predicted_delay": 13.742233055752548,
+  "on_time_recovery_rates": {
+    "dedicated_row_upgrade": 1.0,
+    "headway_regularization": 1.0,
+    "upstream_delay_absorption": 1.0,
+    "transit_signal_priority": 1.0,
+    "joint_multimodal_remedy": 1.0
+  },
+  "mean_delay_reduction_seconds": {
+    "dedicated_row_upgrade": 0.5251827206075427,
+    "headway_regularization": 2.992204425530117,
+    "upstream_delay_absorption": -1.555420005515431,
+    "transit_signal_priority": 0.0,
+    "joint_multimodal_remedy": 0.9955546884876548
+  }
+}
