@@ -350,9 +350,11 @@ def main():
 def fetch_imgw_synoptic_archive(
     output_path: Optional[str] = None,
     start_date: str = "2026-10-04",
-    end_date: str = "2026-10-10",
+    end_date: Optional[str] = None,
 ) -> str:
     """Convenience entry point for harvesting and persisting Warsaw weather telemetry."""
+    if end_date is None:
+        end_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     harvester = IMGWWeatherHarvester(
         data_dir=os.path.dirname(output_path) if output_path else "data/processed"
     )

@@ -81,7 +81,7 @@ def run_stage_exogenous(args: argparse.Namespace) -> Dict[str, Any]:
     osm_path = "data/processed/osm_corridor_segments.parquet"
 
     # Weather check
-    if os.path.exists(weather_path):
+    if os.path.exists(weather_path) and not args.force_rebuild:
         logger.info(f"Found active IMGW weather telemetry at {weather_path} ({os.path.getsize(weather_path):,} bytes).")
     else:
         logger.info("Harvesting IMGW-PIB hourly synoptic weather telemetry...")
@@ -89,7 +89,7 @@ def run_stage_exogenous(args: argparse.Namespace) -> Dict[str, Any]:
         fetch_imgw_synoptic_archive(output_path=weather_path)
 
     # OSM corridors check
-    if os.path.exists(osm_path):
+    if os.path.exists(osm_path) and not args.force_rebuild:
         logger.info(f"Found active OSMnx road corridor topology at {osm_path} ({os.path.getsize(osm_path):,} bytes).")
     else:
         logger.info("Extracting OSMnx corridor infrastructure attributes...")
