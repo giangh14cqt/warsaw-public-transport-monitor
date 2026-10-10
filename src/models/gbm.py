@@ -39,6 +39,8 @@ class GradientBoostingBenchmark:
         X_val = val_df[feature_cols].fillna(0)
         y_val = val_df[self.target_col].fillna(0)
 
+        from src.models.metrics import compute_regression_metrics
+
         try:
             import lightgbm as lgb
             self.model = lgb.LGBMRegressor(
@@ -49,14 +51,12 @@ class GradientBoostingBenchmark:
             )
             self.model.fit(X_train, y_train)
             preds = self.model.predict(X_val)
-
-            mae = float(np.mean(np.abs(y_val - preds)))
-            rmse = float(np.sqrt(np.mean((y_val - preds) ** 2)))
-            ss_tot = np.sum((y_val - np.mean(y_val)) ** 2)
-            r2 = float(1 - (np.sum((y_val - preds) ** 2) / ss_tot)) if ss_tot > 0 else 0.0
-
-            metrics = {"val_mae": mae, "val_rmse": rmse, "val_r2": r2}
-            logger.info(f"LightGBM validation: MAE={mae:.2f}s, RMSE={rmse:.2f}s, R²={r2:.4f}")
+            metrics = compute_regression_metrics(y_val, preds, prefix="val_")
+            logger.info(
+                f"LightGBM validation: MAE={metrics['val_mae']:.2f}s, "
+                f"RMSE={metrics['val_rmse']:.2f}s, R²={metrics['val_r2']:.4f}, "
+                f"WAPE={metrics['val_wape']:.2f}%"
+            )
             return metrics
         except ImportError:
             logger.warning("LightGBM not installed. Using basic scikit-learn regressor fallback.")
@@ -64,9 +64,8 @@ class GradientBoostingBenchmark:
             self.model = HistGradientBoostingRegressor(max_iter=n_estimators, random_state=42)
             self.model.fit(X_train, y_train)
             preds = self.model.predict(X_val)
-            mae = float(np.mean(np.abs(y_val - preds)))
-            rmse = float(np.sqrt(np.mean((y_val - preds) ** 2)))
-            return {"val_mae": mae, "val_rmse": rmse, "val_r2": 0.0}
+            metrics = compute_regression_metrics(y_val, preds, prefix="val_")
+            return metrics
 
     def predict(self, test_df: pd.DataFrame) -> np.ndarray:
         """Generate predictions on test set."""
