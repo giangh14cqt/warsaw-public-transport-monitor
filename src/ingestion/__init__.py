@@ -1,11 +1,6 @@
 """
-Warsaw Transit Delay Attribution & Ingestion Engine Package.
-Supports both legacy root imports and modern domain packages:
-- src.ingestion
-- src.exogenous
-- src.fusion
-- src.models
-- src.xai
+Warsaw Public Transport Ingestion Subsystem.
+Handles GTFS-RT Protobuf polling, static timetable downloads, deduplication, and Parquet storage.
 """
 
 from src.ingestion.fetcher import (

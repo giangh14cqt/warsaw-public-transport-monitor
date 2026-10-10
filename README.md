@@ -85,23 +85,40 @@ Each record captured in the partitioned Parquet files adheres to the following t
 
 ```text
 .
+├── .agent/                   # Antigravity IDE agent rules & workflows
+│   ├── rules/
+│   │   ├── 01_architecture.md   # Parquet partitioning, zero-lock concurrency rules
+│   │   ├── 02_error_handling.md # Circuit breakers (HTTP 429 backoff, rate limiting)
+│   │   └── 03_code_style.md     # Python standards (uv, ruff, backwards compatibility)
+│   └── workflows/
+│       ├── run-preflight.md     # /run-preflight trigger
+│       ├── harvest-weather.md   # /harvest-weather trigger
+│       └── eval-models.md       # /eval-models trigger
 ├── .dockerignore
 ├── .env.example              # Configuration template (Heartbeat URL, paths)
 ├── .gitignore                # Protects data/, logs/, and virtual environment
 ├── Dockerfile                # Production container definition (Python 3.12-slim)
 ├── docker-compose.yml        # Multi-month daemon service with resource bounds
-├── requirements.txt          # Python dependencies
+├── pyproject.toml            # Modern project specification & tool configuration
+├── requirements.txt          # Production ingestion dependencies
 ├── run_preflight.py          # Pre-flight sandbox verification test
 ├── collector_daemon.py       # Main continuous polling daemon with signal traps
 ├── backup_to_gdrive.sh       # Automated rclone backup script for Google Drive
+├── pull_from_gdrive.sh       # Syncs partitions down from Google Drive for local analytics
 ├── src/
-│   ├── __init__.py
-│   ├── fetcher.py            # Resilient GTFS-RT Protobuf deserializer & circuit breaker
-│   ├── gtfs_manager.py       # Weekly static timetable downloader & DuckDB indexer
-│   └── storage.py            # Parquet partition writer & DuckDB catalog connector
+│   ├── ingestion/            # Phase 1: GTFS-RT pollers, static archiver & Parquet sink
+│   ├── exogenous/            # Phase 2: IMGW weather harvester & OSMnx road topology
+│   ├── fusion/               # Phase 3: Trajectory reconstruction & multi-source joins
+│   ├── models/               # Phase 4: TWFE panel regression & LightGBM/CatBoost
+│   ├── xai/                  # Phase 5: TreeSHAP, ALE curves & DiCE counterfactuals
+│   ├── fetcher.py            # Backward-compatible proxy to src.ingestion.fetcher
+│   ├── gtfs_manager.py       # Backward-compatible proxy to src.ingestion.gtfs_manager
+│   └── storage.py            # Backward-compatible proxy to src.ingestion.storage
+├── tests/                    # Unit tests, pre-flight and schema sanity checks
 ├── data/
+│   ├── raw/                  # Partitioned Parquet sink (year=YYYY/month=MM/day=DD/)
 │   ├── gtfs/                 # Archived weekly static GTFS snapshots
-│   └── raw/                  # Partitioned Parquet sink (year=YYYY/month=MM/day=DD/)
+│   └── processed/            # Fused feature marts (feature_mart.parquet)
 └── logs/
     ├── collector_health.log  # 15-minute rotating heartbeat log
     └── backup.log            # Audit trail of Google Drive cloud backups
@@ -221,7 +238,7 @@ To safeguard against local drive failures, the pipeline includes an automated in
 1. **Configure rclone with Google Drive**:
    ```bash
    rclone config
-   # Name remote: giang-gg-drive (or your custom name)
+   # Name remote: gdrive (or specify RCLONE_REMOTE in your .env)
    ```
 2. **Test manual backup**:
    ```bash
@@ -233,8 +250,16 @@ To safeguard against local drive failures, the pipeline includes an automated in
    ```
    Add the following entry:
    ```cron
-   0 3 * * * /home/giangcqt/warsaw-public-transport-monitor/backup_to_gdrive.sh > /dev/null 2>&1
+   0 3 * * * /path/to/warsaw-public-transport-monitor/backup_to_gdrive.sh > /dev/null 2>&1
    ```
+
+### Pulling Data Down for Local Analytics
+
+To work locally with fresh telemetry captured on the remote server without touching the running daemon, sync partitions down from Google Drive:
+```bash
+./pull_from_gdrive.sh
+```
+This runs an incremental `rclone copy --update`, fetching newly archived Parquet partitions into `data/raw/` while preserving existing local files.
 
 ---
 

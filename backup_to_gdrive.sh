@@ -10,8 +10,16 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-# Configuration (can be overridden via environment variables)
-RCLONE_REMOTE="${RCLONE_REMOTE:-giang-gg-drive}"
+# Automatically load .env if present
+if [ -f "$SCRIPT_DIR/.env" ]; then
+    set -a
+    # shellcheck disable=SC1091
+    source "$SCRIPT_DIR/.env"
+    set +a
+fi
+
+# Configuration (can be overridden via environment variables or .env)
+RCLONE_REMOTE="${RCLONE_REMOTE:-gdrive}"
 DEST_FOLDER="${DEST_FOLDER:-WarsawDelayTelemetry/data/raw}"
 SOURCE_DIR="${SOURCE_DIR:-$SCRIPT_DIR/data/raw}"
 LOG_DIR="${LOG_DIR:-$SCRIPT_DIR/logs}"

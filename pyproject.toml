@@ -1,0 +1,56 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "warsaw-public-transport-monitor"
+version = "0.2.0"
+description = "Warsaw Public Transit High-Frequency Delay Ingestion, Spatiotemporal Fusion, and xAI Modeling Engine"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [
+    { name = "Warsaw Public Transport Monitor Project" }
+]
+dependencies = [
+    "requests>=2.31.0",
+    "protobuf>=4.25.0",
+    "gtfs-realtime-bindings>=1.0.0",
+    "duckdb>=0.10.0",
+    "pandas>=2.2.0",
+    "pyarrow>=15.0.0",
+    "tenacity>=8.2.0",
+]
+
+[project.optional-dependencies]
+analysis = [
+    "osmnx>=1.9.0",
+    "geopandas>=0.14.0",
+    "shapely>=2.0.0",
+]
+modeling = [
+    "scikit-learn>=1.4.0",
+    "lightgbm>=4.3.0",
+    "statsmodels>=0.14.0",
+    "linearmodels>=6.0",
+    "shap>=0.45.0",
+    "PyALE>=1.1.0",
+    "dice-ml>=0.11",
+]
+dev = [
+    "pytest>=8.0.0",
+    "ruff>=0.3.0",
+    "mypy>=1.8.0",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]

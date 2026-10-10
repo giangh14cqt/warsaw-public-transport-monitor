@@ -1,5 +1,9 @@
 # Environment variables & secrets
 .env
+.env.*
+!.env.example
+LOCAL_DEPLOYMENT.md
+*.local.md
 
 # Virtual environments
 .venv/
@@ -11,6 +15,14 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.so
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Packaging & builds
+build/
+dist/
+*.egg-info/
 
 # Data sinks & static schedule archives (generated on runtime)
 data/
