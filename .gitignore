@@ -19,6 +19,7 @@ __pycache__/
 .ruff_cache/
 .mypy_cache/
 cache/
+catboost_info/
 
 # Packaging & builds
 build/
