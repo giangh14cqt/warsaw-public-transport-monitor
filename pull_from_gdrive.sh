@@ -21,7 +21,7 @@ fi
 
 # Configuration (can be overridden via environment variables or .env)
 RCLONE_REMOTE="${RCLONE_REMOTE:-gdrive}"
-REMOTE_FOLDER="${REMOTE_FOLDER:-WarsawDelayTelemetry/data/raw}"
+REMOTE_FOLDER="${REMOTE_FOLDER:-${DEST_FOLDER:-WarsawDelayTelemetry/data/raw}}"
 TARGET_DIR="${TARGET_DIR:-$SCRIPT_DIR/data/raw}"
 LOG_DIR="${LOG_DIR:-$SCRIPT_DIR/logs}"
 LOG_FILE="$LOG_DIR/pull_gdrive.log"
