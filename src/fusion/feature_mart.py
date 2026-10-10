@@ -34,11 +34,13 @@ class FeatureMartAssembler:
         osm_parquet_path: str,
         max_delay_seconds: int = 7200,
         max_records: Optional[int] = None,
+        exclude_terminals: bool = True,
     ) -> str:
         """Construct the optimized DuckDB SQL query for multi-source spatiotemporal fusion."""
         limit_clause = f"LIMIT {max_records}" if max_records else ""
         has_weather = os.path.exists(weather_parquet_path)
         has_osm = os.path.exists(osm_parquet_path)
+        terminal_filter_clause = "AND (t.is_terminal_stop = false OR t.max_seq <= t.min_seq + 1)" if exclude_terminals else ""
 
         weather_subquery = (
             f"SELECT * FROM read_parquet('{weather_parquet_path}')"
@@ -147,7 +149,17 @@ class FeatureMartAssembler:
                     -- Trip Progress
                     CASE WHEN max_seq > min_seq THEN ROUND(CAST(stop_sequence - min_seq AS DOUBLE) / (max_seq - min_seq), 3) ELSE 0.0 END AS trip_progress,
                     CASE WHEN stop_sequence = min_seq THEN true ELSE false END AS is_origin_stop,
-                    CASE WHEN TRY_CAST(route_id AS INTEGER) IS NOT NULL AND TRY_CAST(route_id AS INTEGER) < 100 THEN 1 ELSE 0 END AS is_tram
+                    CASE WHEN stop_sequence = max_seq AND max_seq > min_seq THEN true ELSE false END AS is_terminal_stop,
+                    max_seq,
+                    min_seq,
+                    CASE WHEN TRY_CAST(route_id AS INTEGER) IS NOT NULL AND TRY_CAST(route_id AS INTEGER) < 100 THEN 1 ELSE 0 END AS is_tram,
+                    CASE 
+                        WHEN TRY_CAST(route_id AS INTEGER) BETWEEN 1 AND 79 THEN 'urban_tram'
+                        WHEN TRY_CAST(route_id AS INTEGER) BETWEEN 100 AND 599 THEN 'urban_bus'
+                        WHEN TRY_CAST(route_id AS INTEGER) BETWEEN 700 AND 899 OR UPPER(route_id) LIKE 'L%' THEN 'suburban_bus'
+                        WHEN UPPER(route_id) LIKE 'N%' THEN 'night_bus'
+                        ELSE 'other'
+                    END AS transit_cohort
                 FROM ordered
             ),
             with_headway AS (
@@ -177,7 +189,9 @@ class FeatureMartAssembler:
                 t.observed_run_time_s,
                 t.trip_progress,
                 t.is_origin_stop,
+                t.is_terminal_stop,
                 t.is_tram,
+                t.transit_cohort,
                 t.arrival_ts,
                 t.timestamp_bucket,
                 t.hour_of_day,
@@ -209,6 +223,7 @@ class FeatureMartAssembler:
             LEFT JOIN v_weather w ON t.timestamp_bucket = w.timestamp::TIMESTAMP
             LEFT JOIN v_osm osm ON (t.prev_stop_id = osm.stop_id_prev AND t.stop_id = osm.stop_id_curr)
             WHERE t.prev_stop_id IS NOT NULL  -- Retain stop-to-stop running segments
+              {terminal_filter_clause}
               AND ABS(t.delta_t_run) <= 1800   -- Filter extreme segment anomalies (>30 min)
             ORDER BY t.arrival_ts
         """
@@ -220,6 +235,7 @@ class FeatureMartAssembler:
         osm_parquet_path: Optional[str] = None,
         output_parquet: Optional[str] = None,
         max_records: Optional[int] = None,
+        exclude_terminals: bool = True,
     ) -> str:
         """Execute full spatial-temporal join and anomaly filtering in DuckDB."""
         in_raw = raw_pattern or os.path.join(self.raw_dir, "**/*.parquet")
@@ -237,6 +253,7 @@ class FeatureMartAssembler:
             weather_parquet_path=in_weather,
             osm_parquet_path=in_osm,
             max_records=max_records,
+            exclude_terminals=exclude_terminals,
         )
 
         copy_query = f"COPY ({sql}) TO '{out_path}' (FORMAT PARQUET, COMPRESSION SNAPPY)"

@@ -104,6 +104,7 @@ class TrajectoryReconstructor:
             seq_range > 0, (df["stop_sequence"] - min_seq) / seq_range, 0.0
         ).round(3)
         df["is_origin_stop"] = df["stop_sequence"] == min_seq
+        df["is_terminal_stop"] = (df["stop_sequence"] == max_seq) & (max_seq > min_seq)
 
         # Headway Deviation relative to preceding vehicle on the same route and stop
         if "route_id" in df.columns and "rt_arrival_time" in df.columns:
@@ -213,7 +214,8 @@ class TrajectoryReconstructor:
                         THEN ROUND(CAST(stop_sequence - min_sequence AS DOUBLE) / (max_sequence - min_sequence), 3)
                         ELSE 0.0 
                     END AS trip_progress,
-                    CASE WHEN stop_sequence = min_sequence THEN true ELSE false END AS is_origin_stop
+                    CASE WHEN stop_sequence = min_sequence THEN true ELSE false END AS is_origin_stop,
+                    CASE WHEN stop_sequence = max_sequence AND max_sequence > min_sequence THEN true ELSE false END AS is_terminal_stop
                 FROM base_ordered
             ),
             with_headway AS (

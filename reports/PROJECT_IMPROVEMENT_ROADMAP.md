@@ -53,12 +53,12 @@ It outlines concrete, actionable recommendations across all dimensions of the pr
 
 ## 3. Data Cleansing, Exclusion & Cohort Stratification
 
-| Phenomenon | Bias Induced | Recommended Filtering Strategy |
-| :--- | :--- | :--- |
-| **Terminal Layover & Turnaround Drift** | Vehicles resting at termini (*pętle*, e.g., Os. Górczewska, Żerań FSO) keep GPS units active and accumulate artificial idle delays that are driver rest breaks, not street congestion. | Exclude first and last stops (`stop_sequence == 1` or `max_seq`), or filter records where vehicle speed $= 0$ for $> 5$ minutes at designated turnaround facilities. |
-| **Fleet / Line Type Heterogeneity** | Suburban charter routes (L-lines, e.g., L41) and express buses (500-lines) operate on 50–80 km/h regional highways, while city trams (e.g., Tram 17, 33) operate on dedicated tracks with signal priority. Aggregating them into one regression introduces unobserved heterogeneity. | **Stratify the dataset into 3 distinct cohorts**: (1) Urban Trams, (2) Core Urban Buses (100–200 & 500 lines), and (3) Suburban Feeders (700 & L-lines). Run separate benchmark models for each. |
-| **Temporary Service Disruptions & Detours** | Traffic collisions, track blockages, or major construction projects (e.g., *Tramwaj do Wilanowa* along Sobieskiego) produce extreme outlier delays ($> 30$ min) unrelated to routine corridor dynamics. | Ingest the GTFS-RT `alerts.pb` feed and exclude stop segments during active civil works / detour alerts. |
-| **GPS Jitter & Stop Clustering** | Around mega-stops (e.g., *Dworzec Centralny 01* through *30*), vehicles passing within 20m of adjacent platforms trigger misassigned GTFS-RT arrivals. | Apply a Kalman filter or Hausdorff distance check against GTFS `shapes.txt` to reject coordinate anomalies. |
+| Phenomenon | Bias Induced | Recommended Filtering Strategy | Status |
+| :--- | :--- | :--- | :--- |
+| **Terminal Layover & Turnaround Drift** | Vehicles resting at termini (*pętle*, e.g., Os. Górczewska, Żerań FSO) keep GPS units active and accumulate artificial idle delays that are driver rest breaks, not street congestion. | Exclude first and last stops (`stop_sequence == 1` or `max_seq`), or filter records where vehicle speed $= 0$ for $> 5$ minutes at designated turnaround facilities. | **Implemented** (Integrated into `src/fusion/feature_mart.py`, `trajectory.py`, and `benchmark.py`; reduces MAE by ~1.2–1.9s) |
+| **Fleet / Line Type Heterogeneity** | Suburban charter routes (L-lines, e.g., L41) and express buses (500-lines) operate on 50–80 km/h regional highways, while city trams (e.g., Tram 17, 33) operate on dedicated tracks with signal priority. Aggregating them into one regression introduces unobserved heterogeneity. | **Stratify the dataset into 3 distinct cohorts**: (1) Urban Trams, (2) Core Urban Buses (100–200 & 500 lines), and (3) Suburban Feeders (700 & L-lines). Run separate benchmark models for each. | **Implemented** (Classified via `transit_cohort` and evaluated via `--cohort stratified` in `run_pipeline.py`; tram MAE reaches 26.83s, WAPE 97.57%) |
+| **Temporary Service Disruptions & Detours** | Traffic collisions, track blockages, or major construction projects (e.g., *Tramwaj do Wilanowa* along Sobieskiego) produce extreme outlier delays ($> 30$ min) unrelated to routine corridor dynamics. | Ingest the GTFS-RT `alerts.pb` feed and exclude stop segments during active civil works / detour alerts. | Planned (Phase A) |
+| **GPS Jitter & Stop Clustering** | Around mega-stops (e.g., *Dworzec Centralny 01* through *30*), vehicles passing within 20m of adjacent platforms trigger misassigned GTFS-RT arrivals. | Apply a Kalman filter or Hausdorff distance check against GTFS `shapes.txt` to reject coordinate anomalies. | Planned (Phase A) |
 
 ---
 
@@ -132,8 +132,8 @@ To make the thesis visually compelling and demonstrative during defenses and pre
 ```
 Phase A: Data & Hygiene Refinements (Weeks 1–2)
 ├── Keep background daemon capturing winter telemetry continuously
-├── Exclude terminal turnaround idling records (stop_sequence == 1 or max_seq)
-└── Stratify evaluation by transit cohort (Trams vs Core Buses vs Suburban)
+├── [x] Exclude terminal turnaround idling records (stop_sequence == 1 or max_seq)
+└── [x] Stratify evaluation by transit cohort (Trams vs Core Buses vs Suburban)
 
 Phase B: Advanced Econometric & Spatial Upgrades (Weeks 3–4)
 ├── Add Two-Way Clustered Standard Errors (route_id x date) in TWFE

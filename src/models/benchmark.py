@@ -5,7 +5,7 @@ Executes purged temporal block validation and outputs comparative performance me
 
 import os
 import logging
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 import pandas as pd
 import duckdb
 
@@ -17,14 +17,70 @@ from src.models.gbm import GradientBoostingBenchmark
 logger = logging.getLogger(__name__)
 
 
-def run_benchmark(feature_mart_df: pd.DataFrame, sample_size: int = 100000) -> pd.DataFrame:
+def classify_cohort(df: pd.DataFrame) -> pd.Series:
+    """Classify Warsaw transit line into operational cohort."""
+    if "transit_cohort" in df.columns:
+        return df["transit_cohort"]
+
+    def _get_cohort(row) -> str:
+        r_str = str(row.get("route_id", "")).strip()
+        is_tram = row.get("is_tram", 0)
+        if is_tram == 1 or (r_str.isdigit() and 1 <= int(r_str) <= 79):
+            return "urban_tram"
+        if r_str.isdigit() and 100 <= int(r_str) <= 599:
+            return "urban_bus"
+        if (r_str.isdigit() and 700 <= int(r_str) <= 899) or r_str.upper().startswith("L"):
+            return "suburban_bus"
+        if r_str.upper().startswith("N"):
+            return "night_bus"
+        return "other"
+
+    return df.apply(_get_cohort, axis=1)
+
+
+def run_benchmark(
+    feature_mart_df: pd.DataFrame,
+    sample_size: int = 100000,
+    cohort: Optional[str] = None,
+    exclude_terminals: bool = True,
+) -> pd.DataFrame:
     """
     Run end-to-end comparative benchmark across:
     1. Econometric Two-Way Fixed Effects Panel Regression
     2. LightGBM Non-Linear Gradient Boosting Regressor
     3. CatBoost Non-Linear Gradient Boosting Regressor
+
+    Parameters
+    ----------
+    feature_mart_df : pd.DataFrame
+        Input feature mart records.
+    sample_size : int
+        Maximum observations to evaluate.
+    cohort : Optional[str]
+        Optional transit cohort to filter on ('urban_tram', 'urban_bus', 'suburban_bus', 'all').
+    exclude_terminals : bool
+        Whether to filter out terminal turnaround layover stops (default: True).
     """
-    df = feature_mart_df
+    df = feature_mart_df.copy()
+
+    # 1. Terminal Layover Filtering (Removes statutory driver layovers at pętle)
+    if exclude_terminals:
+        if "is_terminal_stop" in df.columns:
+            n_before = len(df)
+            df = df[df["is_terminal_stop"] == False].copy()
+            logger.info(f"Filtered {n_before - len(df):,} terminal layover stops via is_terminal_stop flag.")
+        elif "trip_progress" in df.columns:
+            n_before = len(df)
+            df = df[df["trip_progress"] < 0.99].copy()
+            logger.info(f"Filtered {n_before - len(df):,} terminal layover stops via trip_progress < 0.99.")
+
+    # 2. Cohort Filtering
+    if cohort and cohort != "all":
+        cohort_series = classify_cohort(df)
+        df["_cohort"] = cohort_series
+        df = df[df["_cohort"] == cohort].drop(columns=["_cohort"]).copy()
+        logger.info(f"Filtered dataset to cohort '{cohort}': {len(df):,} records remaining.")
+
     if len(df) > sample_size:
         logger.info(f"Subsampling {sample_size} rows from {len(df)} rows for benchmark efficiency.")
         df = df.sample(n=sample_size, random_state=42).copy()
@@ -101,6 +157,41 @@ def run_benchmark(feature_mart_df: pd.DataFrame, sample_size: int = 100000) -> p
         },
     ])
     return benchmark_summary
+
+
+def run_stratified_benchmark(
+    feature_mart_df: pd.DataFrame,
+    sample_size: int = 100000,
+    cohorts: Optional[List[str]] = None,
+    exclude_terminals: bool = True,
+) -> pd.DataFrame:
+    """
+    Run comparative benchmarks across pooled data and stratified transit cohorts:
+    - urban_tram (Trams on tracks/ROW)
+    - urban_bus (City core routes 100-599)
+    - suburban_bus (Regional feeder routes 700-899 & L-lines)
+    """
+    target_cohorts = cohorts or ["pooled", "urban_tram", "urban_bus", "suburban_bus"]
+    all_results = []
+
+    for c in target_cohorts:
+        cohort_name = c if c != "pooled" else "all"
+        logger.info(f"\n{'='*70}\nRunning benchmark for cohort: {c.upper()}\n{'='*70}")
+        try:
+            summary = run_benchmark(
+                feature_mart_df,
+                sample_size=sample_size,
+                cohort=cohort_name,
+                exclude_terminals=exclude_terminals,
+            )
+            summary.insert(0, "cohort", c)
+            all_results.append(summary)
+        except Exception as e:
+            logger.error(f"Failed benchmark for cohort {c}: {e}")
+
+    if all_results:
+        return pd.concat(all_results, ignore_index=True)
+    return pd.DataFrame()
 
 
 if __name__ == "__main__":

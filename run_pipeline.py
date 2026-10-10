@@ -145,7 +145,7 @@ def run_stage_benchmark(args: argparse.Namespace) -> Dict[str, Any]:
     """Train econometric TWFE baseline and gradient boosting benchmark models."""
     banner("STAGE 4: ECONOMETRIC & MACHINE LEARNING BENCHMARK MODELS")
     import duckdb
-    from src.models.benchmark import run_benchmark
+    from src.models.benchmark import run_benchmark, run_stratified_benchmark
 
     t0 = time.time()
     mart_path = "data/processed/feature_mart.parquet"
@@ -153,18 +153,44 @@ def run_stage_benchmark(args: argparse.Namespace) -> Dict[str, Any]:
         raise FileNotFoundError(f"Feature mart not found at {mart_path}. Run --stage fusion first.")
 
     sample_size = args.sample_size if args.sample_size > 0 else 100000
+    exclude_terminals = not getattr(args, "include_terminals", False)
+    cohort_arg = getattr(args, "cohort", "stratified")
+
     con = duckdb.connect()
     logger.info(f"Loading {sample_size:,} sample rows from {mart_path}...")
     df_sample = con.execute(f"SELECT * FROM '{mart_path}' USING SAMPLE {sample_size}").df()
 
-    logger.info("Executing purged temporal block benchmark (TWFE vs. LightGBM vs. CatBoost)...")
-    summary_df = run_benchmark(df_sample, sample_size=sample_size)
-
     tables_dir = os.path.join(args.output_dir, "tables")
     os.makedirs(tables_dir, exist_ok=True)
     summary_csv = os.path.join(tables_dir, "benchmark_comparison.csv")
-    summary_df.to_csv(summary_csv, index=False)
-    logger.info(f"Benchmark comparison table exported to {summary_csv}")
+
+    if cohort_arg == "stratified":
+        logger.info("Executing stratified benchmark across pooled, urban tram, urban bus, and suburban bus cohorts...")
+        cohort_df = run_stratified_benchmark(
+            df_sample, sample_size=sample_size, exclude_terminals=exclude_terminals
+        )
+        cohort_csv = os.path.join(tables_dir, "benchmark_by_cohort.csv")
+        cohort_df.to_csv(cohort_csv, index=False)
+        logger.info(f"Stratified cohort benchmark table exported to {cohort_csv}")
+
+        # Also extract pooled benchmark as primary comparison table
+        pooled_df = cohort_df[cohort_df["cohort"] == "pooled"].drop(columns=["cohort"]).reset_index(drop=True)
+        if pooled_df.empty:
+            pooled_df = run_benchmark(df_sample, sample_size=sample_size, exclude_terminals=exclude_terminals)
+        pooled_df.to_csv(summary_csv, index=False)
+        logger.info(f"Pooled benchmark comparison table exported to {summary_csv}")
+        summary_df = cohort_df
+    else:
+        target_cohort = None if cohort_arg == "all" else cohort_arg
+        logger.info(f"Executing benchmark for cohort '{cohort_arg}' (exclude_terminals={exclude_terminals})...")
+        summary_df = run_benchmark(
+            df_sample,
+            sample_size=sample_size,
+            cohort=target_cohort,
+            exclude_terminals=exclude_terminals,
+        )
+        summary_df.to_csv(summary_csv, index=False)
+        logger.info(f"Benchmark comparison table exported to {summary_csv}")
 
     duration = time.time() - t0
     print("\n" + summary_df.to_string(index=False) + "\n")
@@ -256,6 +282,18 @@ def main():
         "--force-rebuild",
         action="store_true",
         help="Force rebuild of feature_mart.parquet even if already present.",
+    )
+    parser.add_argument(
+        "--cohort",
+        type=str,
+        default="stratified",
+        choices=["all", "stratified", "urban_tram", "urban_bus", "suburban_bus"],
+        help="Transit cohort to evaluate: all (pooled), stratified (all cohorts), or specific cohort.",
+    )
+    parser.add_argument(
+        "--include-terminals",
+        action="store_true",
+        help="Include terminal layover stops (default is to exclude for noise reduction).",
     )
     parser.add_argument(
         "--dry-run",

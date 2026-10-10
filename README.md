@@ -124,19 +124,29 @@ Standard K-fold cross-validation suffers from severe data leakage in time-series
 
 ## 5. Empirical Modeling Benchmarks (TWFE vs. GBM)
 
-We benchmarked classical econometrics against state-of-the-art gradient boosted trees on the hold-out validation set ($N = 100,000$ sample, $N_{\text{val}} = 18,970$):
+We benchmarked classical econometrics against state-of-the-art gradient boosted trees on the hold-out validation set ($N = 100,000$ sample, $N_{\text{val}} = 18,970$), after filtering spurious terminal layovers:
+
+### 5.1 Pooled Network Benchmark (Cleaned Layovers)
 
 | Model Architecture | Specification / Regularization | Hold-Out MAE | Hold-Out RMSE | Median AE | WAPE (%) | Validation $R^2$ |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Econometric TWFE Baseline** | Within Route + Hour FE + HC1 Robust OLS | 30.58s | 52.38s | 22.20s | 105.99% | -0.1052 |
-| **LightGBM Regressor** | Tree-depth 7, LR 0.05, L2 Reg 1.0 | 29.08s | **48.98s** | **20.85s** | 100.80% | **+0.0335** |
-| **CatBoost Regressor** | Symmetric Oblivious Trees, LR 0.05 | **28.85s** | 49.03s | 20.91s | **100.00%** | +0.0314 |
+| **Econometric TWFE Baseline** | Within Route + Hour FE + HC1 Robust OLS | 28.70s | 45.26s | 21.24s | 103.91% | -0.0305 |
+| **LightGBM Regressor** | Tree-depth 7, LR 0.05, L2 Reg 1.0 | 27.86s | **44.08s** | 20.46s | 100.87% | **+0.0223** |
+| **CatBoost Regressor** | Symmetric Oblivious Trees, LR 0.05 | **27.64s** | 44.26s | **20.34s** | **100.05%** | +0.0145 |
 
-### Econometric Panel Insights (TWFE)
+### 5.2 Stratified Evaluation Across Transit Cohorts
+
+| Transit Cohort | Best Model | Hold-Out MAE | Hold-Out RMSE | Median AE | WAPE (%) | Validation $R^2$ |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **Urban Trams (`urban_tram`)** | **LightGBM Regressor** | **26.83s** | **47.70s** | **19.47s** | **97.57%** | **+0.0256** |
+| **Core Urban Buses (`urban_bus`)** | **CatBoost Regressor** | 28.34s | 43.40s | 20.75s | 100.54% | -0.0054 |
+| **Suburban Feeders (`suburban_bus`)** | **CatBoost Regressor** | 28.52s | 59.22s | 20.02s | 103.00% | **+0.0336** |
+
+### 5.3 Econometric Panel Insights (TWFE)
 $$y_{ist} = \alpha_i + \lambda_t + \beta X_{ist} + \epsilon_{ist}$$
 * **Traffic Signal Density**: Statistically significant at $p < 0.0001$ ($\beta = +1.1883\text{s}/\text{signal}, t = 10.74$). The estimated point elasticity is $\varepsilon = +0.5032$, indicating that a 10% increase in traffic signals induces a 5.03% increase in segment arrival delay.
 * **Dedicated Right-of-Way**: Statistically significant baseline reduction of $\beta = -1.8541\text{s}$ ($p < 0.0001$).
-* **Why Gradient Boosting Outperforms**: Linear specifications cannot capture saturation limits or interaction buffering, resulting in negative hold-out $R^2$. LightGBM and CatBoost capture complex threshold dynamics and achieve substantial predictive gains.
+* **Why Gradient Boosting Outperforms**: Linear specifications cannot capture saturation limits or interaction buffering. LightGBM and CatBoost capture threshold dynamics and achieve superior error reduction across all cohorts, driving tram WAPE down to **97.57%**.
 
 ---
 

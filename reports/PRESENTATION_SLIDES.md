@@ -68,15 +68,19 @@
 
 ## Slide 5: Model Benchmark Performance
 
-### Hold-Out Validation Results ($N=100,000$)
+### Hold-Out Validation Results ($N=100,000$, Cleaned Layovers)
 
-| Model Architecture | MAE (seconds) | RMSE (seconds) | Median AE (seconds) | WAPE (%) | Validation $R^2$ |
+| Model / Cohort | MAE (seconds) | RMSE (seconds) | Median AE (seconds) | WAPE (%) | Validation $R^2$ |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Two-Way Fixed Effects (TWFE)** | 30.58s | 52.38s | 22.20s | 105.99% | -0.1052 |
-| **LightGBM Regressor** | **29.08s** | **48.98s** | **20.85s** | **100.80%** | **+0.0335** |
-| **CatBoost Regressor** | **28.85s** | **49.03s** | **20.91s** | **100.00%** | **+0.0314** |
+| **Pooled: TWFE Panel** | 28.70s | 45.26s | 21.24s | 103.91% | -0.0305 |
+| **Pooled: LightGBM** | 27.86s | **44.08s** | 20.46s | 100.87% | **+0.0223** |
+| **Pooled: CatBoost** | **27.64s** | 44.26s | **20.34s** | **100.05%** | +0.0145 |
+| **Urban Tram (LightGBM)** | **26.83s** | **47.70s** | **19.47s** | **97.57%** | **+0.0256** |
+| **Suburban Bus (CatBoost)** | **28.52s** | **59.22s** | **20.02s** | **103.00%** | **+0.0336** |
 
-- **Key Insight**: Non-linear tree models achieve significant predictive uplift over linear panel econometrics by capturing interaction terms and non-linear threshold breaks.
+- **Key Insights**:
+  - **Terminal Layover Filtering**: Purging resting vehicles at termini reduces forecast error by **1.21s to 1.88s** across all models.
+  - **Operational Homogeneity**: Urban Trams achieve the lowest error network-wide (**MAE: 26.83s, WAPE < 98%**), demonstrating the protective value of segregated rail tracks.
 
 ---
 

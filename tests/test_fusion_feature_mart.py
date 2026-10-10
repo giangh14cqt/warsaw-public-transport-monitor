@@ -122,12 +122,55 @@ class TestFeatureMartAssembler(unittest.TestCase):
         self.assertEqual(row["precipitation_mm"], 1.2)
         # Flags
         self.assertEqual(row["is_tram"], 1)
+        self.assertEqual(row["transit_cohort"], "urban_tram")
 
         # Summary check
         summary = self.assembler.get_summary(parquet_path=res_path)
         self.assertEqual(summary["total_observations"], 1)
         self.assertEqual(summary["study_corridor_observations"], 1)
         self.assertEqual(summary["avg_delta_t_run"], 40.0)
+
+    def test_cohort_and_terminal_stop_filtering(self):
+        # Multi-stop trip testing terminal layover exclusion
+        multi_raw_parquet = os.path.join(self.test_dir.name, "multi_raw.parquet")
+        raw_df = pd.DataFrame([
+            {"feed_timestamp": 1700000000, "trip_id": "T2", "route_id": "190", "vehicle_id": "V2", "stop_sequence": 1, "stop_id": "2001", "arrival_delay_seconds": 10, "departure_delay_seconds": 10, "rt_arrival_time": 1700000100, "rt_departure_time": 1700000100},
+            {"feed_timestamp": 1700000030, "trip_id": "T2", "route_id": "190", "vehicle_id": "V2", "stop_sequence": 2, "stop_id": "2002", "arrival_delay_seconds": 25, "departure_delay_seconds": 25, "rt_arrival_time": 1700000200, "rt_departure_time": 1700000200},
+            {"feed_timestamp": 1700000060, "trip_id": "T2", "route_id": "190", "vehicle_id": "V2", "stop_sequence": 3, "stop_id": "2003", "arrival_delay_seconds": 90, "departure_delay_seconds": 90, "rt_arrival_time": 1700000300, "rt_departure_time": 1700000300},
+            # Suburban route
+            {"feed_timestamp": 1700000000, "trip_id": "T3", "route_id": "709", "vehicle_id": "V3", "stop_sequence": 1, "stop_id": "3001", "arrival_delay_seconds": 5, "departure_delay_seconds": 5, "rt_arrival_time": 1700000100, "rt_departure_time": 1700000100},
+            {"feed_timestamp": 1700000030, "trip_id": "T3", "route_id": "709", "vehicle_id": "V3", "stop_sequence": 2, "stop_id": "3002", "arrival_delay_seconds": 15, "departure_delay_seconds": 15, "rt_arrival_time": 1700000200, "rt_departure_time": 1700000200},
+            # L-line
+            {"feed_timestamp": 1700000000, "trip_id": "T4", "route_id": "L41", "vehicle_id": "V4", "stop_sequence": 1, "stop_id": "4001", "arrival_delay_seconds": 0, "departure_delay_seconds": 0, "rt_arrival_time": 1700000100, "rt_departure_time": 1700000100},
+            {"feed_timestamp": 1700000030, "trip_id": "T4", "route_id": "L41", "vehicle_id": "V4", "stop_sequence": 2, "stop_id": "4002", "arrival_delay_seconds": 5, "departure_delay_seconds": 5, "rt_arrival_time": 1700000200, "rt_departure_time": 1700000200},
+        ])
+        raw_df.to_parquet(multi_raw_parquet)
+
+        out_parquet = os.path.join(self.test_dir.name, "multi_fused.parquet")
+        res_path = self.assembler.assemble_mart(
+            raw_pattern=multi_raw_parquet,
+            weather_parquet_path=self.mock_weather_parquet,
+            osm_parquet_path=self.mock_osm_parquet,
+            output_parquet=out_parquet,
+            exclude_terminals=True,
+        )
+
+        con = duckdb.connect(":memory:")
+        res_df = con.execute(f"SELECT trip_id, stop_sequence, route_id, transit_cohort, is_terminal_stop FROM read_parquet('{res_path}') ORDER BY trip_id, stop_sequence").df()
+
+        # For T2 (3 stops: 1, 2, 3), stop 1 is dropped (origin, no prev_stop), stop 3 is dropped (terminal layover), stop 2 is kept!
+        t2_df = res_df[res_df["trip_id"] == "T2"]
+        self.assertEqual(len(t2_df), 1)
+        self.assertEqual(t2_df.iloc[0]["stop_sequence"], 2)
+        self.assertEqual(t2_df.iloc[0]["transit_cohort"], "urban_bus")
+
+        # For T3 (709), cohort is suburban_bus
+        t3_df = res_df[res_df["trip_id"] == "T3"]
+        self.assertEqual(t3_df.iloc[0]["transit_cohort"], "suburban_bus")
+
+        # For T4 (L41), cohort is suburban_bus
+        t4_df = res_df[res_df["trip_id"] == "T4"]
+        self.assertEqual(t4_df.iloc[0]["transit_cohort"], "suburban_bus")
 
 
 if __name__ == "__main__":
