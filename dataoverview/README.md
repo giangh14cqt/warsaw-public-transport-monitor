@@ -17,7 +17,7 @@ This directory contains Jupyter notebooks for exploratory data analysis (EDA), v
 
 ### 2. [`02_exogenous_features_overview.ipynb`](02_exogenous_features_overview.ipynb)
 **Focus**: *Meteorological Telemetry & Road Infrastructure Topology*
-- **IMGW-PIB Synoptic Weather**: 721 hourly observations for Warsaw Okęcie (temperature, precipitation, wind speed, relative humidity, freezing rain).
+- **IMGW-PIB Synoptic Weather**: 169 hourly observations for Warsaw Okęcie across the October 4–10 study window (temperature, precipitation, wind speed, relative humidity, freezing rain).
 - **OSMnx Study Corridors**: Physical topology of the 4 core transit test corridors (*Puławska*, *Al. Jerozolimskie*, *Trasa W-Z*, *Towarowa / Okopowa*).
 - **Infrastructure Metrics**: Stop-to-stop spacing, traffic signal density (signals per km), mixed-traffic lane capacity, and dedicated right-of-way segregation.
 - **Multi-Source Fusion Preview**: Demonstration of three-way join between transit delays, weather observations, and corridor topology.
