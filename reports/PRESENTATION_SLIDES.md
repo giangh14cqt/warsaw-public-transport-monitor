@@ -30,10 +30,10 @@
                   ▼
 [Embedded Zero-Lock DuckDB Engine]
    ├── IMGW-PIB Hourly Synoptic Weather (Warszawa-Okęcie & Bielany)
-   └── OSMnx Road Corridor Topology (Al. Jerozolimskie, Puławska, Trasa W-Z)
+   └── Citywide OSM Road Network Topology (10,081 segments, 4,179 signals across Warsaw)
                   │
                   ▼
-[Unified Feature Mart (4,015,785 rows)]
+[Unified Feature Mart (4,527,951 rows)]
                   │
                   ▼
 [Purged Temporal Block Validation (30m Embargo)]
@@ -49,9 +49,9 @@
 - **Live Ingestion**: Continuous 24/7 ingestion writing Hive-partitioned Parquet (`data/raw/`).
 - **Multi-Source Spatiotemporal Mart**:
   - Operational: `prev_stop_delay`, `prev2_stop_delay`, `headway_deviation`, `trip_progress`.
-  - Infrastructural: `is_dedicated_right_of_way`, `signalized_intersection_count`, `segment_length_meters`.
+  - Infrastructural: `lane_capacity`, `signalized_intersection_count`, `segment_length_meters`, `is_dedicated_right_of_way`.
   - Meteorological: `precipitation_mm`, `temperature_c`, `relative_humidity`, `freezing_rain_flag`.
-- **Total Dataset Size**: **4,015,785 spatiotemporally aligned transit observations** with balanced weekday parity (~740k–780k/day).
+- **Total Dataset Size**: **4,527,951 spatiotemporally aligned transit observations** spanning Warsaw's multimodal network with balanced weekday parity (~740k–780k/day).
 
 ---
 
@@ -68,35 +68,37 @@
 
 ## Slide 5: Model Benchmark Performance
 
-### Hold-Out Validation Results ($N=50,000$ Evaluation Sample, Cleaned Layovers)
+### Hold-Out Validation Results ($N=100,000$ Evaluation Sample, Cleaned Layovers)
 
 | Model / Cohort | MAE (seconds) | RMSE (seconds) | Median AE (seconds) | WAPE (%) | Validation $R^2$ |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Pooled: TWFE Panel** | 31.26s | 58.61s | 21.72s | 100.68% | +0.0036 |
-| **Pooled: LightGBM** | 30.84s | 58.42s | 21.08s | 99.32% | +0.0100 |
-| **Pooled: CatBoost** | **30.69s** | **58.28s** | **20.82s** | **98.86%** | **+0.0147** |
-| **Urban Tram (CatBoost)** | **26.64s** | **40.70s** | **19.99s** | **96.68%** | **+0.0536** |
-| **Urban Bus (CatBoost)** | 32.60s | 63.73s | 21.82s | 99.27% | +0.0096 |
-| **Suburban Bus (CatBoost)**| 30.10s | 70.84s | **18.47s** | 100.89% | +0.0052 |
+| **Pooled: TWFE Panel** | 29.79s | 51.29s | 21.27s | 101.03% | +0.0136 |
+| **Pooled: LightGBM** | 29.29s | 50.80s | 20.68s | 99.34% | +0.0325 |
+| **Pooled: CatBoost** | **29.26s** | **50.72s** | **20.73s** | **99.25%** | **+0.0357** |
+| **Urban Tram (LightGBM)** | **24.03s** | **32.48s** | **18.43s** | **90.98%** | **+0.1390** |
+| **Urban Bus (CatBoost)** | 30.85s | 55.97s | 21.83s | 99.85% | +0.0262 |
+| **Suburban Bus (CatBoost)**| 29.15s | 53.89s | **19.80s** | 99.99% | +0.0302 |
 
 - **Key Insights**:
-  - **Terminal Layover Filtering**: Purging resting vehicles at termini prevents false stop-delay inflation, isolating pure running transit friction.
-  - **Operational Homogeneity**: Urban Trams achieve the lowest error network-wide (**CatBoost MAE: 26.64s, MedAE: 19.99s, WAPE: 96.68%, R²: +0.0536**), demonstrating the protective value of segregated rail tracks.
-  - **Tree Models Outperform TWFE**: Gradient boosted trees consistently beat linear TWFE panel regression across all cohorts, capturing non-linear congestion thresholds.
+  - **Network-Wide Spatial Generalization**: Expanding OSMnx graph coverage to 10,081 segments across all of Warsaw reduced pooled RMSE from 58.28s to **50.72s** (−7.56s) and suburban bus RMSE from 70.84s to **53.89s** (−16.95s).
+  - **Operational Homogeneity**: Urban Trams achieve the lowest error and highest explainability network-wide (**LightGBM MAE: 24.03s, MedAE: 18.43s, WAPE: 90.98%, R²: +0.1390**), demonstrating the protective predictability of segregated rail tracks.
+  - **Gradient Boosters Outperform Linear TWFE**: Non-linear models consistently beat linear TWFE panel regression across all cohorts, capturing non-linear congestion thresholds and interaction dynamics.
 
 ---
 
 ## Slide 6: Econometric Elasticities (TWFE)
 
 ### Model Specification
-$$y_{ist} = \alpha_i + \lambda_t + \beta_1 \text{Signals}_{is} + \beta_2 \text{ROW}_{is} + \beta_3 \text{Progress}_{ist} + \epsilon_{ist}$$
+$$y_{ist} = \alpha_i + \lambda_t + \beta_1 \text{Signals}_{is} + \beta_2 \text{Lanes}_{is} + \beta_3 \text{Length}_{is} + \beta_4 \text{Progress}_{ist} + \epsilon_{ist}$$
 
 - **Traffic Signal Density**:
-  - Coefficient: $\beta = +1.1883\text{s}$ per signal ($p < 0.0001, t = 10.74$).
-  - Elasticity: $\varepsilon = +0.5032$ (A 10% increase in signal density increases delay by +5.03%).
-- **Dedicated Right-of-Way**:
-  - Coefficient: $\beta = -1.8541\text{s}$ ($p < 0.0001$).
-  - Baseline isolation from mixed-traffic friction.
+  - Coefficient: $\beta = +0.5753\text{s}$ per signal ($p < 0.0001, t = 5.00$).
+  - Elasticity: $\varepsilon = +0.2146$ (A 10% increase in signal density increases incremental delay by +2.15%).
+- **Lane Capacity**:
+  - Coefficient: $\beta = -6.0846\text{s}$ per additional lane ($p < 0.0001, t = -5.93$).
+  - Elasticity: $\varepsilon = -2.28$ (Reflects major delay reductions on multi-lane arterials).
+- **Physical Link Distance**:
+  - Coefficient: $\beta = +0.0029\text{s}$ per meter ($+2.9\text{s}$ incremental delay per kilometer, $p = 0.09$).
 
 ---
 
@@ -172,7 +174,7 @@ $$y_{ist} = \alpha_i + \lambda_t + \beta_1 \text{Signals}_{is} + \beta_2 \text{R
 
 - **Codebase**: Fully reproducible, modular Python package.
 - **Master Orchestrator**: `run_pipeline.py --stage all`
-- **Unit & Integration Test Suite**: **55/55 tests passing (100% test pass rate)**.
+- **Unit & Integration Test Suite**: **65/65 tests passing (100% test pass rate)**.
 - **Open Access**: Complete codebase, notebooks, and documentation hosted at:
   [`https://github.com/giangh14cqt/warsaw-public-transport-monitor`](https://github.com/giangh14cqt/warsaw-public-transport-monitor)
 

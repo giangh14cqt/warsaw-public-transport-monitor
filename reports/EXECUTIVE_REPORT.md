@@ -13,11 +13,11 @@
 Urban public transit networks suffer from delay propagation, bunching, and schedule instability driven by interactions between traffic signal density, road corridor geometry, meteorological shocks, and operational dispatch headway variance. This project delivers an end-to-end telemetry ingestion engine, econometric baseline, non-linear machine learning benchmarks, and explainable AI (xAI) attribution framework deployed on the live public transport network of Warsaw, Poland (ZTM / [zbiorkom.live](https://zbiorkom.live)).
 
 ### Core Empirical Findings
-1. **Predictive Uplift & Noise Reduction**: Filtering terminal turnaround layovers (`stop_sequence = max_seq` and idling drift) eliminates spurious delay variance, reducing pooled hold-out validation MAE to **30.69s** (CatBoost) and MedAE to **20.82s**.
+1. **Predictive Uplift & Noise Reduction**: Filtering terminal turnaround layovers (`stop_sequence = max_seq` and idling drift) and integrating full-network OSM road infrastructure eliminates spurious delay variance, reducing pooled hold-out validation MAE to **29.26s** (CatBoost) and MedAE to **20.73s**, with RMSE dropping from 58.28s to **50.72s**.
 2. **Cohort Stratification (Trams vs. Buses)**: Isolating homogeneous operational regimes significantly improves fit and predictability:
-   - **Urban Trams (`urban_tram`)**: Achieve the lowest forecast error across the network (**CatBoost MAE: 26.64s, RMSE: 40.70s, MedAE: 19.99s, WAPE: 96.68%, R²: +0.0536**; LightGBM MAE: 26.84s, WAPE: 97.39%), validating that rail infrastructure on segregated right-of-way is protected from street friction.
-   - **Core Urban Buses (`urban_bus`)**: Exhibit higher downtown friction (**CatBoost MAE: 32.60s, MedAE: 21.82s, WAPE: 99.27%, R²: +0.0096**).
-   - **Suburban Feeders (`suburban_bus`)**: Display higher speed variance over longer inter-stop corridors (**CatBoost MAE: 30.10s, MedAE: 18.47s, WAPE: 100.89%, R²: +0.0052**).
+   - **Urban Trams (`urban_tram`)**: Achieve the lowest forecast error across the network (**LightGBM MAE: 24.03s, RMSE: 32.48s, MedAE: 18.43s, WAPE: 90.98%, R²: +0.1390**; CatBoost MAE: 25.18s, RMSE: 33.63s, MedAE: 18.97s, WAPE: 95.33%, R²: +0.0766), validating that rail infrastructure on segregated right-of-way is protected from street friction.
+   - **Core Urban Buses (`urban_bus`)**: Exhibit higher downtown friction (**CatBoost MAE: 30.85s, RMSE: 55.97s, MedAE: 21.83s, WAPE: 99.85%, R²: +0.0262**).
+   - **Suburban Feeders (`suburban_bus`)**: Display higher speed variance over regional highways (**CatBoost MAE: 29.15s, RMSE: 53.89s, MedAE: 19.80s, WAPE: 99.99%, R²: +0.0302**).
 3. **Global Root-Cause Decomposition (TreeSHAP)**:
    - **Upstream Delay Propagation (`prev_stop_delay`)**: Accounts for **29.70%** of total delay variance.
    - **Temporal Diurnal Cycles (`hour_of_day`, `peak_hour`)**: Accounts for **22.49%**.
@@ -28,7 +28,7 @@ Urban public transit networks suffer from delay propagation, bunching, and sched
    - Delays exhibit acute non-linear saturation once upstream delays exceed $+300$ seconds, plateauing at an additional $+13.0$ seconds segment delay.
    - Transit lines experience non-linear congestion cliffs at **74%** and **94%** of route completion, identifying critical terminal choke points.
    - Dedicated Right-of-Way (ROW) acts as a discontinuous structural insulator, lowering segment delay escalation across all operating regimes.
-5. **Infrastructure Buffering Under Shocks**: Dedicated transit rights-of-way mitigate headway deviation shocks by **28.7% reduction in delay escalation** relative to mixed-traffic operations.
+5. **Infrastructure Buffering Under Shocks**: Dedicated transit rights-of-way mitigate headway deviation shocks by **28.7% to 39.0% reduction in delay escalation** relative to mixed-traffic operations.
 6. **Counterfactual Remedies (DiCE)**: Dispatch headway regularization and dedicated ROW attenuate segment delay escalation by **+1.44s to +4.15s per stop**, while upstream schedule recovery holding successfully restores severe delay incidents back to on-time arrival ($\Delta t \le 120$s).
 
 ---
@@ -47,10 +47,10 @@ The system operates across six decoupled architectural layers:
 [DuckDB Analytical Engine] ── Zero-Lock Analytical Queries
               │
               ├─> Continuous Hourly Synoptic Weather (Okęcie & Bielany, Open-Meteo & IMGW)
-              ├─> OSMnx Road Corridor Topology (Al. Jerozolimskie, Puławska, Trasa W-Z)
+              ├─> Citywide OSM Road Network Topology (10,081 segments, 4,179 signals across Warsaw)
               │
               ▼
-[Feature Mart Assembly] ── 4,015,785 Enriched Spatiotemporal Records (feature_mart.parquet)
+[Feature Mart Assembly] ── 4,527,951 Enriched Spatiotemporal Records (feature_mart.parquet)
               │
               ▼
 [Validation Engine] ── Purged Temporal Block Splitter (30-min Embargo, Zero Data Leakage)
@@ -64,19 +64,7 @@ The system operates across six decoupled architectural layers:
 
 ### Telemetry Scale, Ingestion Reliability & Longitudinal Parity
 - **Ingestion Daemon**: Continuously active with automated exponential backoff ($3\text{s}, 6\text{s}, 12\text{s}, 24\text{s}$), HTTP 429 rate-limit backoff, and [Healthchecks.io](https://healthchecks.io) heartbeat monitoring.
-- **Assembled Feature Matrix**: Exactly **4,015,785 records** integrating vehicle movement, autoregressive stop-delay lags, weather metrics, corridor geometries, and cohort labels (`urban_tram`, `urban_bus`, `suburban_bus`).
-- **Longitudinal Ingestion Distribution**: Each full operating weekday exhibits balanced parity (~741,000 to 782,000 observations/day) eliminating day-of-week selection bias:
-
-| Date | Operating Day | Fused Feature Records | Daily Share | Network Mean Arrival Delay | Mean Segment Running Delay ($\Delta t_{\text{run}}$) |
-| :--- | :--- | :---: | :---: | :---: | :---: |
-| **2026-10-04** | Sunday (midday collection start) | 247,562 | 6.2% | 79.9s | +2.97s |
-| **2026-10-05** | Monday | 782,640 | 19.5% | 120.4s | +4.66s |
-| **2026-10-06** | Tuesday | 747,031 | 18.6% | 173.7s | +6.76s |
-| **2026-10-07** | Wednesday | 741,913 | 18.5% | 156.1s | +6.17s |
-| **2026-10-08** | Thursday | 745,500 | 18.6% | 169.9s | +6.51s |
-| **2026-10-09** | Friday | 744,817 | 18.5% | 128.4s | +4.93s |
-| **2026-10-10** | Saturday (early morning collection) | 6,322 | 0.2% | 31.3s | -3.55s |
-| **Total Study** | **Full Longitudinal Cohort** | **4,015,785** | **100.0%** | **150.8s** | **+5.51s** |
+- **Assembled Feature Matrix**: Exactly **4,527,951 records** integrating vehicle movement, autoregressive stop-delay lags, weather metrics, citywide road network geometries, and cohort labels (`urban_tram`, `urban_bus`, `suburban_bus`).
 
 ---
 
@@ -90,31 +78,39 @@ To eliminate autoregressive data leakage inherent to time-series and panel trans
 
 ### 3.2 Benchmark Performance Comparison
 
-#### A. Pooled Model Performance (Cleaned Data, N = 50,000 Hold-Out Split)
+#### A. Pooled Model Performance (Cleaned Data, Hold-Out Split)
 
 | Model Architecture | Specification / Regularization | Hold-Out MAE (s) | Hold-Out RMSE (s) | Median AE (s) | WAPE (%) | Hold-Out $R^2$ |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Two-Way Fixed Effects (TWFE)** | Within Route + Hour FE + HC1 OLS | 31.26s | 58.61s | 21.72s | 100.68% | +0.0036 |
-| **LightGBM Regressor** | Tree-depth 7, LR 0.05, L2 Reg 1.0 | 30.84s | 58.42s | 21.08s | 99.32% | +0.0100 |
-| **CatBoost Regressor** | Symmetric Oblivious Trees, LR 0.05 | **30.69s** | **58.28s** | **20.82s** | **98.86%** | **+0.0147** |
+| **Two-Way Fixed Effects (TWFE)** | Within Route + Hour FE + HC1 OLS | 29.79s | 51.29s | 21.27s | 101.03% | +0.0136 |
+| **LightGBM Regressor** | Tree-depth 7, LR 0.05, L2 Reg 1.0 | 29.29s | 50.80s | 20.68s | 99.34% | +0.0325 |
+| **CatBoost Regressor** | Symmetric Oblivious Trees, LR 0.05 | **29.26s** | **50.72s** | **20.73s** | **99.25%** | **+0.0357** |
 
 #### B. Stratified Benchmark by Transit Cohort
 
 | Cohort | Best Model | Validation MAE (s) | Validation RMSE (s) | Median AE (s) | WAPE (%) | Validation $R^2$ |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Urban Trams (`urban_tram`)** | **CatBoost Regressor** | **26.64s** | **40.70s** | **19.99s** | **96.68%** | **+0.0536** |
-| **Core Urban Buses (`urban_bus`)** | **CatBoost Regressor** | 32.60s | 63.73s | 21.82s | 99.27% | +0.0096 |
-| **Suburban Feeders (`suburban_bus`)** | **CatBoost Regressor** | 30.10s | 70.84s | **18.47s** | 100.89% | +0.0052 |
+| **Urban Trams (`urban_tram`)** | **LightGBM Regressor** | **24.03s** | **32.48s** | **18.43s** | **90.98%** | **+0.1390** |
+| **Core Urban Buses (`urban_bus`)** | **CatBoost Regressor** | 30.85s | 55.97s | 21.83s | 99.85% | +0.0262 |
+| **Suburban Feeders (`suburban_bus`)** | **CatBoost Regressor** | 29.15s | 53.89s | 19.80s | 99.99% | +0.0302 |
+
+#### C. Empirical Gains: 4 Study Corridors vs. Full Citywide Network
+
+| Evaluation Scope | Pooled CatBoost MAE | Pooled CatBoost RMSE | Tram LightGBM MAE | Tram LightGBM $R^2$ | Suburban Bus RMSE |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| **4 Radial Corridors (Baseline)** | 30.69s | 58.28s | 26.84s | +0.0507 | 70.84s |
+| **Citywide Network (Expanded)** | **29.26s** *(−1.43s)* | **50.72s** *(−7.56s)* | **24.03s** *(−2.81s)* | **+0.1390** *(+2.7×)* | **53.89s** *(−16.95s)* |
 
 ### 3.3 Econometric Baseline Insights & Framing
 Under the TWFE panel specification:
 $$y_{ist} = \alpha_i + \lambda_t + \beta X_{ist} + \epsilon_{ist}$$
-- **Traffic Signal Density**: $\beta = +1.1883\text{s}$ per signal ($p < 0.0001$). The estimated linear elasticity is $\varepsilon = +0.5032$, indicating that a 10% increase in signal density induces a 5.03% increase in segment arrival delay.
-- **Dedicated Right-of-Way**: $\beta = -1.8541\text{s}$ direct baseline reduction.
+- **Traffic Signal Density**: $\beta = +0.5753\text{s}$ per signal ($p < 0.0001, t = 5.00$). The estimated linear elasticity is $\varepsilon = +0.2146$, indicating that a 10% increase in signal density induces a 2.15% increase in segment arrival delay.
+- **Lane Capacity**: $\beta = -6.0846\text{s}$ per additional lane ($p < 0.0001, t = -5.93$, elasticity $\varepsilon = -2.28$).
+- **Physical Link Length**: $\beta = +0.0029\text{s}$ per meter ($+2.9\text{s}$ running delay per kilometer, $p = 0.09$).
 - **Academic Framing on $R^2$ and WAPE**:
   - The target variable is the **signed first-differenced running delay delta** ($\Delta t_{\text{run}} = \text{delay}_s - \text{delay}_{s-1}$).
-  - Because stop-to-stop incremental delay has a mean near zero ($+4.9\text{s}$) with large symmetric deviations ($\sigma \approx 65\text{s}$) driven by unobserved microscopic signal phase cycles and passenger dwell surges, $\sum |y|$ is relatively small. Consequently, WAPE naturally hovers around 100%, and $R^2$ remains modest (1–3%).
-  - Negative out-of-sample $R^2$ for linear TWFE highlights structural misspecification: linear models fail to capture non-linear tipping points, whereas gradient boosted trees consistently suppress forecast errors (tram MAE down to 26.61s, WAPE < 98%). This motivates our xAI framework to identify structural operational thresholds rather than relying solely on point forecasts.
+  - Because stop-to-stop incremental delay isolates pure localized innovations, predicting first differences naturally exhibits modest $R^2$ (1–4% overall, up to 13.9% for trams) due to unobserved microscopic traffic light arrivals and dwell surges.
+  - Feeding true physical OSMnx link lengths and signal counts reduced network-wide RMSE by over **7.5 seconds** and boosted tram explanatory power to **13.9%**, confirming the predictive value of citywide spatial graph topology.
 
 ---
 
@@ -170,5 +166,5 @@ To translate model attributions into concrete operational interventions, Diverse
 ## 6. Software & Test Suite Audit
 
 The codebase includes full continuous integration test coverage across all pipeline layers:
-- **Test Suite Results**: **55 passing unit & integration tests** in 21.12 seconds.
-- **Coverage**: Ingestion storage, OSM topology, IMGW weather, trajectory reconstruction, feature mart fusion, temporal validation, TWFE, LightGBM, CatBoost, TreeSHAP, ALE curves, interaction buffering, DiCE counterfactuals, and E2E CLI pipeline runner.
+- **Test Suite Results**: **65 passing unit & integration tests** in 17.91 seconds.
+- **Coverage**: Ingestion storage, OSM topology (citywide & arterial corridors), IMGW weather, trajectory reconstruction, feature mart fusion, temporal validation, TWFE, LightGBM, CatBoost, TreeSHAP, ALE curves, interaction buffering, DiCE counterfactuals, and E2E CLI pipeline runner.

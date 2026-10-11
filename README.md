@@ -5,7 +5,7 @@
 [![Engine-DuckDB](https://img.shields.io/badge/analytics-DuckDB-yellow.svg)](https://duckdb.org/)
 [![Models-LightGBM%20%7C%20CatBoost](https://img.shields.io/badge/models-LightGBM%20%7C%20CatBoost-brightgreen.svg)](https://lightgbm.readthedocs.io/)
 [![xAI-SHAP%20%7C%20ALE%20%7C%20DiCE](https://img.shields.io/badge/xAI-SHAP%20%7C%20ALE%20%7C%20DiCE-purple.svg)](https://github.com/shap/shap)
-[![Tests-Passing](https://img.shields.io/badge/tests-55%2F55%20passing-success.svg)](tests/)
+[![Tests-Passing](https://img.shields.io/badge/tests-65%2F65%20passing-success.svg)](tests/)
 [![Docker](https://img.shields.io/badge/deployment-Docker%20Compose-2496ED.svg)](https://www.docker.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
@@ -51,8 +51,8 @@ The pipeline executes across six decoupled, modular layers:
   ▼
 [3. EXOGENOUS ENRICHMENT & FUSION]
   │  IMGW-PIB Hourly Synoptic Weather (Okęcie & Bielany)
-  │  OSMnx Road Corridor Network Topology (Al. Jerozolimskie, Puławska, Trasa W-Z)
-  │  DuckDB Spatiotemporal Window Fusion ──> 2,023,818 Rows (data/processed/feature_mart.parquet)
+  │  Citywide OSM Road Network Topology (10,081 segments, 4,179 traffic signals across Warsaw)
+  │  DuckDB Spatiotemporal Window Fusion ──> 4,527,951 Rows (data/processed/feature_mart.parquet)
   ▼
 [4. DATA LEAKAGE PREVENTION & SPLITTING]
   │  Purged Temporal Block Splitter (30-min embargo buffer + trip boundary purging)
@@ -103,11 +103,11 @@ Raw vehicle telemetry is enriched with exogenous environmental and infrastructur
    - Harvested from official IMGW-PIB Polish synoptic weather archives.
    - Metrics: Precipitation intensity (`mm/h`), surface temperature (°C), relative humidity (%), wind speed (`m/s`), and freezing rain flags.
 2. **Road Corridor Topology (`src/exogenous/osm.py`)**:
-   - Extracted from OpenStreetMap via OSMnx along core Warsaw transit corridors (*Al. Jerozolimskie, Puławska, Trasa W-Z, Towarowa/Okopowa*).
+   - Extracted from OpenStreetMap across the entire Warsaw network (**10,081 directed stop-to-stop links**, **4,179 mapped traffic signals**, covering 9,070 km of transit routes).
    - Metrics: `is_dedicated_right_of_way` (segregated tram tracks or dedicated bus lanes), `signalized_intersection_count`, `segment_length_meters`, and `lane_capacity`.
 3. **Autoregressive Trajectory Lags (`src/fusion/trajectory.py`)**:
    - Windowed reconstruction of preceding stop delay (`prev_stop_delay`), second-order lag (`prev2_stop_delay`), dispatch regularity (`headway_deviation`), and relative `trip_progress` ($0.0 \to 1.0$).
-4. **Fused Feature Store**: Persisted to `data/processed/feature_mart.parquet` (**2,023,818 rows**).
+4. **Fused Feature Store**: Persisted to `data/processed/feature_mart.parquet` (**4,527,951 rows**).
 
 ---
 
@@ -118,35 +118,36 @@ Standard K-fold cross-validation suffers from severe data leakage in time-series
 * **Temporal Chronological Ordering**: Partitions observations strictly by time into Train (60%), Validation (20%), and Hold-Out Test (20%) blocks.
 * **Trip Boundary Purging**: Completely removes any vehicle trip that crosses a split boundary to eliminate inter-segment information leakage.
 * **30-Minute Embargo Buffering**: Enforces a 30-minute blackout window between consecutive blocks to allow residual traffic congestion shockwaves to dissipate.
-* **Zero-Leakage Audit**: Verified across all 59,826 train, 19,062 validation, and 18,687 test records.
+* **Zero-Leakage Audit**: Verified across all train, validation, and hold-out test blocks.
 
 ---
 
 ## 5. Empirical Modeling Benchmarks (TWFE vs. GBM)
 
-We benchmarked classical econometrics against state-of-the-art gradient boosted trees on the hold-out validation set ($N = 100,000$ sample, $N_{\text{val}} = 18,970$), after filtering spurious terminal layovers:
+We benchmarked classical econometrics against state-of-the-art gradient boosted trees on the hold-out validation set ($N = 100,000$ sample, $N_{\text{val}} = 19,405$), after filtering spurious terminal layovers:
 
 ### 5.1 Pooled Network Benchmark (Cleaned Layovers)
 
 | Model Architecture | Specification / Regularization | Hold-Out MAE | Hold-Out RMSE | Median AE | WAPE (%) | Validation $R^2$ |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Econometric TWFE Baseline** | Within Route + Hour FE + HC1 Robust OLS | 29.08s | 47.73s | 21.20s | 103.38% | -0.0206 |
-| **LightGBM Regressor** | Tree-depth 7, LR 0.05, L2 Reg 1.0 | 28.32s | 46.83s | 20.61s | 100.65% | +0.0173 |
-| **CatBoost Regressor** | Symmetric Oblivious Trees, LR 0.05 | **28.18s** | **46.81s** | **20.52s** | **100.18%** | **+0.0182** |
+| **Econometric TWFE Baseline** | Within Route + Hour FE + HC1 Robust OLS | 29.79s | 51.29s | 21.27s | 101.03% | +0.0136 |
+| **LightGBM Regressor** | Tree-depth 7, LR 0.05, L2 Reg 1.0 | 29.29s | 50.80s | 20.68s | 99.34% | +0.0325 |
+| **CatBoost Regressor** | Symmetric Oblivious Trees, LR 0.05 | **29.26s** | **50.72s** | **20.73s** | **99.25%** | **+0.0357** |
 
 ### 5.2 Stratified Evaluation Across Transit Cohorts
 
 | Transit Cohort | Best Model | Hold-Out MAE | Hold-Out RMSE | Median AE | WAPE (%) | Validation $R^2$ |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Urban Trams (`urban_tram`)** | **LightGBM Regressor** | **27.02s** | 53.28s | **19.42s** | **97.01%** | **+0.0268** |
-| **Core Urban Buses (`urban_bus`)** | **LightGBM / CatBoost** | 29.08s | 46.64s | 21.10s | 100.48% | +0.0144 |
-| **Suburban Feeders (`suburban_bus`)** | **LightGBM / CatBoost** | 28.01s | **43.96s** | 20.29s | 100.79% | +0.0138 |
+| **Urban Trams (`urban_tram`)** | **LightGBM Regressor** | **24.03s** | **32.48s** | **18.43s** | **90.98%** | **+0.1390** |
+| **Core Urban Buses (`urban_bus`)** | **CatBoost Regressor** | 30.85s | 55.97s | 21.83s | 99.85% | +0.0262 |
+| **Suburban Feeders (`suburban_bus`)** | **CatBoost Regressor** | 29.15s | 53.89s | 19.80s | 99.99% | +0.0302 |
 
 ### 5.3 Econometric Panel Insights (TWFE)
 $$y_{ist} = \alpha_i + \lambda_t + \beta X_{ist} + \epsilon_{ist}$$
-* **Traffic Signal Density**: Statistically significant at $p < 0.0001$ ($\beta = +1.1883\text{s}/\text{signal}, t = 10.74$). The estimated point elasticity is $\varepsilon = +0.5032$, indicating that a 10% increase in traffic signals induces a 5.03% increase in segment arrival delay.
-* **Dedicated Right-of-Way**: Statistically significant baseline reduction of $\beta = -1.8541\text{s}$ ($p < 0.0001$).
-* **Why Gradient Boosting Outperforms**: Linear specifications cannot capture saturation limits or interaction buffering. LightGBM and CatBoost capture threshold dynamics and achieve superior error reduction across all cohorts, driving tram WAPE down to **97.56%**.
+* **Traffic Signal Density**: Statistically significant at $p < 0.0001$ ($\beta = +0.5753\text{s}/\text{signal}, t = 5.00$). The estimated point elasticity is $\varepsilon = +0.2146$, indicating that a 10% increase in traffic signals induces a 2.15% increase in segment arrival delay.
+* **Lane Capacity**: Statistically significant at $p < 0.0001$ ($\beta = -6.0846\text{s}$ per additional lane, $t = -5.93$, elasticity $\varepsilon = -2.28$).
+* **Physical Link Length**: $\beta = +0.0029\text{s}$ per meter ($+2.9\text{s}$ running delay per kilometer, $p = 0.09$).
+* **Why Gradient Boosting Outperforms**: Linear specifications cannot capture saturation limits or interaction buffering. LightGBM and CatBoost capture threshold dynamics and achieve superior error reduction across all cohorts, driving tram MAE down to **24.03s** and WAPE to **90.98%**.
 
 ---
 
@@ -238,11 +239,11 @@ python3 run_pipeline.py --stage xai --start-date 2026-10-04 --end-date 2026-10-1
 │   ├── PROJECT_IMPROVEMENT_ROADMAP.md # Research roadmap & next upgrades
 │   ├── tables/               # Benchmark comparison CSVs and counterfactual metrics JSON
 │   └── figures/xai/          # 14 publication-grade xAI diagnostic figures
-├── tests/                    # 55 unit and E2E integration tests (100% passing)
+├── tests/                    # 65 unit and E2E integration tests (100% passing)
 ├── data/
 │   ├── raw/                  # Partitioned Parquet sink (year=YYYY/month=MM/day=DD/)
 │   ├── gtfs/                 # Archived weekly static GTFS timetable snapshots
-│   └── processed/            # Fused feature store (feature_mart.parquet, 2.02M rows)
+│   └── processed/            # Fused feature store (feature_mart.parquet, 4.52M rows)
 └── logs/                     # Rotating health logs and backup audit trails
 ```
 
@@ -295,7 +296,7 @@ python3 run_pipeline.py --stage xai
 The repository maintains an automated unit and end-to-end integration test suite covering all modules:
 
 ```bash
-# Run the complete test suite (55 tests in ~21 seconds)
+# Run the complete test suite (65 tests in ~17 seconds)
 .venv/bin/python3 -m unittest discover tests
 
 # Run specific E2E pipeline integration test suite
@@ -303,7 +304,7 @@ The repository maintains an automated unit and end-to-end integration test suite
 ```
 
 ```text
-Ran 55 tests in 21.123s
+Ran 65 tests in 16.717s
 OK (100% pass rate)
 ```
 

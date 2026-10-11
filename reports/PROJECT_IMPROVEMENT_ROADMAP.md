@@ -64,9 +64,12 @@ It outlines concrete, actionable recommendations across all dimensions of the pr
 
 ## 4. Spatial Network Topology & Graph Expansion
 
-### 4.1 Citywide Map-Matching via GTFS `shapes.txt`
-* **Current State**: OSMnx features are extracted for 4–6 selected transit test corridors.
-* **Expansion**: Utilize Valhalla or OSRM map-matching to match all ~3,000 Warsaw stop pairs to OSM edges automatically, scaling infrastructure attribution across the entire ZTM network.
+### 4.1 Citywide Map-Matching & Network Topology
+* **Implementation Status**: **Implemented** (`src/exogenous/osm.py:process_citywide_network()`).
+* **Delivered Topology**:
+  * Extracted and unified all **10,081 directed stop-to-stop links** (9,070 km of route geometry) across all 7,241 GTFS stops in the Warsaw transit agglomeration.
+  * Ingested and cached **4,179 OpenStreetMap traffic signals** via a partitioned 4-quadrant Overpass query architecture (`data/cache/osm_signals_warsaw_citywide.parquet`).
+  * Enriched the feature mart to **4,527,951 records** with physical link lengths, signal densities, and lane capacities, reducing pooled hold-out RMSE by **−7.56s** and increasing Urban Tram explainability ($R^2$) to **+13.9%**.
 
 ### 4.2 Vistula River Bridge Choke-Point Modeling
 * Warsaw's transit network is physically partitioned by the Vistula river. River crossings represent systemic vulnerability choke points:
@@ -137,7 +140,7 @@ Phase A: Data & Hygiene Refinements (Weeks 1–2)
 
 Phase B: Advanced Econometric & Spatial Upgrades (Weeks 3–4)
 ├── Add Two-Way Clustered Standard Errors (route_id x date) in TWFE
-├── Map-match full citywide stop pairs against OSMnx via GTFS shapes.txt
+├── [x] Map-match full citywide stop pairs against OSMnx via GTFS shapes.txt (10,081 segments, 4,179 signals)
 └── Attach Vistula river bridge bottleneck indicator flags
 
 Phase C: Causal ML & Interactive Interface (Weeks 5–6)
