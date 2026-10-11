@@ -11,7 +11,8 @@ Computes robust, industry-standard regression metrics:
 """
 
 import logging
-from typing import Dict, Any, Optional, Union
+from typing import Dict, Union
+
 import numpy as np
 import pandas as pd
 
@@ -62,9 +63,7 @@ def compute_regression_metrics(
         }
 
     if len(y_t) != len(y_p):
-        raise ValueError(
-            f"Length mismatch: len(y_true)={len(y_t)} vs len(y_pred)={len(y_p)}"
-        )
+        raise ValueError(f"Length mismatch: len(y_true)={len(y_t)} vs len(y_pred)={len(y_p)}")
 
     # Filter out NaNs / Infs if present
     valid_mask = np.isfinite(y_t) & np.isfinite(y_p)
@@ -89,13 +88,13 @@ def compute_regression_metrics(
     abs_errors = np.abs(errors)
 
     mae = float(np.mean(abs_errors))
-    rmse = float(np.sqrt(np.mean(errors ** 2)))
+    rmse = float(np.sqrt(np.mean(errors**2)))
     medae = float(np.median(abs_errors))
     max_error = float(np.max(abs_errors))
 
     # R-squared calculation
     ss_tot = float(np.sum((y_t - np.mean(y_t)) ** 2))
-    ss_res = float(np.sum(errors ** 2))
+    ss_res = float(np.sum(errors**2))
     if ss_tot > 1e-9:
         r2 = float(1.0 - (ss_res / ss_tot))
     else:
@@ -131,7 +130,11 @@ def compute_regression_metrics(
 
 def format_metrics_table(metrics: Dict[str, float], model_name: str = "") -> str:
     """Format evaluation metrics as an ASCII string table."""
-    header = f"=== Benchmark Performance: {model_name} ===" if model_name else "=== Benchmark Performance ==="
+    header = (
+        f"=== Benchmark Performance: {model_name} ==="
+        if model_name
+        else "=== Benchmark Performance ==="
+    )
     lines = [header]
     for k, v in metrics.items():
         if "wape" in k:
@@ -146,7 +149,7 @@ def format_metrics_table(metrics: Dict[str, float], model_name: str = "") -> str
 def compare_models_table(models_metrics: Dict[str, Dict[str, float]]) -> pd.DataFrame:
     """
     Convert a dictionary of model metrics into a comparison DataFrame.
-    
+
     Parameters
     ----------
     models_metrics : Dict[str, Dict[str, float]]

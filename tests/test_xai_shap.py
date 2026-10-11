@@ -11,9 +11,10 @@ Validates:
 
 import os
 import unittest
+
+import lightgbm as lgb
 import numpy as np
 import pandas as pd
-import lightgbm as lgb
 
 from src.xai.shap_explainer import TreeSHAPExplainer
 
@@ -25,21 +26,29 @@ class TestXAIShap(unittest.TestCase):
         """Train a lightweight tree model on synthetic non-linear delay data."""
         np.random.seed(42)
         n = 300
-        x_prop = np.random.exponential(15, n)          # Prior delay propagation
-        x_signals = np.random.poisson(3, n)             # Signal density
-        x_length = np.random.uniform(200, 800, n)       # Segment length
-        x_precip = np.random.choice([0.0, 1.5, 5.0], n) # Rain
+        x_prop = np.random.exponential(15, n)  # Prior delay propagation
+        x_signals = np.random.poisson(3, n)  # Signal density
+        x_length = np.random.uniform(200, 800, n)  # Segment length
+        x_precip = np.random.choice([0.0, 1.5, 5.0], n)  # Rain
 
         # Synthetic ground truth
-        y = 0.8 * x_prop + 2.5 * x_signals + 0.02 * x_length + 4.0 * x_precip + np.random.normal(0, 2, n)
+        y = (
+            0.8 * x_prop
+            + 2.5 * x_signals
+            + 0.02 * x_length
+            + 4.0 * x_precip
+            + np.random.normal(0, 2, n)
+        )
 
-        self.df = pd.DataFrame({
-            "prev_stop_delay": x_prop,
-            "signalized_intersection_count": x_signals,
-            "segment_length_meters": x_length,
-            "precipitation_mm": x_precip,
-            "delta_t_run": y,
-        })
+        self.df = pd.DataFrame(
+            {
+                "prev_stop_delay": x_prop,
+                "signalized_intersection_count": x_signals,
+                "segment_length_meters": x_length,
+                "precipitation_mm": x_precip,
+                "delta_t_run": y,
+            }
+        )
         self.features = [
             "prev_stop_delay",
             "signalized_intersection_count",
@@ -47,7 +56,9 @@ class TestXAIShap(unittest.TestCase):
             "precipitation_mm",
         ]
 
-        self.model = lgb.LGBMRegressor(n_estimators=30, learning_rate=0.1, random_state=42, verbosity=-1)
+        self.model = lgb.LGBMRegressor(
+            n_estimators=30, learning_rate=0.1, random_state=42, verbosity=-1
+        )
         self.model.fit(self.df[self.features], self.df["delta_t_run"])
         self.output_dir = "reports/figures/xai_test"
         os.makedirs(self.output_dir, exist_ok=True)
@@ -56,6 +67,7 @@ class TestXAIShap(unittest.TestCase):
         """Clean up test artifacts."""
         if os.path.exists(self.output_dir):
             import shutil
+
             shutil.rmtree(self.output_dir, ignore_errors=True)
 
     def test_explain_and_global_rankings(self):
@@ -109,7 +121,9 @@ class TestXAIShap(unittest.TestCase):
         self.assertGreater(os.path.getsize(waterfall_path), 5000)
 
         # Test extreme delays diagnosis
-        cases = explainer.diagnose_extreme_delays(self.df, self.output_dir, top_k=2, threshold_seconds=20.0)
+        cases = explainer.diagnose_extreme_delays(
+            self.df, self.output_dir, top_k=2, threshold_seconds=20.0
+        )
         self.assertGreaterEqual(len(cases), 1)
         self.assertTrue(os.path.exists(cases[0]["plot_path"]))
 

@@ -4,14 +4,14 @@ Handles GTFS-RT Protobuf polling, static timetable downloads, deduplication, and
 """
 
 from src.ingestion.fetcher import (
-    GTFSRTFetcher,
     CriticalSchemaMismatchError,
-    RateLimitCircuitBreakerError,
+    GTFSRTFetcher,
     NetworkOutageError,
+    RateLimitCircuitBreakerError,
     TransientHttpError,
 )
 from src.ingestion.gtfs_manager import GTFSManager
-from src.ingestion.storage import ParquetPartitionStorage, DuckDBCatalog
+from src.ingestion.storage import DuckDBCatalog, ParquetPartitionStorage
 
 __all__ = [
     "GTFSRTFetcher",

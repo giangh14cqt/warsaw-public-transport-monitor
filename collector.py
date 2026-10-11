@@ -6,24 +6,21 @@ Deduplicates records on (trip_id, stop_id, stop_sequence, observed_at).
 Appends to DuckDB (data/delays.duckdb) and logs periodic health metrics.
 """
 
-import os
-import sys
-import time
-import signal
 import logging
-from datetime import datetime
+import signal
+import time
 
+from src.db import DEFAULT_DB_PATH, DelayDatabase
 from src.parser import (
-    WarsawTransitParser,
     CriticalBlockerError,
     TransientHttpError,
+    WarsawTransitParser,
 )
-from src.db import DelayDatabase, DEFAULT_DB_PATH
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S"
+    datefmt="%Y-%m-%d %H:%M:%S",
 )
 logger = logging.getLogger("collector")
 
@@ -52,10 +49,16 @@ class TransitCollector:
 
     def log_health_metrics(self):
         stats = self.db.get_summary_stats()
-        avg_delay_str = f"{stats['avg_delay_sec']:.1f}s" if stats['avg_delay_sec'] is not None else "N/A"
-        min_delay_str = f"{stats['min_delay_sec']}s" if stats['min_delay_sec'] is not None else "N/A"
-        max_delay_str = f"{stats['max_delay_sec']}s" if stats['max_delay_sec'] is not None else "N/A"
-        size_kb = stats['db_size_bytes'] / 1024
+        avg_delay_str = (
+            f"{stats['avg_delay_sec']:.1f}s" if stats["avg_delay_sec"] is not None else "N/A"
+        )
+        min_delay_str = (
+            f"{stats['min_delay_sec']}s" if stats["min_delay_sec"] is not None else "N/A"
+        )
+        max_delay_str = (
+            f"{stats['max_delay_sec']}s" if stats["max_delay_sec"] is not None else "N/A"
+        )
+        size_kb = stats["db_size_bytes"] / 1024
 
         logger.info("=" * 60)
         logger.info("PERIODIC HEALTH METRICS (10-minute heartbeat)")
@@ -65,14 +68,18 @@ class TransitCollector:
         logger.info(f"  • Active Routes:       {stats['active_routes']:,}")
         logger.info(f"  • Average Delay:       {avg_delay_str}")
         logger.info(f"  • Delay Range:         [{min_delay_str} .. {max_delay_str}]")
-        logger.info(f"  • Storage Size:        {size_kb:,.1f} KB ({stats['db_size_bytes']:,} bytes)")
+        logger.info(
+            f"  • Storage Size:        {size_kb:,.1f} KB ({stats['db_size_bytes']:,} bytes)"
+        )
         logger.info(f"  • Session Inserted:    {self.total_inserted:,} rows")
         logger.info("=" * 60)
         self.last_health_report = time.time()
 
     def run(self):
         self.running = True
-        logger.info(f"Starting Warsaw Transit Delay Collector daemon (Interval: {POLL_INTERVAL_SECONDS}s)...")
+        logger.info(
+            f"Starting Warsaw Transit Delay Collector daemon (Interval: {POLL_INTERVAL_SECONDS}s)..."
+        )
         logger.info(f"Target Database: {self.db_path}")
 
         cycle_count = 0
@@ -98,7 +105,9 @@ class TransitCollector:
                 )
 
             except CriticalBlockerError as e:
-                logger.critical(f"[CRITICAL BLOCKER]: Endpoint response unexpected. Human review required. Error: {e}")
+                logger.critical(
+                    f"[CRITICAL BLOCKER]: Endpoint response unexpected. Human review required. Error: {e}"
+                )
                 self.running = False
                 break
 
@@ -115,7 +124,7 @@ class TransitCollector:
             # 5. Sleep respecting poll interval and checking running flag
             elapsed = time.time() - cycle_start
             sleep_duration = max(0.0, POLL_INTERVAL_SECONDS - elapsed)
-            
+
             # Sleep in small slices to be responsive to signals
             sleep_until = time.time() + sleep_duration
             while self.running and time.time() < sleep_until:

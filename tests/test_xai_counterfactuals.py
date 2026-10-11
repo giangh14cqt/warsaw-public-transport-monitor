@@ -11,9 +11,10 @@ Validates:
 import os
 import shutil
 import unittest
+
+import lightgbm as lgb
 import numpy as np
 import pandas as pd
-import lightgbm as lgb
 
 from src.xai.counterfactuals import CounterfactualDiagnostics
 
@@ -45,15 +46,17 @@ class TestCounterfactualDiagnostics(unittest.TestCase):
         )
         y = np.maximum(y, 0.0)
 
-        self.df = pd.DataFrame({
-            "prev_stop_delay": prev_delay,
-            "headway_deviation": headway_dev,
-            "is_dedicated_right_of_way": row,
-            "signalized_intersection_count": signals,
-            "precipitation_mm": precip,
-            "route_id": np.random.choice(["17", "33", "186", "523"], n),
-            "delta_t_run": y,
-        })
+        self.df = pd.DataFrame(
+            {
+                "prev_stop_delay": prev_delay,
+                "headway_deviation": headway_dev,
+                "is_dedicated_right_of_way": row,
+                "signalized_intersection_count": signals,
+                "precipitation_mm": precip,
+                "route_id": np.random.choice(["17", "33", "186", "523"], n),
+                "delta_t_run": y,
+            }
+        )
         self.features = [
             "prev_stop_delay",
             "headway_deviation",
@@ -62,7 +65,9 @@ class TestCounterfactualDiagnostics(unittest.TestCase):
             "precipitation_mm",
         ]
 
-        self.model = lgb.LGBMRegressor(n_estimators=30, learning_rate=0.1, random_state=42, verbosity=-1)
+        self.model = lgb.LGBMRegressor(
+            n_estimators=30, learning_rate=0.1, random_state=42, verbosity=-1
+        )
         self.model.fit(self.df[self.features], self.df["delta_t_run"])
 
         self.output_dir = "reports/figures/test_cf"
@@ -88,7 +93,9 @@ class TestCounterfactualDiagnostics(unittest.TestCase):
         diag = CounterfactualDiagnostics(self.model, self.features, target_col="delta_t_run")
 
         # Pick a severely delayed query instance with mixed traffic (row=0)
-        delayed_idx = self.df[(self.df["delta_t_run"] > 250) & (self.df["is_dedicated_right_of_way"] == 0.0)].index[0]
+        delayed_idx = self.df[
+            (self.df["delta_t_run"] > 250) & (self.df["is_dedicated_right_of_way"] == 0.0)
+        ].index[0]
         query = self.df.loc[delayed_idx]
 
         res = diag.generate_actionable_interventions(query, target_on_time_threshold=120.0)

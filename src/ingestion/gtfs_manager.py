@@ -4,16 +4,16 @@ Stores snapshots under data/gtfs/gtfs_{YYYY_MM_DD}.zip and unzips under data/gtf
 Maintains DuckDB-backed fast lookup indices to enrich real-time feeds.
 """
 
-import os
-import glob
-import zipfile
-import logging
 import datetime
-from typing import Dict, List, Optional, Tuple, Any
+import glob
+import logging
+import os
+import zipfile
+from typing import Any, Dict, List, Optional, Tuple
 
-import requests
 import duckdb
 import pandas as pd
+import requests
 
 logger = logging.getLogger(__name__)
 
@@ -45,8 +45,9 @@ class GTFSManager:
                 # If archive is within 7 days, consider it fresh
                 if (now - dt).days < 7:
                     unpack_dir = os.path.join(self.gtfs_base_dir, date_part)
-                    if os.path.exists(os.path.join(unpack_dir, "trips.txt")) and \
-                       os.path.exists(os.path.join(unpack_dir, "stop_times.txt")):
+                    if os.path.exists(os.path.join(unpack_dir, "trips.txt")) and os.path.exists(
+                        os.path.join(unpack_dir, "stop_times.txt")
+                    ):
                         return date_part, unpack_dir
             except ValueError:
                 continue
@@ -61,7 +62,9 @@ class GTFSManager:
             existing = self.get_latest_existing_snapshot()
             if existing:
                 self._current_date_str, self._current_unpack_dir = existing
-                logger.info(f"Using existing fresh static GTFS snapshot: {self._current_unpack_dir}")
+                logger.info(
+                    f"Using existing fresh static GTFS snapshot: {self._current_unpack_dir}"
+                )
                 self._init_duckdb_index()
                 return self._current_unpack_dir
 
@@ -71,7 +74,9 @@ class GTFSManager:
         os.makedirs(unpack_dir, exist_ok=True)
 
         logger.info(f"Downloading static GTFS schedule from {STATIC_GTFS_URL} to {zip_dest}...")
-        resp = requests.get(STATIC_GTFS_URL, timeout=90, headers={"User-Agent": "WarsawDelayTelemetry/1.0"})
+        resp = requests.get(
+            STATIC_GTFS_URL, timeout=90, headers={"User-Agent": "WarsawDelayTelemetry/1.0"}
+        )
         if resp.status_code != 200:
             raise RuntimeError(f"Failed to download static GTFS: HTTP {resp.status_code}")
 
@@ -120,17 +125,17 @@ class GTFSManager:
             logger.info(f"Building DuckDB index at {db_path}...")
             write_conn = duckdb.connect(db_path, read_only=False)
             write_conn.execute(f"""
-                CREATE TABLE trips AS 
-                SELECT trip_id, route_id, brigade, service_id 
+                CREATE TABLE trips AS
+                SELECT trip_id, route_id, brigade, service_id
                 FROM read_csv('{trips_csv}', header=true, all_varchar=true);
 
-                CREATE TABLE stop_times AS 
-                SELECT 
-                    trip_id, 
-                    stop_id, 
-                    CAST(stop_sequence AS INTEGER) AS stop_sequence, 
-                    arrival_time, 
-                    departure_time 
+                CREATE TABLE stop_times AS
+                SELECT
+                    trip_id,
+                    stop_id,
+                    CAST(stop_sequence AS INTEGER) AS stop_sequence,
+                    arrival_time,
+                    departure_time
                 FROM read_csv('{stop_times_csv}', header=true, all_varchar=true);
 
                 CREATE INDEX idx_trips ON trips(trip_id);
@@ -151,7 +156,7 @@ class GTFSManager:
 
         self._db_conn.register("active_trips_df", pd.DataFrame({"trip_id": list(set(trip_ids))}))
         rows = self._db_conn.execute("""
-            SELECT 
+            SELECT
                 s.trip_id,
                 s.stop_sequence,
                 t.route_id,
@@ -172,7 +177,7 @@ class GTFSManager:
                 "brigade": r[3],
                 "stop_id": r[4],
                 "arrival_time": r[5],
-                "departure_time": r[6]
+                "departure_time": r[6],
             }
         return cache
 

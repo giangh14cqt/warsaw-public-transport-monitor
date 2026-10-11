@@ -7,14 +7,17 @@ Identifies tipping points and bifurcation thresholds in transit delay response c
 - Signalized intersection density capacity thresholds.
 """
 
-import os
 import logging
-from typing import Dict, Any, List, Optional, Tuple, Union
+import os
+from typing import Any, Dict, List, Optional
+
+import matplotlib
 import numpy as np
 import pandas as pd
-import matplotlib
 
 matplotlib.use("Agg")
+import sys
+
 import matplotlib.pyplot as plt
 
 logger = logging.getLogger(__name__)
@@ -75,15 +78,19 @@ class ALENonLinearDetector:
 
         vals = data[feature_name].dropna().to_numpy(dtype=float)
         if len(vals) == 0 or np.var(vals) < 1e-9:
-            logger.warning(f"Feature '{feature_name}' has zero or near-zero variance; returning flat ALE.")
+            logger.warning(
+                f"Feature '{feature_name}' has zero or near-zero variance; returning flat ALE."
+            )
             val_mean = float(np.mean(vals)) if len(vals) > 0 else 0.0
-            return pd.DataFrame({
-                "grid_val": [val_mean],
-                "ale": [0.0],
-                "ale_centered": [0.0],
-                "local_slope": [0.0],
-                "bin_count": [len(vals)],
-            })
+            return pd.DataFrame(
+                {
+                    "grid_val": [val_mean],
+                    "ale": [0.0],
+                    "ale_centered": [0.0],
+                    "local_slope": [0.0],
+                    "bin_count": [len(vals)],
+                }
+            )
 
         # Generate grid boundaries
         if grid_type == "quantile":
@@ -151,13 +158,15 @@ class ALENonLinearDetector:
         slopes = np.diff(ale_centered) / dx
         slopes = np.append(slopes, slopes[-1])  # align length
 
-        ale_df = pd.DataFrame({
-            "grid_val": grid,
-            "ale": ale,
-            "ale_centered": ale_centered,
-            "local_slope": slopes,
-            "bin_count": np.append(bin_counts, [0]),
-        })
+        ale_df = pd.DataFrame(
+            {
+                "grid_val": grid,
+                "ale": ale,
+                "ale_centered": ale_centered,
+                "local_slope": slopes,
+                "bin_count": np.append(bin_counts, [0]),
+            }
+        )
         return ale_df
 
     def detect_tipping_points(
@@ -209,7 +218,7 @@ class ALENonLinearDetector:
                 slope_post = float(slopes[idx + 1])
                 effect_pre = float(y[idx])
                 effect_post = float(y[idx + 1])
-                delta_effect = float(effect_post - effect_pre)
+                float(effect_post - effect_pre)
 
                 # Domain-specific annotation
                 desc = f"Curvature acceleration at {x_val:.2f}"
@@ -222,15 +231,17 @@ class ALENonLinearDetector:
                 elif "signal" in feature_name.lower():
                     desc = f"Signalized intersection capacity bottleneck at {x_val:.1f} signals"
 
-                tipping_points.append({
-                    "feature": feature_name,
-                    "threshold_value": round(x_val, 3),
-                    "ale_effect_at_threshold": round(float(y[idx + 1]), 2),
-                    "slope_before": round(slope_pre, 3),
-                    "slope_after": round(slope_post, 3),
-                    "slope_change": round(slope_post - slope_pre, 3),
-                    "description": desc,
-                })
+                tipping_points.append(
+                    {
+                        "feature": feature_name,
+                        "threshold_value": round(x_val, 3),
+                        "ale_effect_at_threshold": round(float(y[idx + 1]), 2),
+                        "slope_before": round(slope_pre, 3),
+                        "slope_after": round(slope_post, 3),
+                        "slope_change": round(slope_post - slope_pre, 3),
+                        "description": desc,
+                    }
+                )
 
         # Sort by magnitude of curvature change
         tipping_points.sort(key=lambda t: abs(t["slope_change"]), reverse=True)
@@ -263,14 +274,18 @@ class ALENonLinearDetector:
 
         # Highlight zero / freezing point for temperature
         if "temp" in feature_name.lower() and x.min() <= 0 <= x.max():
-            ax_main.axvline(0, color="#d62728", linestyle=":", lw=1.8, label="Freezing Boundary (0°C)")
+            ax_main.axvline(
+                0, color="#d62728", linestyle=":", lw=1.8, label="Freezing Boundary (0°C)"
+            )
 
         # Highlight tipping points
         if tipping_points:
             for pt in tipping_points:
                 tx = pt["threshold_value"]
                 ty = pt["ale_effect_at_threshold"]
-                ax_main.axvline(tx, color="#ff7f0e", linestyle="--", lw=1.5, label=f"Tipping Point ({tx:.2f})")
+                ax_main.axvline(
+                    tx, color="#ff7f0e", linestyle="--", lw=1.5, label=f"Tipping Point ({tx:.2f})"
+                )
                 ax_main.scatter([tx], [ty], color="#ff7f0e", s=60, zorder=5)
                 ax_main.annotate(
                     f"{pt['threshold_value']:.1f}",
@@ -342,7 +357,9 @@ class ALENonLinearDetector:
             ale_df = self.compute_ale(feat, data)
             tipping = self.detect_tipping_points(ale_df, feature_name=feat)
             chart_path = os.path.join(output_dir, f"ale_{feat}.png")
-            self.plot_ale(feat, ale_df, tipping_points=tipping, data_rug=data, output_path=chart_path)
+            self.plot_ale(
+                feat, ale_df, tipping_points=tipping, data_rug=data, output_path=chart_path
+            )
 
             results[feat] = {
                 "chart_path": chart_path,
@@ -361,13 +378,16 @@ def run_ale_pipeline(
 ) -> Dict[str, Any]:
     """Execute end-to-end ALE non-linear curve diagnostics workflow."""
     import duckdb
+
     from src.models.gbm import GradientBoostingBenchmark
     from src.models.validation import PurgedTemporalBlockSplitter
 
     os.makedirs(output_dir, exist_ok=True)
     con = duckdb.connect()
     logger.info("Loading feature mart sample for ALE curve diagnostics...")
-    df = con.execute(f"SELECT * FROM '{feature_mart_path}' USING SAMPLE {sample_size} (reservoir, 42)").df()
+    df = con.execute(
+        f"SELECT * FROM '{feature_mart_path}' USING SAMPLE {sample_size} (reservoir, 42)"
+    ).df()
     if "is_terminal_stop" in df.columns:
         df = df[df["is_terminal_stop"] == False].copy()
     elif "trip_progress" in df.columns:
@@ -417,9 +437,10 @@ if __name__ == "__main__":
     mart_path = "data/processed/feature_mart.parquet"
     if not os.path.exists(mart_path):
         print(f"Error: {mart_path} not found.")
-        exit(1)
+        sys.exit(1)
 
     import duckdb
+
     from src.models.gbm import GradientBoostingBenchmark
 
     con = duckdb.connect()

@@ -9,11 +9,12 @@ Predicts arrival delay delta Delta t (seconds) using rich multi-source feature g
 """
 
 import logging
-from typing import Dict, Any, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple
+
 import numpy as np
 import pandas as pd
 
-from src.models.metrics import compute_regression_metrics, format_metrics_table
+from src.models.metrics import compute_regression_metrics
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +69,9 @@ class GradientBoostingBenchmark:
         X = data[active_feats].copy()
 
         # Categorical columns
-        detected_cat = cat_cols or [c for c in active_feats if X[c].dtype == object or str(X[c].dtype) == "category"]
+        detected_cat = cat_cols or [
+            c for c in active_feats if X[c].dtype == object or str(X[c].dtype) == "category"
+        ]
         if is_training:
             self.cat_cols = detected_cat
 
@@ -124,8 +127,12 @@ class GradientBoostingBenchmark:
             Validation performance metrics.
         """
         self.feature_cols = feature_cols
-        X_train, y_train = self._prepare_data(train_df, feature_cols, cat_cols=cat_cols, is_training=True)
-        X_val, y_val = self._prepare_data(val_df, feature_cols, cat_cols=cat_cols, is_training=False)
+        X_train, y_train = self._prepare_data(
+            train_df, feature_cols, cat_cols=cat_cols, is_training=True
+        )
+        X_val, y_val = self._prepare_data(
+            val_df, feature_cols, cat_cols=cat_cols, is_training=False
+        )
 
         if y_train is None or y_val is None:
             raise ValueError(f"Target column '{self.target_col}' missing from datasets.")
@@ -133,6 +140,7 @@ class GradientBoostingBenchmark:
         if self.model_type == "lightgbm":
             try:
                 import lightgbm as lgb
+
                 default_params = {
                     "n_estimators": n_estimators,
                     "learning_rate": learning_rate,
@@ -165,15 +173,20 @@ class GradientBoostingBenchmark:
 
                 # Extract feature importances
                 importances = self.model.feature_importances_
-                self.feature_importances = dict(zip(X_train.columns, [float(v) for v in importances]))
+                self.feature_importances = dict(
+                    zip(X_train.columns, [float(v) for v in importances], strict=False)
+                )
 
             except (ImportError, OSError) as e:
-                logger.warning(f"LightGBM initialization failed ({e}), falling back to CatBoost or HistGradientBoosting.")
+                logger.warning(
+                    f"LightGBM initialization failed ({e}), falling back to CatBoost or HistGradientBoosting."
+                )
                 self.model_type = "catboost"
 
         if self.model_type == "catboost" and self.model is None:
             try:
                 import catboost as cb
+
                 default_params = {
                     "iterations": n_estimators,
                     "learning_rate": learning_rate,
@@ -185,7 +198,9 @@ class GradientBoostingBenchmark:
                 }
                 default_params.update(self.params)
 
-                cat_features_idx = [X_train.columns.get_loc(c) for c in self.cat_cols if c in X_train.columns]
+                cat_features_idx = [
+                    X_train.columns.get_loc(c) for c in self.cat_cols if c in X_train.columns
+                ]
                 self.model = cb.CatBoostRegressor(**default_params)
                 self.model.fit(
                     X_train,
@@ -194,11 +209,16 @@ class GradientBoostingBenchmark:
                     cat_features=cat_features_idx if cat_features_idx else None,
                 )
                 importances = self.model.get_feature_importance()
-                self.feature_importances = dict(zip(X_train.columns, [float(v) for v in importances]))
+                self.feature_importances = dict(
+                    zip(X_train.columns, [float(v) for v in importances], strict=False)
+                )
 
             except (ImportError, OSError) as e:
-                logger.warning(f"CatBoost initialization failed ({e}), using scikit-learn HistGradientBoosting.")
+                logger.warning(
+                    f"CatBoost initialization failed ({e}), using scikit-learn HistGradientBoosting."
+                )
                 from sklearn.ensemble import HistGradientBoostingRegressor
+
                 self.model = HistGradientBoostingRegressor(max_iter=n_estimators, random_state=42)
                 self.model.fit(X_train, y_train)
 
@@ -218,7 +238,9 @@ class GradientBoostingBenchmark:
         if self.model is None:
             raise RuntimeError("Model has not been trained yet.")
 
-        X_test, _ = self._prepare_data(test_df, self.feature_cols, cat_cols=self.cat_cols, is_training=False)
+        X_test, _ = self._prepare_data(
+            test_df, self.feature_cols, cat_cols=self.cat_cols, is_training=False
+        )
         return self.model.predict(X_test)
 
     def get_feature_importances(self) -> pd.DataFrame:
@@ -226,8 +248,14 @@ class GradientBoostingBenchmark:
         if not self.feature_importances:
             return pd.DataFrame(columns=["feature", "importance", "relative_importance"])
 
-        records = [{"feature": k, "importance": float(v)} for k, v in self.feature_importances.items()]
-        df = pd.DataFrame(records).sort_values(by="importance", ascending=False).reset_index(drop=True)
+        records = [
+            {"feature": k, "importance": float(v)} for k, v in self.feature_importances.items()
+        ]
+        df = (
+            pd.DataFrame(records)
+            .sort_values(by="importance", ascending=False)
+            .reset_index(drop=True)
+        )
         total = df["importance"].sum()
         df["relative_importance"] = (df["importance"] / total * 100.0) if total > 0 else 0.0
         return df
@@ -245,7 +273,9 @@ class GradientBoostingBenchmark:
         ]
         fi_df = self.get_feature_importances()
         for _, row in fi_df.head(10).iterrows():
-            lines.append(f"  {row['feature']:<30s} {row['importance']:>12.2f} ({row['relative_importance']:>5.1f}%)")
+            lines.append(
+                f"  {row['feature']:<30s} {row['importance']:>12.2f} ({row['relative_importance']:>5.1f}%)"
+            )
         lines.append("=" * 78)
         return "\n".join(lines)
 
@@ -268,22 +298,24 @@ def train_gbm_suite(
     cb_model = GradientBoostingBenchmark(target_col=target_col, model_type="catboost")
     cb_metrics = cb_model.train(train_df, val_df, feature_cols, cat_cols=cat_cols)
 
-    comparison = pd.DataFrame([
-        {
-            "model": "LightGBM Regressor",
-            "val_mae": lgb_metrics.get("val_mae"),
-            "val_rmse": lgb_metrics.get("val_rmse"),
-            "val_wape": lgb_metrics.get("val_wape"),
-            "val_r2": lgb_metrics.get("val_r2"),
-            "val_medae": lgb_metrics.get("val_medae"),
-        },
-        {
-            "model": "CatBoost Regressor",
-            "val_mae": cb_metrics.get("val_mae"),
-            "val_rmse": cb_metrics.get("val_rmse"),
-            "val_wape": cb_metrics.get("val_wape"),
-            "val_r2": cb_metrics.get("val_r2"),
-            "val_medae": cb_metrics.get("val_medae"),
-        },
-    ])
+    comparison = pd.DataFrame(
+        [
+            {
+                "model": "LightGBM Regressor",
+                "val_mae": lgb_metrics.get("val_mae"),
+                "val_rmse": lgb_metrics.get("val_rmse"),
+                "val_wape": lgb_metrics.get("val_wape"),
+                "val_r2": lgb_metrics.get("val_r2"),
+                "val_medae": lgb_metrics.get("val_medae"),
+            },
+            {
+                "model": "CatBoost Regressor",
+                "val_mae": cb_metrics.get("val_mae"),
+                "val_rmse": cb_metrics.get("val_rmse"),
+                "val_wape": cb_metrics.get("val_wape"),
+                "val_r2": cb_metrics.get("val_r2"),
+                "val_medae": cb_metrics.get("val_medae"),
+            },
+        ]
+    )
     return lgb_model, cb_model, comparison

@@ -10,13 +10,13 @@ Computes dedicated right-of-way status, signalized intersection counts, physical
 and mixed-traffic lane capacity for transport delay attribution modeling.
 """
 
-import os
-import glob
 import logging
-from typing import Dict, Any, List, Optional, Tuple, Union
+import os
+from typing import Any, Dict, List, Optional, Tuple, Union
+
+import duckdb
 import numpy as np
 import pandas as pd
-import duckdb
 
 logger = logging.getLogger(__name__)
 
@@ -290,12 +290,10 @@ class OSMCorridorExtractor:
         # Load cached or fetched traffic signals for all corridors
         signals_by_corridor: Dict[str, pd.DataFrame] = {}
         for c_name, c_cfg in configs.items():
-            signals_by_corridor[c_name] = self.load_or_fetch_traffic_signals(
-                c_name, c_cfg["bbox"]
-            )
+            signals_by_corridor[c_name] = self.load_or_fetch_traffic_signals(c_name, c_cfg["bbox"])
 
         # Build stop_id to corridor mapping
-        stop_to_corr = dict(zip(corr_stops["stop_id"], corr_stops["corridor_name"]))
+        stop_to_corr = dict(zip(corr_stops["stop_id"], corr_stops["corridor_name"], strict=False))
 
         segments: List[Dict[str, Any]] = []
         for _, row in pairs.iterrows():
@@ -341,9 +339,7 @@ class OSMCorridorExtractor:
         logger.info(f"Successfully processed {len(df)} corridor topology segments")
         return df
 
-    def save_segments(
-        self, df_or_segments: Union[pd.DataFrame, List[Dict[str, Any]]]
-    ) -> str:
+    def save_segments(self, df_or_segments: Union[pd.DataFrame, List[Dict[str, Any]]]) -> str:
         """Persist extracted corridor segments to Parquet."""
         if isinstance(df_or_segments, pd.DataFrame):
             df = df_or_segments
@@ -361,7 +357,7 @@ class OSMCorridorExtractor:
 
         con = duckdb.connect(":memory:")
         res = con.execute(f"""
-            SELECT 
+            SELECT
                 COUNT(*) AS total_segments,
                 COUNT(DISTINCT corridor_name) AS total_corridors,
                 ROUND(SUM(segment_length_meters) / 1000.0, 2) AS total_network_km,
@@ -375,16 +371,20 @@ class OSMCorridorExtractor:
             FROM read_parquet('{self.output_parquet}')
         """).fetchone()
 
-        by_corr = con.execute(f"""
-            SELECT 
-                corridor_name, 
+        by_corr = (
+            con.execute(f"""
+            SELECT
+                corridor_name,
                 COUNT(*) as segments,
                 ROUND(SUM(segment_length_meters) / 1000.0, 2) as length_km,
                 ROUND(AVG(signalized_intersection_count), 1) as avg_signals
             FROM read_parquet('{self.output_parquet}')
             GROUP BY corridor_name
             ORDER BY segments DESC
-        """).df().to_dict(orient="records")
+        """)
+            .df()
+            .to_dict(orient="records")
+        )
 
         return {
             "total_segments": int(res[0]),
@@ -431,4 +431,6 @@ if __name__ == "__main__":
         print(f"Dedicated ROW Segments: {summary['dedicated_row_segments']}")
         print("\nCorridor Breakdown:")
         for c in summary["corridors"]:
-            print(f"  - {c['corridor_name']}: {c['segments']} segments, {c['length_km']} km, avg {c['avg_signals']} signals")
+            print(
+                f"  - {c['corridor_name']}: {c['segments']} segments, {c['length_km']} km, avg {c['avg_signals']} signals"
+            )

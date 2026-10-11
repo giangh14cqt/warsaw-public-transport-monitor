@@ -10,8 +10,8 @@ Prevents forward information leakage in transit delay telemetry and econometric 
 """
 
 import logging
-from typing import Tuple, Dict, Any, Optional, Iterator, Union, List, Set
-import numpy as np
+from typing import Any, Dict, Iterator, Optional, Set, Tuple, Union
+
 import pandas as pd
 
 logger = logging.getLogger(__name__)
@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 
 class DataLeakageError(ValueError):
     """Raised when temporal boundary leakage or trip overlap is detected."""
+
     pass
 
 
@@ -221,10 +222,14 @@ class PurgedTemporalBlockSplitter:
         if self.purge_trips and self.trip_col in df_sorted.columns:
             if self.purge_mode == "drop_both":
                 train_mask = train_mask & (~df_sorted[self.trip_col].isin(purged_train_val))
-                val_mask = val_mask & (~df_sorted[self.trip_col].isin(purged_train_val | purged_val_test))
+                val_mask = val_mask & (
+                    ~df_sorted[self.trip_col].isin(purged_train_val | purged_val_test)
+                )
                 test_mask = test_mask & (~df_sorted[self.trip_col].isin(purged_val_test))
             else:  # drop_from_eval only
-                val_mask = val_mask & (~df_sorted[self.trip_col].isin(purged_train_val | purged_val_test))
+                val_mask = val_mask & (
+                    ~df_sorted[self.trip_col].isin(purged_train_val | purged_val_test)
+                )
                 test_mask = test_mask & (~df_sorted[self.trip_col].isin(purged_val_test))
 
         train_df = df_sorted[train_mask].copy()
@@ -314,9 +319,13 @@ class PurgedTemporalBlockSplitter:
                 t_train_start = df_sorted.iloc[train_start_idx][time_col]
                 train_start_mask = df_sorted[time_col] >= t_train_start
 
-            purged_crossing = self._find_crossing_and_embargo_trips(
-                df_sorted, t_train_cutoff, t_val_start, time_col
-            ) if self.purge_trips else set()
+            purged_crossing = (
+                self._find_crossing_and_embargo_trips(
+                    df_sorted, t_train_cutoff, t_val_start, time_col
+                )
+                if self.purge_trips
+                else set()
+            )
 
             train_mask = train_start_mask & (df_sorted[time_col] <= t_train_cutoff)
             val_mask = (df_sorted[time_col] >= t_val_start) & (df_sorted[time_col] <= t_val_cutoff)
@@ -380,7 +389,9 @@ class PurgedTemporalBlockSplitter:
             return audit
 
         time_col = self._resolve_time_col(train_df)
-        expected_embargo = self.embargo_minutes if embargo_minutes is None else float(embargo_minutes)
+        expected_embargo = (
+            self.embargo_minutes if embargo_minutes is None else float(embargo_minutes)
+        )
         min_embargo_seconds = expected_embargo * 60.0
 
         train_max_t = pd.to_datetime(train_df[time_col].max())
@@ -433,7 +444,9 @@ class PurgedTemporalBlockSplitter:
         if self.trip_col in train_df.columns and self.trip_col in val_df.columns:
             # Check trips that were active within the cutoff boundary window
             train_boundary_trips = set(
-                train_df[train_df[time_col] >= (train_max_t - pd.Timedelta(minutes=30))][self.trip_col]
+                train_df[train_df[time_col] >= (train_max_t - pd.Timedelta(minutes=30))][
+                    self.trip_col
+                ]
             )
             val_boundary_trips = set(
                 val_df[val_df[time_col] <= (val_min_t + pd.Timedelta(minutes=30))][self.trip_col]
@@ -455,13 +468,15 @@ class PurgedTemporalBlockSplitter:
             overlap = train_trips.intersection(val_trips)
             audit["trip_id_overlap_count"] = len(overlap)
             if len(overlap) > 0:
-                msg = f"Strict Trip ID Overlap: {len(overlap)} trip_ids appear in both Train and Val"
+                msg = (
+                    f"Strict Trip ID Overlap: {len(overlap)} trip_ids appear in both Train and Val"
+                )
                 audit["violations"].append(msg)
                 audit["is_leakage_free"] = False
 
         if not audit["is_leakage_free"] and raise_on_error:
             raise DataLeakageError(
-                f"Data leakage detected during validation audit:\n" + "\n".join(audit["violations"])
+                "Data leakage detected during validation audit:\n" + "\n".join(audit["violations"])
             )
 
         return audit

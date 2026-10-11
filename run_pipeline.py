@@ -14,12 +14,12 @@ Usage:
     python3 run_pipeline.py --stage xai
 """
 
+import argparse
+import logging
 import os
 import sys
 import time
-import argparse
-import logging
-from typing import Dict, Any, Optional
+from typing import Any, Dict
 
 logging.basicConfig(
     level=logging.INFO,
@@ -40,9 +40,9 @@ def banner(text: str, fill: str = "="):
 def run_stage_preflight(args: argparse.Namespace) -> Dict[str, Any]:
     """Execute pre-flight system integrity checks."""
     banner("STAGE 1: PRE-FLIGHT INTEGRITY CHECK")
-    from src.gtfs_manager import GTFSManager
     from src.fetcher import GTFSRTFetcher
-    from src.storage import ParquetPartitionStorage, DuckDBCatalog
+    from src.gtfs_manager import GTFSManager
+    from src.storage import ParquetPartitionStorage
 
     t0 = time.time()
     logger.info("Verifying static GTFS schedule manager...")
@@ -58,7 +58,7 @@ def run_stage_preflight(args: argparse.Namespace) -> Dict[str, Any]:
 
     logger.info("Verifying Parquet buffer flush...")
     test_storage = ParquetPartitionStorage(base_dir="data/raw_test" if args.dry_run else "data/raw")
-    buffered = test_storage.filter_and_buffer(records)
+    test_storage.filter_and_buffer(records)
     part_path = test_storage.flush()
 
     duration = time.time() - t0
@@ -84,18 +84,24 @@ def run_stage_exogenous(args: argparse.Namespace) -> Dict[str, Any]:
 
     # Weather check
     if os.path.exists(weather_path) and not force_rebuild:
-        logger.info(f"Found active IMGW weather telemetry at {weather_path} ({os.path.getsize(weather_path):,} bytes).")
+        logger.info(
+            f"Found active IMGW weather telemetry at {weather_path} ({os.path.getsize(weather_path):,} bytes)."
+        )
     else:
         logger.info("Harvesting IMGW-PIB hourly synoptic weather telemetry...")
         from src.exogenous.weather import fetch_imgw_synoptic_archive
+
         fetch_imgw_synoptic_archive(output_path=weather_path)
 
     # OSM corridors check
     if os.path.exists(osm_path) and not force_rebuild:
-        logger.info(f"Found active OSMnx road corridor topology at {osm_path} ({os.path.getsize(osm_path):,} bytes).")
+        logger.info(
+            f"Found active OSMnx road corridor topology at {osm_path} ({os.path.getsize(osm_path):,} bytes)."
+        )
     else:
         logger.info("Extracting OSMnx corridor infrastructure attributes...")
         from src.exogenous.osm_corridors import extract_default_corridors
+
         extract_default_corridors(output_path=osm_path)
 
     duration = time.time() - t0
@@ -105,6 +111,25 @@ def run_stage_exogenous(args: argparse.Namespace) -> Dict[str, Any]:
         "weather_path": weather_path,
         "osm_path": osm_path,
     }
+
+
+def get_parquet_row_count(parquet_path: str) -> int:
+    """Safely count rows in a Parquet file via DuckDB, returning 0 if empty or None."""
+    if not os.path.exists(parquet_path) or os.path.getsize(parquet_path) == 0:
+        return 0
+    import duckdb
+
+    con = duckdb.connect()
+    try:
+        res = con.execute(f"SELECT count(*) FROM '{parquet_path}'").fetchone()
+        if res and res[0] is not None:
+            return int(res[0])
+        return 0
+    except Exception as e:
+        logger.warning(f"Could not count rows in {parquet_path}: {e}")
+        return 0
+    finally:
+        con.close()
 
 
 def run_stage_fusion(args: argparse.Namespace) -> Dict[str, Any]:
@@ -122,11 +147,10 @@ def run_stage_fusion(args: argparse.Namespace) -> Dict[str, Any]:
     raw_pat = getattr(args, "raw_pattern", None)
 
     if os.path.exists(mart_path) and not force_rebuild:
-        logger.info(f"Existing feature mart verified at {mart_path} ({os.path.getsize(mart_path):,} bytes).")
-        import duckdb
-        con = duckdb.connect()
-        total_rows = con.execute(f"SELECT count(*) FROM '{mart_path}'").fetchone()[0]
-        con.close()
+        logger.info(
+            f"Existing feature mart verified at {mart_path} ({os.path.getsize(mart_path):,} bytes)."
+        )
+        total_rows = get_parquet_row_count(mart_path)
         logger.info(f"Feature mart contains {total_rows:,} rows.")
     else:
         logger.info(f"Assembling unified feature mart into {mart_path}...")
@@ -135,10 +159,7 @@ def run_stage_fusion(args: argparse.Namespace) -> Dict[str, Any]:
             output_parquet=mart_path,
             max_records=max_records,
         )
-        import duckdb
-        con = duckdb.connect()
-        total_rows = con.execute(f"SELECT count(*) FROM '{mart_path}'").fetchone()[0]
-        con.close()
+        total_rows = get_parquet_row_count(mart_path)
         logger.info(f"Successfully assembled {total_rows:,} feature records.")
 
     duration = time.time() - t0
@@ -154,6 +175,7 @@ def run_stage_benchmark(args: argparse.Namespace) -> Dict[str, Any]:
     """Train econometric TWFE baseline and gradient boosting benchmark models."""
     banner("STAGE 4: ECONOMETRIC & MACHINE LEARNING BENCHMARK MODELS")
     import duckdb
+
     from src.models.benchmark import run_benchmark, run_stratified_benchmark
 
     t0 = time.time()
@@ -167,14 +189,30 @@ def run_stage_benchmark(args: argparse.Namespace) -> Dict[str, Any]:
 
     con = duckdb.connect()
     logger.info(f"Loading {sample_size:,} sample rows from {mart_path}...")
-    df_sample = con.execute(f"SELECT * FROM '{mart_path}' USING SAMPLE {sample_size} (reservoir, 42)").df()
+    try:
+        df_sample = con.execute(
+            f"SELECT * FROM '{mart_path}' USING SAMPLE {sample_size} (reservoir, 42)"
+        ).df()
+    finally:
+        con.close()
 
     tables_dir = os.path.join(args.output_dir, "tables")
     os.makedirs(tables_dir, exist_ok=True)
     summary_csv = os.path.join(tables_dir, "benchmark_comparison.csv")
 
+    if df_sample.empty:
+        logger.warning(f"Feature mart at {mart_path} contains 0 records; skipping benchmark.")
+        return {
+            "status": "empty",
+            "duration_seconds": time.time() - t0,
+            "summary_csv": summary_csv,
+            "benchmark_results": [],
+        }
+
     if cohort_arg == "stratified":
-        logger.info("Executing stratified benchmark across pooled, urban tram, urban bus, and suburban bus cohorts...")
+        logger.info(
+            "Executing stratified benchmark across pooled, urban tram, urban bus, and suburban bus cohorts..."
+        )
         cohort_df = run_stratified_benchmark(
             df_sample, sample_size=sample_size, exclude_terminals=exclude_terminals
         )
@@ -183,15 +221,23 @@ def run_stage_benchmark(args: argparse.Namespace) -> Dict[str, Any]:
         logger.info(f"Stratified cohort benchmark table exported to {cohort_csv}")
 
         # Also extract pooled benchmark as primary comparison table
-        pooled_df = cohort_df[cohort_df["cohort"] == "pooled"].drop(columns=["cohort"]).reset_index(drop=True)
+        pooled_df = (
+            cohort_df[cohort_df["cohort"] == "pooled"]
+            .drop(columns=["cohort"])
+            .reset_index(drop=True)
+        )
         if pooled_df.empty:
-            pooled_df = run_benchmark(df_sample, sample_size=sample_size, exclude_terminals=exclude_terminals)
+            pooled_df = run_benchmark(
+                df_sample, sample_size=sample_size, exclude_terminals=exclude_terminals
+            )
         pooled_df.to_csv(summary_csv, index=False)
         logger.info(f"Pooled benchmark comparison table exported to {summary_csv}")
         summary_df = cohort_df
     else:
         target_cohort = None if cohort_arg == "all" else cohort_arg
-        logger.info(f"Executing benchmark for cohort '{cohort_arg}' (exclude_terminals={exclude_terminals})...")
+        logger.info(
+            f"Executing benchmark for cohort '{cohort_arg}' (exclude_terminals={exclude_terminals})..."
+        )
         summary_df = run_benchmark(
             df_sample,
             sample_size=sample_size,
@@ -216,10 +262,10 @@ def run_stage_xai(args: argparse.Namespace) -> Dict[str, Any]:
     banner("STAGE 5: EXPLAINABLE AI (xAI) ATTRIBUTION & COUNTERFACTUAL DIAGNOSTICS")
     t0 = time.time()
 
-    from src.xai.shap_explainer import run_shap_pipeline
     from src.xai.ale_curves import run_ale_pipeline
-    from src.xai.interactions import run_interaction_pipeline
     from src.xai.counterfactuals import run_counterfactual_pipeline
+    from src.xai.interactions import run_interaction_pipeline
+    from src.xai.shap_explainer import run_shap_pipeline
 
     figures_dir = os.path.join(args.output_dir, "figures", "xai")
     tables_dir = os.path.join(args.output_dir, "tables", "xai")
@@ -340,9 +386,13 @@ def main():
         print("\nSUMMARY OF GENERATED ARTIFACTS:")
         print("  - Models Benchmark: reports/tables/benchmark_comparison.csv")
         print("  - TreeSHAP Beeswarm: reports/figures/xai/shap_beeswarm_summary.png")
-        print("  - ALE Curves: reports/figures/xai/ale_precipitation_curve.png, ale_temperature_curve.png")
+        print(
+            "  - ALE Curves: reports/figures/xai/ale_precipitation_curve.png, ale_temperature_curve.png"
+        )
         print("  - Infrastructure Buffering: reports/figures/xai/interaction_headway_row.png")
-        print("  - Counterfactual Policy Impact: reports/figures/xai/counterfactual_policy_impact.png")
+        print(
+            "  - Counterfactual Policy Impact: reports/figures/xai/counterfactual_policy_impact.png"
+        )
         print("  - Counterfactual Summary: reports/tables/xai/counterfactual_summary.csv")
         print("\nPipeline execution concluded successfully.\n")
         return 0

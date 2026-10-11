@@ -11,15 +11,16 @@ Validates:
 
 import os
 import unittest
+
 import numpy as np
 import pandas as pd
 
-from src.models.validation import PurgedTemporalBlockSplitter, DataLeakageError
 from src.models.metrics import (
+    compare_models_table,
     compute_regression_metrics,
     format_metrics_table,
-    compare_models_table,
 )
+from src.models.validation import DataLeakageError, PurgedTemporalBlockSplitter
 
 
 class TestModelsValidation(unittest.TestCase):
@@ -32,75 +33,91 @@ class TestModelsValidation(unittest.TestCase):
 
         # Trip 1: Train (06:00 - 07:00)
         for i in range(5):
-            records.append({
-                "trip_id": "trip_train_1",
-                "vehicle_id": "veh_101",
-                "arrival_ts": base_time + pd.Timedelta(minutes=i * 15),
-                "arrival_delay_seconds": 10 + i * 2,
-            })
+            records.append(
+                {
+                    "trip_id": "trip_train_1",
+                    "vehicle_id": "veh_101",
+                    "arrival_ts": base_time + pd.Timedelta(minutes=i * 15),
+                    "arrival_delay_seconds": 10 + i * 2,
+                }
+            )
 
         # Trip 2: Train (08:00 - 09:00)
         for i in range(5):
-            records.append({
-                "trip_id": "trip_train_2",
-                "vehicle_id": "veh_102",
-                "arrival_ts": base_time + pd.Timedelta(hours=2, minutes=i * 15),
-                "arrival_delay_seconds": 15 + i * 3,
-            })
+            records.append(
+                {
+                    "trip_id": "trip_train_2",
+                    "vehicle_id": "veh_102",
+                    "arrival_ts": base_time + pd.Timedelta(hours=2, minutes=i * 15),
+                    "arrival_delay_seconds": 15 + i * 3,
+                }
+            )
 
         # Trip 3: Boundary-crossing trip spanning across train-val cutoff (11:30 - 13:10)
         for i in range(6):
-            records.append({
-                "trip_id": "trip_crossing_train_val",
-                "vehicle_id": "veh_103",
-                "arrival_ts": base_time + pd.Timedelta(hours=5, minutes=30 + i * 20),
-                "arrival_delay_seconds": 20,
-            })
+            records.append(
+                {
+                    "trip_id": "trip_crossing_train_val",
+                    "vehicle_id": "veh_103",
+                    "arrival_ts": base_time + pd.Timedelta(hours=5, minutes=30 + i * 20),
+                    "arrival_delay_seconds": 20,
+                }
+            )
 
         # Trip 4: Val (14:30 - 15:30)
         for i in range(5):
-            records.append({
-                "trip_id": "trip_val_1",
-                "vehicle_id": "veh_104",
-                "arrival_ts": base_time + pd.Timedelta(hours=8, minutes=30 + i * 15),
-                "arrival_delay_seconds": 25,
-            })
+            records.append(
+                {
+                    "trip_id": "trip_val_1",
+                    "vehicle_id": "veh_104",
+                    "arrival_ts": base_time + pd.Timedelta(hours=8, minutes=30 + i * 15),
+                    "arrival_delay_seconds": 25,
+                }
+            )
 
         # Trip 5: Val (16:30 - 17:30)
         for i in range(5):
-            records.append({
-                "trip_id": "trip_val_2",
-                "vehicle_id": "veh_105",
-                "arrival_ts": base_time + pd.Timedelta(hours=10, minutes=30 + i * 15),
-                "arrival_delay_seconds": 30,
-            })
+            records.append(
+                {
+                    "trip_id": "trip_val_2",
+                    "vehicle_id": "veh_105",
+                    "arrival_ts": base_time + pd.Timedelta(hours=10, minutes=30 + i * 15),
+                    "arrival_delay_seconds": 30,
+                }
+            )
 
         # Trip 6: Boundary-crossing trip spanning across val-test cutoff (18:00 - 19:40)
         for i in range(6):
-            records.append({
-                "trip_id": "trip_crossing_val_test",
-                "vehicle_id": "veh_106",
-                "arrival_ts": base_time + pd.Timedelta(hours=12, minutes=i * 20),
-                "arrival_delay_seconds": 35,
-            })
+            records.append(
+                {
+                    "trip_id": "trip_crossing_val_test",
+                    "vehicle_id": "veh_106",
+                    "arrival_ts": base_time + pd.Timedelta(hours=12, minutes=i * 20),
+                    "arrival_delay_seconds": 35,
+                }
+            )
 
         # Trip 7: Test (20:30 - 21:30)
         for i in range(5):
-            records.append({
-                "trip_id": "trip_test_1",
-                "vehicle_id": "veh_107",
-                "arrival_ts": base_time + pd.Timedelta(hours=14, minutes=30 + i * 15),
-                "arrival_delay_seconds": 40,
-            })
+            records.append(
+                {
+                    "trip_id": "trip_test_1",
+                    "vehicle_id": "veh_107",
+                    "arrival_ts": base_time + pd.Timedelta(hours=14, minutes=30 + i * 15),
+                    "arrival_delay_seconds": 40,
+                }
+            )
 
         # Trip 8: Test (22:30 - 23:30)
         for i in range(5):
-            records.append({
-                "trip_id": "trip_test_2",
-                "vehicle_id": "veh_108",
-                "arrival_ts": base_time + pd.Timedelta(hours=16, minutes=30 + i * 15),
-                "arrival_delay_seconds": 45,
-            })
+            records.append(
+                {
+                    "trip_id": "trip_test_2",
+                    "vehicle_id": "veh_108",
+                    "arrival_ts": base_time + pd.Timedelta(hours=16, minutes=30 + i * 15),
+                    "arrival_delay_seconds": 45,
+                }
+            )
 
         self.df = pd.DataFrame(records)
 
@@ -178,7 +195,9 @@ class TestModelsValidation(unittest.TestCase):
     def test_verify_no_leakage_detects_boundary_overlap(self):
         """Verify audit raises DataLeakageError if a boundary trip leaks into validation."""
         splitter = PurgedTemporalBlockSplitter(time_col="arrival_ts", embargo_minutes=0.0)
-        train_df, val_df, test_df = splitter.split(self.df, train_ratio=0.35, val_ratio=0.35, embargo_minutes=0.0)
+        train_df, val_df, test_df = splitter.split(
+            self.df, train_ratio=0.35, val_ratio=0.35, embargo_minutes=0.0
+        )
 
         # Inject shared trip in both near boundary
         boundary_row = train_df.iloc[-1:].copy()
@@ -210,7 +229,7 @@ class TestModelsValidation(unittest.TestCase):
         folds = list(splitter.walk_forward_cv(self.df, n_splits=2, train_ratio=0.3, val_ratio=0.3))
 
         self.assertGreaterEqual(len(folds), 1)
-        for fold_idx, (train_fold, val_fold) in enumerate(folds):
+        for _fold_idx, (train_fold, val_fold) in enumerate(folds):
             self.assertFalse(train_fold.empty)
             self.assertFalse(val_fold.empty)
             self.assertLess(train_fold["arrival_ts"].max(), val_fold["arrival_ts"].min())
@@ -263,6 +282,7 @@ class TestModelsValidation(unittest.TestCase):
             self.skipTest("Feature mart parquet not found locally.")
 
         import duckdb
+
         con = duckdb.connect()
         sample_df = con.execute(
             f"SELECT trip_id, vehicle_id, arrival_ts, arrival_delay_seconds "

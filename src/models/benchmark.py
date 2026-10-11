@@ -3,16 +3,17 @@ Comparative Benchmark Runner: TWFE vs. LightGBM vs. CatBoost.
 Executes purged temporal block validation and outputs comparative performance metrics.
 """
 
-import os
 import logging
-from typing import Dict, Any, List, Optional
-import pandas as pd
-import duckdb
+import os
+from typing import List, Optional
 
-from src.models.validation import PurgedTemporalBlockSplitter
-from src.models.metrics import compute_regression_metrics, compare_models_table
-from src.models.twfe import TWFEBaselineModel
+import duckdb
+import pandas as pd
+
 from src.models.gbm import GradientBoostingBenchmark
+from src.models.metrics import compute_regression_metrics
+from src.models.twfe import TWFEBaselineModel
+from src.models.validation import PurgedTemporalBlockSplitter
 
 logger = logging.getLogger(__name__)
 
@@ -68,11 +69,15 @@ def run_benchmark(
         if "is_terminal_stop" in df.columns:
             n_before = len(df)
             df = df[df["is_terminal_stop"] == False].copy()
-            logger.info(f"Filtered {n_before - len(df):,} terminal layover stops via is_terminal_stop flag.")
+            logger.info(
+                f"Filtered {n_before - len(df):,} terminal layover stops via is_terminal_stop flag."
+            )
         elif "trip_progress" in df.columns:
             n_before = len(df)
             df = df[df["trip_progress"] < 0.99].copy()
-            logger.info(f"Filtered {n_before - len(df):,} terminal layover stops via trip_progress < 0.99.")
+            logger.info(
+                f"Filtered {n_before - len(df):,} terminal layover stops via trip_progress < 0.99."
+            )
 
     # 2. Cohort Filtering
     if cohort and cohort != "all":
@@ -116,46 +121,52 @@ def run_benchmark(
     # 1. TWFE Panel Regression Baseline
     logger.info("Training TWFE baseline model...")
     twfe = TWFEBaselineModel(target_col=target_col, entity_col="route_id", time_col="hour_of_day")
-    twfe_res = twfe.fit(train_df, valid_features)
+    twfe.fit(train_df, valid_features)
     twfe_preds = twfe.predict(val_df)
     twfe_metrics = compute_regression_metrics(val_df[target_col], twfe_preds, prefix="val_")
 
     # 2. LightGBM Non-Linear Regressor
     logger.info("Training LightGBM regressor...")
     lgb_gbm = GradientBoostingBenchmark(target_col=target_col, model_type="lightgbm")
-    lgb_metrics = lgb_gbm.train(train_df, val_df, valid_features, n_estimators=200, learning_rate=0.05)
+    lgb_metrics = lgb_gbm.train(
+        train_df, val_df, valid_features, n_estimators=200, learning_rate=0.05
+    )
 
     # 3. CatBoost Non-Linear Regressor
     logger.info("Training CatBoost regressor...")
     cb_gbm = GradientBoostingBenchmark(target_col=target_col, model_type="catboost")
-    cb_metrics = cb_gbm.train(train_df, val_df, valid_features, n_estimators=200, learning_rate=0.05)
+    cb_metrics = cb_gbm.train(
+        train_df, val_df, valid_features, n_estimators=200, learning_rate=0.05
+    )
 
-    benchmark_summary = pd.DataFrame([
-        {
-            "model": "TWFE Panel Regression",
-            "val_mae": twfe_metrics.get("val_mae"),
-            "val_rmse": twfe_metrics.get("val_rmse"),
-            "val_medae": twfe_metrics.get("val_medae"),
-            "val_wape": twfe_metrics.get("val_wape"),
-            "val_r2": twfe_metrics.get("val_r2"),
-        },
-        {
-            "model": "LightGBM Regressor",
-            "val_mae": lgb_metrics.get("val_mae"),
-            "val_rmse": lgb_metrics.get("val_rmse"),
-            "val_medae": lgb_metrics.get("val_medae"),
-            "val_wape": lgb_metrics.get("val_wape"),
-            "val_r2": lgb_metrics.get("val_r2"),
-        },
-        {
-            "model": "CatBoost Regressor",
-            "val_mae": cb_metrics.get("val_mae"),
-            "val_rmse": cb_metrics.get("val_rmse"),
-            "val_medae": cb_metrics.get("val_medae"),
-            "val_wape": cb_metrics.get("val_wape"),
-            "val_r2": cb_metrics.get("val_r2"),
-        },
-    ])
+    benchmark_summary = pd.DataFrame(
+        [
+            {
+                "model": "TWFE Panel Regression",
+                "val_mae": twfe_metrics.get("val_mae"),
+                "val_rmse": twfe_metrics.get("val_rmse"),
+                "val_medae": twfe_metrics.get("val_medae"),
+                "val_wape": twfe_metrics.get("val_wape"),
+                "val_r2": twfe_metrics.get("val_r2"),
+            },
+            {
+                "model": "LightGBM Regressor",
+                "val_mae": lgb_metrics.get("val_mae"),
+                "val_rmse": lgb_metrics.get("val_rmse"),
+                "val_medae": lgb_metrics.get("val_medae"),
+                "val_wape": lgb_metrics.get("val_wape"),
+                "val_r2": lgb_metrics.get("val_r2"),
+            },
+            {
+                "model": "CatBoost Regressor",
+                "val_mae": cb_metrics.get("val_mae"),
+                "val_rmse": cb_metrics.get("val_rmse"),
+                "val_medae": cb_metrics.get("val_medae"),
+                "val_wape": cb_metrics.get("val_wape"),
+                "val_r2": cb_metrics.get("val_r2"),
+            },
+        ]
+    )
     return benchmark_summary
 
 
@@ -176,7 +187,7 @@ def run_stratified_benchmark(
 
     for c in target_cohorts:
         cohort_name = c if c != "pooled" else "all"
-        logger.info(f"\n{'='*70}\nRunning benchmark for cohort: {c.upper()}\n{'='*70}")
+        logger.info(f"\n{'=' * 70}\nRunning benchmark for cohort: {c.upper()}\n{'=' * 70}")
         try:
             summary = run_benchmark(
                 feature_mart_df,
@@ -200,7 +211,9 @@ if __name__ == "__main__":
     if os.path.exists(mart_path):
         con = duckdb.connect()
         logger.info(f"Loading feature mart from {mart_path}...")
-        df_sample = con.execute(f"SELECT * FROM '{mart_path}' USING SAMPLE 100000 (reservoir, 42)").df()
+        df_sample = con.execute(
+            f"SELECT * FROM '{mart_path}' USING SAMPLE 100000 (reservoir, 42)"
+        ).df()
         summary = run_benchmark(df_sample)
         print("\n" + "=" * 78)
         print("MODEL BENCHMARK COMPARISON SUMMARY (HOLD-OUT VALIDATION)")

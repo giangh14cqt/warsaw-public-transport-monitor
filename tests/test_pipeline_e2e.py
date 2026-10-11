@@ -4,18 +4,19 @@ Verifies complete pipeline automation, CLI arguments, multi-stage orchestration,
 and artifact generation from raw data to benchmark tables and xAI diagnostics.
 """
 
+import argparse
 import os
-import sys
 import shutil
 import subprocess
+import sys
 import unittest
-import argparse
+
 import pandas as pd
 
 from run_pipeline import (
+    run_stage_benchmark,
     run_stage_exogenous,
     run_stage_fusion,
-    run_stage_benchmark,
 )
 
 
@@ -38,6 +39,7 @@ class TestPipelineE2E(unittest.TestCase):
             [sys.executable, "run_pipeline.py", "--help"],
             capture_output=True,
             text=True,
+            check=False,
         )
         self.assertEqual(res.returncode, 0)
         self.assertIn("preflight", res.stdout)
@@ -94,6 +96,7 @@ class TestPipelineE2E(unittest.TestCase):
             ],
             capture_output=True,
             text=True,
+            check=False,
         )
         self.assertEqual(res.returncode, 0)
         self.assertIn("STAGE 4: ECONOMETRIC & MACHINE LEARNING BENCHMARK MODELS", res.stdout)

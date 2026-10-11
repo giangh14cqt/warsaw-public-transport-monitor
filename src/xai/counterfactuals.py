@@ -12,19 +12,21 @@ Key Capabilities:
 4. Policy Insights & Visualizations: Radar/bar charts comparing original severe delays vs counterfactual remedies.
 """
 
-import os
 import json
 import logging
-from typing import Dict, Any, List, Optional, Tuple, Union
+import os
+from typing import Any, Dict, List, Optional, Tuple, Union
+
+import matplotlib
 import numpy as np
 import pandas as pd
-import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 try:
     import dice_ml
+
     HAS_DICE = True
 except ImportError:
     HAS_DICE = False
@@ -155,7 +157,9 @@ class CounterfactualDiagnostics:
             logger.info(f"DiCE framework initialized successfully with method='{method}'.")
             return True
         except Exception as e:
-            logger.warning(f"Failed to initialize DiCE explainer: {e}. Falling back to optimization engine.")
+            logger.warning(
+                f"Failed to initialize DiCE explainer: {e}. Falling back to optimization engine."
+            )
             self.dice_exp = None
             return False
 
@@ -210,7 +214,11 @@ class CounterfactualDiagnostics:
         query_df = instance.to_frame().T if isinstance(instance, pd.Series) else instance.copy()
         query_df = query_df[[c for c in self.feature_cols if c in query_df.columns]].copy()
         for c in query_df.columns:
-            if query_df[c].dtype == bool or str(query_df[c].dtype) in ("bool", "boolean") or np.issubdtype(query_df[c].dtype, np.number):
+            if (
+                query_df[c].dtype == bool
+                or str(query_df[c].dtype) in ("bool", "boolean")
+                or np.issubdtype(query_df[c].dtype, np.number)
+            ):
                 query_df[c] = query_df[c].astype(float)
 
         vary_feats = features_to_vary or [
@@ -278,7 +286,12 @@ class CounterfactualDiagnostics:
                 "predicted_arrival_delay": pred_arr_row,
                 "delay_savings": max(0.0, current_pred - pred_row),
                 "achieves_on_time": pred_arr_row <= target_on_time_threshold,
-                "mutations": {"is_dedicated_right_of_way": {"from": float(row.get("is_dedicated_right_of_way", 0.0)), "to": 1.0}},
+                "mutations": {
+                    "is_dedicated_right_of_way": {
+                        "from": float(row.get("is_dedicated_right_of_way", 0.0)),
+                        "to": 1.0,
+                    }
+                },
             }
 
         # 2. Policy: Headway Regularization (Zero Dispatch Deviation)
@@ -293,7 +306,12 @@ class CounterfactualDiagnostics:
                 "predicted_arrival_delay": pred_arr_hw,
                 "delay_savings": max(0.0, current_pred - pred_hw),
                 "achieves_on_time": pred_arr_hw <= target_on_time_threshold,
-                "mutations": {"headway_deviation": {"from": float(row.get("headway_deviation", 0.0)), "to": 0.0}},
+                "mutations": {
+                    "headway_deviation": {
+                        "from": float(row.get("headway_deviation", 0.0)),
+                        "to": 0.0,
+                    }
+                },
             }
 
         # 3. Policy: Upstream Delay Absorption (Terminal / Hub Holding)
@@ -324,7 +342,12 @@ class CounterfactualDiagnostics:
                 "predicted_arrival_delay": pred_arr_tsp,
                 "delay_savings": max(0.0, current_pred - pred_tsp),
                 "achieves_on_time": pred_arr_tsp <= target_on_time_threshold,
-                "mutations": {"signalized_intersection_count": {"from": float(row.get("signalized_intersection_count", 0.0)), "to": 0.0}},
+                "mutations": {
+                    "signalized_intersection_count": {
+                        "from": float(row.get("signalized_intersection_count", 0.0)),
+                        "to": 0.0,
+                    }
+                },
             }
 
         # 5. Policy: Comprehensive Joint Intervention (Combined Best Practice)
@@ -332,10 +355,16 @@ class CounterfactualDiagnostics:
         joint_mutations = {}
         if "is_dedicated_right_of_way" in scen_joint.columns:
             scen_joint["is_dedicated_right_of_way"] = 1.0
-            joint_mutations["is_dedicated_right_of_way"] = {"from": float(row.get("is_dedicated_right_of_way", 0.0)), "to": 1.0}
+            joint_mutations["is_dedicated_right_of_way"] = {
+                "from": float(row.get("is_dedicated_right_of_way", 0.0)),
+                "to": 1.0,
+            }
         if "headway_deviation" in scen_joint.columns:
             scen_joint["headway_deviation"] = 0.0
-            joint_mutations["headway_deviation"] = {"from": float(row.get("headway_deviation", 0.0)), "to": 0.0}
+            joint_mutations["headway_deviation"] = {
+                "from": float(row.get("headway_deviation", 0.0)),
+                "to": 0.0,
+            }
         if "prev_stop_delay" in scen_joint.columns:
             # Hub recovery resets prior accumulated delay to zero
             joint_mutations["prev_stop_delay"] = {"from": orig_prev_delay, "to": 0.0}
@@ -359,11 +388,14 @@ class CounterfactualDiagnostics:
 
         # Determine most efficient single physical/dispatch intervention
         single_scenarios = [
-            k for k in ["headway_regularization", "dedicated_row_upgrade", "transit_signal_priority"]
+            k
+            for k in ["headway_regularization", "dedicated_row_upgrade", "transit_signal_priority"]
             if k in results["scenarios"]
         ]
         if single_scenarios:
-            best_single = max(single_scenarios, key=lambda k: results["scenarios"][k]["delay_savings"])
+            best_single = max(
+                single_scenarios, key=lambda k: results["scenarios"][k]["delay_savings"]
+            )
             results["most_effective_single_lever"] = best_single
             results["max_single_delay_savings"] = results["scenarios"][best_single]["delay_savings"]
 
@@ -395,20 +427,30 @@ class CounterfactualDiagnostics:
         Tuple[pd.DataFrame, Dict[str, Any]]
             Per-sample scenario results dataframe and aggregate policy impact metrics.
         """
-        filter_col = "arrival_delay_seconds" if "arrival_delay_seconds" in df.columns else self.target_col
+        filter_col = (
+            "arrival_delay_seconds" if "arrival_delay_seconds" in df.columns else self.target_col
+        )
         severe_df = df[df[filter_col] >= delay_threshold].copy()
 
         if len(severe_df) == 0:
-            logger.warning(f"No records found with {filter_col} >= {delay_threshold}s. Subsampling top delays.")
+            logger.warning(
+                f"No records found with {filter_col} >= {delay_threshold}s. Subsampling top delays."
+            )
             severe_df = df.sort_values(by=filter_col, ascending=False).head(max_samples).copy()
         elif len(severe_df) > max_samples:
-            severe_df = severe_df.sort_values(by=filter_col, ascending=False).head(max_samples).copy()
+            severe_df = (
+                severe_df.sort_values(by=filter_col, ascending=False).head(max_samples).copy()
+            )
 
-        logger.info(f"Evaluating counterfactual diagnostics across {len(severe_df)} severe delay incidents...")
+        logger.info(
+            f"Evaluating counterfactual diagnostics across {len(severe_df)} severe delay incidents..."
+        )
 
         records = []
-        for idx, row in severe_df.iterrows():
-            diag = self.generate_actionable_interventions(row, target_on_time_threshold=target_on_time)
+        for _idx, row in severe_df.iterrows():
+            diag = self.generate_actionable_interventions(
+                row, target_on_time_threshold=target_on_time
+            )
             rec = {
                 "route_id": str(row.get("route_id", "unknown")),
                 "observed_delay": float(row.get(filter_col, 0.0)),
@@ -434,18 +476,38 @@ class CounterfactualDiagnostics:
             "mean_predicted_delay": float(results_df["predicted_delay"].mean()),
             "mean_predicted_arrival_delay": float(results_df["predicted_arrival_delay"].mean()),
             "on_time_recovery_rates": {
-                "dedicated_row_upgrade": float(results_df.get("dedicated_row_upgrade_on_time", pd.Series([False])).mean()),
-                "headway_regularization": float(results_df.get("headway_regularization_on_time", pd.Series([False])).mean()),
-                "upstream_delay_absorption": float(results_df.get("upstream_delay_absorption_on_time", pd.Series([False])).mean()),
-                "transit_signal_priority": float(results_df.get("transit_signal_priority_on_time", pd.Series([False])).mean()),
-                "joint_multimodal_remedy": float(results_df.get("joint_multimodal_remedy_on_time", pd.Series([False])).mean()),
+                "dedicated_row_upgrade": float(
+                    results_df.get("dedicated_row_upgrade_on_time", pd.Series([False])).mean()
+                ),
+                "headway_regularization": float(
+                    results_df.get("headway_regularization_on_time", pd.Series([False])).mean()
+                ),
+                "upstream_delay_absorption": float(
+                    results_df.get("upstream_delay_absorption_on_time", pd.Series([False])).mean()
+                ),
+                "transit_signal_priority": float(
+                    results_df.get("transit_signal_priority_on_time", pd.Series([False])).mean()
+                ),
+                "joint_multimodal_remedy": float(
+                    results_df.get("joint_multimodal_remedy_on_time", pd.Series([False])).mean()
+                ),
             },
             "mean_delay_reduction_seconds": {
-                "dedicated_row_upgrade": float(results_df.get("dedicated_row_upgrade_savings", pd.Series([0.0])).mean()),
-                "headway_regularization": float(results_df.get("headway_regularization_savings", pd.Series([0.0])).mean()),
-                "upstream_delay_absorption": float(results_df.get("upstream_delay_absorption_savings", pd.Series([0.0])).mean()),
-                "transit_signal_priority": float(results_df.get("transit_signal_priority_savings", pd.Series([0.0])).mean()),
-                "joint_multimodal_remedy": float(results_df.get("joint_multimodal_remedy_savings", pd.Series([0.0])).mean()),
+                "dedicated_row_upgrade": float(
+                    results_df.get("dedicated_row_upgrade_savings", pd.Series([0.0])).mean()
+                ),
+                "headway_regularization": float(
+                    results_df.get("headway_regularization_savings", pd.Series([0.0])).mean()
+                ),
+                "upstream_delay_absorption": float(
+                    results_df.get("upstream_delay_absorption_savings", pd.Series([0.0])).mean()
+                ),
+                "transit_signal_priority": float(
+                    results_df.get("transit_signal_priority_savings", pd.Series([0.0])).mean()
+                ),
+                "joint_multimodal_remedy": float(
+                    results_df.get("joint_multimodal_remedy_savings", pd.Series([0.0])).mean()
+                ),
             },
         }
 
@@ -461,7 +523,9 @@ class CounterfactualDiagnostics:
         Plot bar chart comparing predicted arrival delay under various policy interventions for a single case.
         """
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
-        orig_delay = instance_dict.get("predicted_arrival_delay", instance_dict["original_prediction"])
+        orig_delay = instance_dict.get(
+            "predicted_arrival_delay", instance_dict["original_prediction"]
+        )
         target = instance_dict["on_time_target"]
 
         labels = ["Baseline (Status Quo)"]
@@ -483,7 +547,13 @@ class CounterfactualDiagnostics:
 
         fig, ax = plt.subplots(figsize=(10, 6))
         bars = ax.barh(labels, values, color=colors, edgecolor="black", alpha=0.85, height=0.55)
-        ax.axvline(target, color="green", linestyle="--", linewidth=2.0, label=f"On-Time Threshold ({target:.0f}s)")
+        ax.axvline(
+            target,
+            color="green",
+            linestyle="--",
+            linewidth=2.0,
+            label=f"On-Time Threshold ({target:.0f}s)",
+        )
         ax.set_xlabel("Predicted Arrival Delay at Stop (seconds)", fontsize=12, fontweight="bold")
         ax.set_title(
             title or "Counterfactual Policy Interventions for Severe Transit Delay",
@@ -496,7 +566,7 @@ class CounterfactualDiagnostics:
         ax.invert_yaxis()
 
         # Add value labels
-        for bar, val in zip(bars, values):
+        for bar, val in zip(bars, values, strict=False):
             diff = orig_delay - val
             diff_text = f" (-{diff:.1f}s)" if diff > 0 else ""
             ax.text(
@@ -549,7 +619,9 @@ class CounterfactualDiagnostics:
 
         # Panel 1: Mean Delay Reduction (Seconds)
         bar_colors = ["#0275d8", "#5bc0de", "#f0ad4e", "#9b59b6", "#5cb85c"]
-        bars1 = ax1.bar(policy_names, savings_vals, color=bar_colors, edgecolor="black", alpha=0.85, width=0.55)
+        bars1 = ax1.bar(
+            policy_names, savings_vals, color=bar_colors, edgecolor="black", alpha=0.85, width=0.55
+        )
         ax1.set_ylabel("Mean Delay Reduction (seconds)", fontsize=11, fontweight="bold")
         ax1.set_title("Average Delay Attenuation by Intervention", fontsize=12, fontweight="bold")
         ax1.grid(axis="y", linestyle=":", alpha=0.6)
@@ -559,18 +631,40 @@ class CounterfactualDiagnostics:
         for bar in bars1:
             h = bar.get_height()
             offset = max(h * 0.04, 0.1)
-            ax1.text(bar.get_x() + bar.get_width() / 2, h + offset, f"+{h:.1f}s", ha="center", va="bottom", fontweight="bold", fontsize=10)
+            ax1.text(
+                bar.get_x() + bar.get_width() / 2,
+                h + offset,
+                f"+{h:.1f}s",
+                ha="center",
+                va="bottom",
+                fontweight="bold",
+                fontsize=10,
+            )
 
         # Panel 2: On-Time Recovery Rate (%)
-        bars2 = ax2.bar(policy_names, recovery_vals, color=bar_colors, edgecolor="black", alpha=0.85, width=0.55)
+        bars2 = ax2.bar(
+            policy_names, recovery_vals, color=bar_colors, edgecolor="black", alpha=0.85, width=0.55
+        )
         ax2.set_ylabel("On-Time Restoration Rate (%)", fontsize=11, fontweight="bold")
-        ax2.set_title("Probability of Achieving On-Time Status ($\\Delta t \\leq 120$s)", fontsize=12, fontweight="bold")
+        ax2.set_title(
+            "Probability of Achieving On-Time Status ($\\Delta t \\leq 120$s)",
+            fontsize=12,
+            fontweight="bold",
+        )
         ax2.grid(axis="y", linestyle=":", alpha=0.6)
         ax2.set_ylim(0, 115)
 
         for bar in bars2:
             h = bar.get_height()
-            ax2.text(bar.get_x() + bar.get_width() / 2, h + 2.0, f"{h:.1f}%", ha="center", va="bottom", fontweight="bold", fontsize=10)
+            ax2.text(
+                bar.get_x() + bar.get_width() / 2,
+                h + 2.0,
+                f"{h:.1f}%",
+                ha="center",
+                va="bottom",
+                fontweight="bold",
+                fontsize=10,
+            )
 
         plt.suptitle(
             "Empirical Policy Efficacy: Transit Delay Counterfactual Remedies (N = {})".format(
@@ -594,6 +688,7 @@ def run_counterfactual_pipeline(
 ) -> Dict[str, Any]:
     """Execute end-to-end Counterfactual Diagnostics workflow."""
     import duckdb
+
     from src.models.gbm import GradientBoostingBenchmark
     from src.models.validation import PurgedTemporalBlockSplitter
 
@@ -602,7 +697,9 @@ def run_counterfactual_pipeline(
 
     con = duckdb.connect()
     logger.info(f"Loading feature mart from {feature_mart_path}...")
-    sample_df = con.execute(f"SELECT * FROM '{feature_mart_path}' USING SAMPLE 100000 (reservoir, 42)").df()
+    sample_df = con.execute(
+        f"SELECT * FROM '{feature_mart_path}' USING SAMPLE 100000 (reservoir, 42)"
+    ).df()
 
     target_col = "delta_t_run" if "delta_t_run" in sample_df.columns else "arrival_delay_seconds"
     feature_cols = [
@@ -650,7 +747,9 @@ def run_counterfactual_pipeline(
     # Case study plot on worst observed delay
     worst_idx = test_df[target_col].idxmax()
     worst_instance = test_df.loc[worst_idx]
-    case_diag = cf_engine.generate_actionable_interventions(worst_instance, target_on_time_threshold=120.0)
+    case_diag = cf_engine.generate_actionable_interventions(
+        worst_instance, target_on_time_threshold=120.0
+    )
 
     case_plot = os.path.join(output_dir, "counterfactual_case_study.png")
     cf_engine.plot_counterfactual_case_study(

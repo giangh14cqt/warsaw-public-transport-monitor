@@ -1,22 +1,21 @@
+import datetime
+import logging
 import os
-import sys
 import time
 import zipfile
-import logging
-import datetime
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Any, Dict, List, Optional, Tuple
 
-import requests
 import duckdb
 import pandas as pd
-from google.transit import gtfs_realtime_pb2
+import requests
 from google.protobuf.message import DecodeError
+from google.transit import gtfs_realtime_pb2
 from tenacity import (
+    before_sleep_log,
     retry,
+    retry_if_exception_type,
     stop_after_attempt,
     wait_exponential,
-    retry_if_exception_type,
-    before_sleep_log,
 )
 
 logger = logging.getLogger(__name__)
@@ -25,23 +24,28 @@ FEED_URL = "https://cdn.zbiorkom.live/gtfs-rt/warsaw.pb"
 STATIC_GTFS_URL = "https://cdn.zbiorkom.live/gtfs/warsaw.zip"
 HISTORICAL_API_URL = "https://api.zbiorkom.live/api6/warsaw/dispatches"
 
+
 def get_warsaw_tz():
     try:
         from zoneinfo import ZoneInfo
+
         return ZoneInfo("Europe/Warsaw")
     except Exception:
         return datetime.timezone(datetime.timedelta(hours=2))
+
 
 WARSAW_TZ = get_warsaw_tz()
 
 
 class CriticalBlockerError(Exception):
     """Raised when an unrecoverable response or protocol error is encountered."""
+
     pass
 
 
 class RateLimitExceededError(Exception):
     """Raised when rate limiting (429) persists beyond allowed retries."""
+
     def __init__(self, message: str, headers: Dict[str, str]):
         super().__init__(message)
         self.headers = headers
@@ -49,6 +53,7 @@ class RateLimitExceededError(Exception):
 
 class TransientHttpError(Exception):
     """Temporary network or server errors eligible for retry."""
+
     pass
 
 
@@ -66,7 +71,9 @@ class WarsawTransitParser:
         self._static_conn: Optional[duckdb.DuckDBPyConnection] = None
 
     @retry(
-        retry=retry_if_exception_type((TransientHttpError, requests.ConnectionError, requests.Timeout)),
+        retry=retry_if_exception_type(
+            (TransientHttpError, requests.ConnectionError, requests.Timeout)
+        ),
         stop=stop_after_attempt(4),
         wait=wait_exponential(multiplier=2, min=2, max=16),
         before_sleep=before_sleep_log(logger, logging.WARNING),
@@ -78,9 +85,7 @@ class WarsawTransitParser:
         """
         try:
             response = requests.get(
-                url,
-                timeout=timeout,
-                headers={"User-Agent": "WarsawTransitIngestion/1.0"}
+                url, timeout=timeout, headers={"User-Agent": "WarsawTransitIngestion/1.0"}
             )
         except (requests.ConnectionError, requests.Timeout) as e:
             logger.warning(f"Connection issue fetching {url}: {e}")
@@ -172,7 +177,9 @@ class WarsawTransitParser:
             logger.critical(msg)
             raise CriticalBlockerError(msg) from e
 
-        feed_timestamp_int = feed.header.timestamp if feed.header.HasField("timestamp") else int(time.time())
+        feed_timestamp_int = (
+            feed.header.timestamp if feed.header.HasField("timestamp") else int(time.time())
+        )
         feed_dt = datetime.datetime.fromtimestamp(feed_timestamp_int, WARSAW_TZ)
         feed_midnight = feed_dt.replace(hour=0, minute=0, second=0, microsecond=0)
         feed_midnight_ts = int(feed_midnight.timestamp())
@@ -194,45 +201,75 @@ class WarsawTransitParser:
             if trip_id:
                 feed_trip_ids.add(trip_id)
 
-            vehicle_id = tu.vehicle.id if (tu.HasField("vehicle") and tu.vehicle.HasField("id")) else ""
+            vehicle_id = (
+                tu.vehicle.id if (tu.HasField("vehicle") and tu.vehicle.HasField("id")) else ""
+            )
             if vehicle_id:
                 vehicles_seen.add(vehicle_id)
 
             obs_timestamp = tu.timestamp if tu.HasField("timestamp") else feed_timestamp_int
             obs_dt = datetime.datetime.fromtimestamp(obs_timestamp, WARSAW_TZ)
 
-            route_id_pb = tu.trip.route_id if (tu.HasField("trip") and tu.trip.HasField("route_id") and tu.trip.route_id) else None
-            sched_rel = "SCHEDULED" if not tu.trip.HasField("schedule_relationship") else str(tu.trip.schedule_relationship)
+            route_id_pb = (
+                tu.trip.route_id
+                if (tu.HasField("trip") and tu.trip.HasField("route_id") and tu.trip.route_id)
+                else None
+            )
+            sched_rel = (
+                "SCHEDULED"
+                if not tu.trip.HasField("schedule_relationship")
+                else str(tu.trip.schedule_relationship)
+            )
 
             for stu in tu.stop_time_update:
                 stop_seq = stu.stop_sequence if stu.HasField("stop_sequence") else None
                 stop_id_pb = stu.stop_id if (stu.HasField("stop_id") and stu.stop_id) else None
-                rt_arr_ts = stu.arrival.time if (stu.HasField("arrival") and stu.arrival.HasField("time")) else None
-                direct_arr_delay = int(stu.arrival.delay) if (stu.HasField("arrival") and stu.arrival.HasField("delay")) else None
-                rt_dep_ts = stu.departure.time if (stu.HasField("departure") and stu.departure.HasField("time")) else None
-                direct_dep_delay = int(stu.departure.delay) if (stu.HasField("departure") and stu.departure.HasField("delay")) else None
+                rt_arr_ts = (
+                    stu.arrival.time
+                    if (stu.HasField("arrival") and stu.arrival.HasField("time"))
+                    else None
+                )
+                direct_arr_delay = (
+                    int(stu.arrival.delay)
+                    if (stu.HasField("arrival") and stu.arrival.HasField("delay"))
+                    else None
+                )
+                rt_dep_ts = (
+                    stu.departure.time
+                    if (stu.HasField("departure") and stu.departure.HasField("time"))
+                    else None
+                )
+                direct_dep_delay = (
+                    int(stu.departure.delay)
+                    if (stu.HasField("departure") and stu.departure.HasField("delay"))
+                    else None
+                )
 
-                raw_updates.append({
-                    "trip_id": trip_id,
-                    "vehicle_id": vehicle_id,
-                    "route_id": route_id_pb,
-                    "stop_id": stop_id_pb,
-                    "stop_sequence": stop_seq,
-                    "rt_arr_ts": rt_arr_ts,
-                    "direct_arr_delay": direct_arr_delay,
-                    "rt_dep_ts": rt_dep_ts,
-                    "direct_dep_delay": direct_dep_delay,
-                    "schedule_relationship": sched_rel,
-                    "obs_dt": obs_dt
-                })
+                raw_updates.append(
+                    {
+                        "trip_id": trip_id,
+                        "vehicle_id": vehicle_id,
+                        "route_id": route_id_pb,
+                        "stop_id": stop_id_pb,
+                        "stop_sequence": stop_seq,
+                        "rt_arr_ts": rt_arr_ts,
+                        "direct_arr_delay": direct_arr_delay,
+                        "rt_dep_ts": rt_dep_ts,
+                        "direct_dep_delay": direct_dep_delay,
+                        "schedule_relationship": sched_rel,
+                        "obs_dt": obs_dt,
+                    }
+                )
 
         # Step 2: Batch query static schedule for only the active trip_ids
         schedule_cache = {}
         if feed_trip_ids:
             # Query active trips and stop_times
-            self._static_conn.register("active_trips_df", pd.DataFrame({"trip_id": list(feed_trip_ids)}))
+            self._static_conn.register(
+                "active_trips_df", pd.DataFrame({"trip_id": list(feed_trip_ids)})
+            )
             rows = self._static_conn.execute("""
-                SELECT 
+                SELECT
                     s.trip_id,
                     s.stop_sequence,
                     t.route_id,
@@ -253,7 +290,7 @@ class WarsawTransitParser:
                     "brigade": r[3],
                     "stop_id": r[4],
                     "arrival_time": r[5],
-                    "departure_time": r[6]
+                    "departure_time": r[6],
                 }
 
         # Step 3: Normalize records and calculate delay deltas
@@ -263,7 +300,11 @@ class WarsawTransitParser:
         for u in raw_updates:
             trip_id = u["trip_id"]
             stop_seq = u["stop_sequence"]
-            sched_info = schedule_cache.get((trip_id, stop_seq)) if (trip_id and stop_seq is not None) else None
+            sched_info = (
+                schedule_cache.get((trip_id, stop_seq))
+                if (trip_id and stop_seq is not None)
+                else None
+            )
 
             route_id = u["route_id"] or (sched_info.get("route_id") if sched_info else None)
             stop_id = u["stop_id"] or (sched_info.get("stop_id") if sched_info else None)
@@ -294,26 +335,36 @@ class WarsawTransitParser:
                     if dep_delay_sec is None and u["rt_dep_ts"]:
                         dep_delay_sec = int(u["rt_dep_ts"] - sched_dep_ts)
 
-            rt_arr_dt = datetime.datetime.fromtimestamp(u["rt_arr_ts"], WARSAW_TZ) if u["rt_arr_ts"] else None
-            rt_dep_dt = datetime.datetime.fromtimestamp(u["rt_dep_ts"], WARSAW_TZ) if u["rt_dep_ts"] else None
+            rt_arr_dt = (
+                datetime.datetime.fromtimestamp(u["rt_arr_ts"], WARSAW_TZ)
+                if u["rt_arr_ts"]
+                else None
+            )
+            rt_dep_dt = (
+                datetime.datetime.fromtimestamp(u["rt_dep_ts"], WARSAW_TZ)
+                if u["rt_dep_ts"]
+                else None
+            )
 
-            records.append({
-                "feed_timestamp": feed_dt,
-                "trip_id": trip_id,
-                "route_id": route_id,
-                "brigade": brigade,
-                "vehicle_id": u["vehicle_id"],
-                "stop_id": stop_id,
-                "stop_sequence": stop_seq,
-                "scheduled_arrival": sched_arr_dt,
-                "rt_arrival": rt_arr_dt,
-                "arrival_delay_seconds": arr_delay_sec,
-                "scheduled_departure": sched_dep_dt,
-                "rt_departure": rt_dep_dt,
-                "departure_delay_seconds": dep_delay_sec,
-                "schedule_relationship": u["schedule_relationship"],
-                "observed_at": u["obs_dt"]
-            })
+            records.append(
+                {
+                    "feed_timestamp": feed_dt,
+                    "trip_id": trip_id,
+                    "route_id": route_id,
+                    "brigade": brigade,
+                    "vehicle_id": u["vehicle_id"],
+                    "stop_id": stop_id,
+                    "stop_sequence": stop_seq,
+                    "scheduled_arrival": sched_arr_dt,
+                    "rt_arrival": rt_arr_dt,
+                    "arrival_delay_seconds": arr_delay_sec,
+                    "scheduled_departure": sched_dep_dt,
+                    "rt_departure": rt_dep_dt,
+                    "departure_delay_seconds": dep_delay_sec,
+                    "schedule_relationship": u["schedule_relationship"],
+                    "observed_at": u["obs_dt"],
+                }
+            )
 
         stats = {
             "feed_timestamp": feed_dt.isoformat(),
@@ -326,7 +377,9 @@ class WarsawTransitParser:
         }
         return records, stats
 
-    def fetch_historical_executions(self, date_str: str, route_id: str, timeout: int = 10) -> List[Dict[str, Any]]:
+    def fetch_historical_executions(
+        self, date_str: str, route_id: str, timeout: int = 10
+    ) -> List[Dict[str, Any]]:
         """
         Query historical trip executions from zbiorkom API (v6 dispatches endpoint).
         Used for fallback and ground truth validation.
@@ -342,19 +395,21 @@ class WarsawTransitParser:
         if isinstance(data, list):
             for row in data:
                 if len(row) >= 15:
-                    results.append({
-                        "trip_id": row[0],
-                        "route_id": str(row[1]),
-                        "brigade": str(row[2]),
-                        "vehicle_id": str(row[3]),
-                        "start_stop_id": row[4],
-                        "start_stop_name": row[5],
-                        "end_stop_id": row[6],
-                        "end_stop_name": row[7],
-                        "start_delay_seconds": row[10],
-                        "end_delay_seconds": row[13],
-                        "total_stops": row[14],
-                    })
+                    results.append(
+                        {
+                            "trip_id": row[0],
+                            "route_id": str(row[1]),
+                            "brigade": str(row[2]),
+                            "vehicle_id": str(row[3]),
+                            "start_stop_id": row[4],
+                            "start_stop_name": row[5],
+                            "end_stop_id": row[6],
+                            "end_stop_name": row[7],
+                            "start_delay_seconds": row[10],
+                            "end_delay_seconds": row[13],
+                            "total_stops": row[14],
+                        }
+                    )
         return results
 
     def close(self):

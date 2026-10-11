@@ -9,38 +9,38 @@ Logs health metrics every 15 minutes to logs/collector_health.log.
 Graceful shutdown on SIGINT / SIGTERM flushes all remaining records.
 """
 
-import os
-import sys
-import time
-import signal
 import logging
-import datetime
-from typing import Optional
-
+import os
+import signal
+import time
 from logging.handlers import RotatingFileHandler
 
-from src.gtfs_manager import GTFSManager
 from src.fetcher import (
-    GTFSRTFetcher,
     CriticalSchemaMismatchError,
-    RateLimitCircuitBreakerError,
+    GTFSRTFetcher,
     NetworkOutageError,
+    RateLimitCircuitBreakerError,
     TransientHttpError,
 )
-from src.storage import ParquetPartitionStorage, DuckDBCatalog
+from src.gtfs_manager import GTFSManager
+from src.storage import DuckDBCatalog, ParquetPartitionStorage
 
 # Configure dual logging: console and rotating file (max 20MB, 5 backups)
 os.makedirs("logs", exist_ok=True)
 health_logger = logging.getLogger("collector_health")
 health_logger.setLevel(logging.INFO)
-file_handler = RotatingFileHandler("logs/collector_health.log", maxBytes=20 * 1024 * 1024, backupCount=5, mode="a")
-file_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
+file_handler = RotatingFileHandler(
+    "logs/collector_health.log", maxBytes=20 * 1024 * 1024, backupCount=5, mode="a"
+)
+file_handler.setFormatter(
+    logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+)
 health_logger.addHandler(file_handler)
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S"
+    datefmt="%Y-%m-%d %H:%M:%S",
 )
 logger = logging.getLogger("collector_daemon")
 
@@ -48,8 +48,8 @@ logger = logging.getLogger("collector_daemon")
 if os.path.exists(".env"):
     try:
         with open(".env", "r") as f:
-            for line in f:
-                line = line.strip()
+            for raw_line in f:
+                line = raw_line.strip()
                 if line and not line.startswith("#") and "=" in line:
                     k, v = line.split("=", 1)
                     if k.strip() not in os.environ:
@@ -71,7 +71,7 @@ class WarsawCollectorDaemon:
         raw_dir: str = "data/raw",
         gtfs_dir: str = "data/gtfs",
         poll_interval: int = POLL_INTERVAL_SECONDS,
-        heartbeat_url: str = HEARTBEAT_URL
+        heartbeat_url: str = HEARTBEAT_URL,
     ):
         self.poll_interval = poll_interval
         self.heartbeat_url = heartbeat_url
@@ -98,6 +98,7 @@ class WarsawCollectorDaemon:
 
         try:
             import requests
+
             url = self.heartbeat_url.rstrip("/")
             if status == "start":
                 requests.get(f"{url}/start", timeout=5)
@@ -143,7 +144,9 @@ class WarsawCollectorDaemon:
 
     def run(self):
         self.running = True
-        logger.info("Initializing Warsaw Transit Ingestion Daemon (Multi-Month Production Engine)...")
+        logger.info(
+            "Initializing Warsaw Transit Ingestion Daemon (Multi-Month Production Engine)..."
+        )
         self._send_heartbeat("start", "Warsaw collector daemon started")
 
         # Initial GTFS Sync
@@ -192,8 +195,12 @@ class WarsawCollectorDaemon:
             except RateLimitCircuitBreakerError as e:
                 # HTTP 429 persisted after retries: Pause 5 minutes
                 pause_sec = 300
-                logger.error(f"[CIRCUIT BREAKER]: Rate limit 429 persisted. Pausing daemon for {pause_sec}s. Retry-After: {e.retry_after}")
-                health_logger.error(f"[CIRCUIT BREAKER]: Rate limit 429. Pausing {pause_sec}s. Retry-After: {e.retry_after}")
+                logger.error(
+                    f"[CIRCUIT BREAKER]: Rate limit 429 persisted. Pausing daemon for {pause_sec}s. Retry-After: {e.retry_after}"
+                )
+                health_logger.error(
+                    f"[CIRCUIT BREAKER]: Rate limit 429. Pausing {pause_sec}s. Retry-After: {e.retry_after}"
+                )
                 self.consecutive_successful_cycles = 0
                 time.sleep(pause_sec)
 

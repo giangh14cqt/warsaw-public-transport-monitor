@@ -8,11 +8,11 @@ Performs:
 5. Persists the unified modeling matrix to data/processed/feature_mart.parquet.
 """
 
-import os
 import logging
-from typing import Optional, Dict, Any, Union
+import os
+from typing import Any, Dict, Optional
+
 import duckdb
-import pandas as pd
 
 logger = logging.getLogger(__name__)
 
@@ -40,13 +40,17 @@ class FeatureMartAssembler:
         limit_clause = f"LIMIT {max_records}" if max_records else ""
         has_weather = os.path.exists(weather_parquet_path)
         has_osm = os.path.exists(osm_parquet_path)
-        terminal_filter_clause = "AND (t.is_terminal_stop = false OR t.max_seq <= t.min_seq + 1)" if exclude_terminals else ""
+        terminal_filter_clause = (
+            "AND (t.is_terminal_stop = false OR t.max_seq <= t.min_seq + 1)"
+            if exclude_terminals
+            else ""
+        )
 
         weather_subquery = (
             f"SELECT * FROM read_parquet('{weather_parquet_path}')"
             if has_weather
             else """
-                SELECT 
+                SELECT
                     NULL::TIMESTAMP AS timestamp,
                     11.3::DOUBLE AS temperature_c,
                     0.0::DOUBLE AS precipitation_mm,
@@ -61,7 +65,7 @@ class FeatureMartAssembler:
             f"SELECT * FROM read_parquet('{osm_parquet_path}')"
             if has_osm
             else """
-                SELECT 
+                SELECT
                     ''::VARCHAR AS stop_id_prev,
                     ''::VARCHAR AS stop_id_curr,
                     ''::VARCHAR AS corridor_name,
@@ -77,7 +81,8 @@ class FeatureMartAssembler:
         con = duckdb.connect()
         try:
             cols = [
-                c[0] for c in con.execute(
+                c[0]
+                for c in con.execute(
                     f"DESCRIBE SELECT * FROM read_parquet('{raw_pattern}', hive_partitioning=true) LIMIT 1"
                 ).fetchall()
             ]
@@ -96,7 +101,7 @@ class FeatureMartAssembler:
 
         return f"""
             WITH deduped AS (
-                SELECT 
+                SELECT
                     feed_timestamp,
                     trip_id,
                     {trip_key_sql} AS trip_instance_key,
@@ -112,13 +117,13 @@ class FeatureMartAssembler:
                 FROM read_parquet('{raw_pattern}', hive_partitioning=true)
                 WHERE ABS(arrival_delay_seconds) <= {max_delay_seconds}
                 QUALIFY ROW_NUMBER() OVER (
-                    PARTITION BY trip_instance_key, stop_sequence 
+                    PARTITION BY trip_instance_key, stop_sequence
                     ORDER BY feed_timestamp DESC
                 ) = 1
                 {limit_clause}
             ),
             ordered AS (
-                SELECT 
+                SELECT
                     feed_timestamp,
                     trip_id,
                     trip_instance_key,
@@ -141,7 +146,7 @@ class FeatureMartAssembler:
                 FROM deduped
             ),
             trajectories AS (
-                SELECT 
+                SELECT
                     trip_id,
                     trip_instance_key,
                     start_date,
@@ -168,10 +173,10 @@ class FeatureMartAssembler:
                     CASE WHEN prev_stop_delay IS NOT NULL THEN (arrival_delay_seconds - prev_stop_delay) ELSE 0.0 END AS delta_t_run,
                     (departure_delay_seconds - arrival_delay_seconds) AS delta_t_dwell,
                     -- Observed physical running time in seconds
-                    CASE 
-                        WHEN prev_rt_departure IS NOT NULL AND rt_arrival_time > prev_rt_departure 
-                        THEN (rt_arrival_time - prev_rt_departure) 
-                        ELSE NULL 
+                    CASE
+                        WHEN prev_rt_departure IS NOT NULL AND rt_arrival_time > prev_rt_departure
+                        THEN (rt_arrival_time - prev_rt_departure)
+                        ELSE NULL
                     END AS observed_run_time_s,
                     -- Trip Progress
                     CASE WHEN max_seq > min_seq THEN ROUND(CAST(stop_sequence - min_seq AS DOUBLE) / (max_seq - min_seq), 3) ELSE 0.0 END AS trip_progress,
@@ -180,7 +185,7 @@ class FeatureMartAssembler:
                     max_seq,
                     min_seq,
                     CASE WHEN TRY_CAST(route_id AS INTEGER) IS NOT NULL AND TRY_CAST(route_id AS INTEGER) < 100 THEN 1 ELSE 0 END AS is_tram,
-                    CASE 
+                    CASE
                         WHEN TRY_CAST(route_id AS INTEGER) BETWEEN 1 AND 79 THEN 'urban_tram'
                         WHEN TRY_CAST(route_id AS INTEGER) BETWEEN 100 AND 599 THEN 'urban_bus'
                         WHEN TRY_CAST(route_id AS INTEGER) BETWEEN 700 AND 899 OR UPPER(route_id) LIKE 'L%' THEN 'suburban_bus'
@@ -190,17 +195,17 @@ class FeatureMartAssembler:
                 FROM ordered
             ),
             with_headway AS (
-                SELECT 
+                SELECT
                     *,
                     (rt_arrival_time - LAG(rt_arrival_time) OVER (
-                        PARTITION BY route_id, stop_id 
+                        PARTITION BY route_id, stop_id
                         ORDER BY rt_arrival_time
                     )) AS headway_actual_s
                 FROM trajectories
             ),
             v_weather AS ({weather_subquery}),
             v_osm AS ({osm_subquery})
-            SELECT 
+            SELECT
                 t.trip_id,
                 t.route_id,
                 t.vehicle_id,
@@ -228,10 +233,10 @@ class FeatureMartAssembler:
                 t.is_morning_peak,
                 t.is_evening_peak,
                 t.headway_actual_s,
-                CASE 
-                    WHEN t.headway_actual_s >= 10 AND t.headway_actual_s <= 7200 
+                CASE
+                    WHEN t.headway_actual_s >= 10 AND t.headway_actual_s <= 7200
                     THEN t.headway_actual_s - MEDIAN(t.headway_actual_s) OVER (PARTITION BY t.route_id, t.stop_id)
-                    ELSE NULL 
+                    ELSE NULL
                 END AS headway_deviation,
                 -- IMGW Weather Exogenous Features
                 COALESCE(w.temperature_c, 11.3) AS temperature_c,
@@ -294,9 +299,7 @@ class FeatureMartAssembler:
     # Backward-compatible alias
     assemble = assemble_mart
 
-    def get_summary(
-        self, parquet_path: Optional[str] = None
-    ) -> Dict[str, Any]:
+    def get_summary(self, parquet_path: Optional[str] = None) -> Dict[str, Any]:
         """Fetch descriptive summary of the assembled feature mart table via DuckDB."""
         path = parquet_path or self.output_parquet
         if not os.path.exists(path):
@@ -304,7 +307,7 @@ class FeatureMartAssembler:
 
         con = duckdb.connect(":memory:")
         res = con.execute(f"""
-            SELECT 
+            SELECT
                 COUNT(*) AS total_observations,
                 COUNT(DISTINCT trip_id) AS distinct_trips,
                 COUNT(DISTINCT route_id) AS distinct_routes,
@@ -320,8 +323,9 @@ class FeatureMartAssembler:
             FROM read_parquet('{path}')
         """).fetchone()
 
-        by_corr = con.execute(f"""
-            SELECT 
+        by_corr = (
+            con.execute(f"""
+            SELECT
                 COALESCE(corridor_name, 'non_study_network') AS corridor,
                 COUNT(*) AS obs,
                 ROUND(AVG(delta_t_run), 2) AS avg_delta_t_run,
@@ -330,7 +334,28 @@ class FeatureMartAssembler:
             FROM read_parquet('{path}')
             GROUP BY corridor_name
             ORDER BY obs DESC
-        """).df().to_dict(orient="records")
+        """)
+            .df()
+            .to_dict(orient="records")
+        )
+
+        if not res:
+            return {
+                "status": "empty",
+                "total_observations": 0,
+                "distinct_trips": 0,
+                "distinct_routes": 0,
+                "study_corridor_observations": 0,
+                "avg_delta_t_run": 0.0,
+                "median_delta_t_run": 0.0,
+                "std_delta_t_run": 0.0,
+                "avg_segment_meters": 0.0,
+                "avg_signals": 0.0,
+                "avg_temperature_c": 0.0,
+                "peak_hour_pct": 0.0,
+                "tram_share_pct": 0.0,
+                "corridors": by_corr,
+            }
 
         return {
             "total_observations": int(res[0]) if res[0] is not None else 0,

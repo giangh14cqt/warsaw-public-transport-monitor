@@ -13,14 +13,17 @@ Capabilities:
    - Generates local Waterfall plots isolating individual causal bottlenecks.
 """
 
-import os
 import logging
-from typing import Dict, Any, List, Optional, Tuple, Union
+import os
+from typing import Any, Dict, List, Optional
+
+import matplotlib
 import numpy as np
 import pandas as pd
-import matplotlib
 
 matplotlib.use("Agg")
+import sys
+
 import matplotlib.pyplot as plt
 import shap
 
@@ -123,7 +126,9 @@ class TreeSHAPExplainer:
             self.fit_explainer()
 
         if len(X) > max_samples:
-            logger.info(f"Subsampling {max_samples} from {len(X)} records for TreeSHAP explanation.")
+            logger.info(
+                f"Subsampling {max_samples} from {len(X)} records for TreeSHAP explanation."
+            )
             X_eval = X.sample(n=max_samples, random_state=random_state).copy()
         else:
             X_eval = X.copy()
@@ -162,10 +167,16 @@ class TreeSHAPExplainer:
             raise RuntimeError("Must call explain() before calculating feature importance.")
 
         mean_abs = np.mean(np.abs(self.shap_values), axis=0)
-        df = pd.DataFrame({
-            "feature": self.X_explained.columns,
-            "mean_abs_shap": mean_abs,
-        }).sort_values(by="mean_abs_shap", ascending=False).reset_index(drop=True)
+        df = (
+            pd.DataFrame(
+                {
+                    "feature": self.X_explained.columns,
+                    "mean_abs_shap": mean_abs,
+                }
+            )
+            .sort_values(by="mean_abs_shap", ascending=False)
+            .reset_index(drop=True)
+        )
 
         total = df["mean_abs_shap"].sum()
         df["relative_impact_pct"] = (df["mean_abs_shap"] / total * 100.0) if total > 0 else 0.0
@@ -185,7 +196,9 @@ class TreeSHAPExplainer:
 
         grouped = df.groupby("group")["mean_abs_shap"].sum().reset_index()
         total = grouped["mean_abs_shap"].sum()
-        grouped["relative_impact_pct"] = (grouped["mean_abs_shap"] / total * 100.0) if total > 0 else 0.0
+        grouped["relative_impact_pct"] = (
+            (grouped["mean_abs_shap"] / total * 100.0) if total > 0 else 0.0
+        )
         return grouped.sort_values(by="mean_abs_shap", ascending=False).reset_index(drop=True)
 
     def plot_summary(
@@ -204,7 +217,11 @@ class TreeSHAPExplainer:
 
         plt.figure(figsize=(10, 7), dpi=300)
         shap.plots.beeswarm(self.explanation, max_display=max_display, show=False)
-        plt.title("Warsaw Transit Delay Telemetry: Global TreeSHAP Feature Attribution", fontsize=12, pad=12)
+        plt.title(
+            "Warsaw Transit Delay Telemetry: Global TreeSHAP Feature Attribution",
+            fontsize=12,
+            pad=12,
+        )
         plt.tight_layout()
 
         if output_path:
@@ -229,7 +246,9 @@ class TreeSHAPExplainer:
             raise RuntimeError("Must call explain() before plotting waterfall.")
 
         if sample_idx < 0 or sample_idx >= len(self.explanation):
-            raise IndexError(f"Sample index {sample_idx} out of range [0, {len(self.explanation)-1}].")
+            raise IndexError(
+                f"Sample index {sample_idx} out of range [0, {len(self.explanation) - 1}]."
+            )
 
         if output_path:
             os.makedirs(os.path.dirname(output_path), exist_ok=True)
@@ -258,8 +277,12 @@ class TreeSHAPExplainer:
         Find extreme delay occurrences (Delta t > threshold_seconds).
         """
         t_col = target_col if target_col in df.columns else "arrival_delay_seconds"
-        extreme_df = df[df[t_col] >= threshold_seconds].sort_values(by=t_col, ascending=False).copy()
-        logger.info(f"Found {len(extreme_df)} extreme delay events with {t_col} >= {threshold_seconds}s")
+        extreme_df = (
+            df[df[t_col] >= threshold_seconds].sort_values(by=t_col, ascending=False).copy()
+        )
+        logger.info(
+            f"Found {len(extreme_df)} extreme delay events with {t_col} >= {threshold_seconds}s"
+        )
         return extreme_df
 
     def diagnose_extreme_delays(
@@ -275,8 +298,13 @@ class TreeSHAPExplainer:
         os.makedirs(output_dir, exist_ok=True)
         extreme_events = self.find_extreme_delay_events(df, threshold_seconds=threshold_seconds)
         if extreme_events.empty:
-            logger.info(f"No events with delay >= {threshold_seconds}s; selecting top {top_k} max delays.")
-            extreme_events = df.sort_values(by="delta_t_run" if "delta_t_run" in df.columns else "arrival_delay_seconds", ascending=False)
+            logger.info(
+                f"No events with delay >= {threshold_seconds}s; selecting top {top_k} max delays."
+            )
+            extreme_events = df.sort_values(
+                by="delta_t_run" if "delta_t_run" in df.columns else "arrival_delay_seconds",
+                ascending=False,
+            )
 
         top_events = extreme_events.head(top_k)
         case_studies = []
@@ -292,17 +320,21 @@ class TreeSHAPExplainer:
             route_id = str(row.get("route_id", "unknown"))
             stop_id = str(row.get("stop_id", "unknown"))
 
-            plot_file = os.path.join(output_dir, f"shap_waterfall_extreme_case_{idx+1}.png")
+            plot_file = os.path.join(output_dir, f"shap_waterfall_extreme_case_{idx + 1}.png")
             self.plot_waterfall(loc_idx, output_path=plot_file)
 
-            case_studies.append({
-                "case_id": idx + 1,
-                "original_row_id": int(original_idx) if isinstance(original_idx, (int, np.integer)) else original_idx,
-                "route_id": route_id,
-                "stop_id": stop_id,
-                "observed_delay_seconds": target_val,
-                "plot_path": plot_file,
-            })
+            case_studies.append(
+                {
+                    "case_id": idx + 1,
+                    "original_row_id": int(original_idx)
+                    if isinstance(original_idx, (int, np.integer))
+                    else original_idx,
+                    "route_id": route_id,
+                    "stop_id": stop_id,
+                    "observed_delay_seconds": target_val,
+                    "plot_path": plot_file,
+                }
+            )
 
         return case_studies
 
@@ -314,13 +346,16 @@ def run_shap_pipeline(
 ) -> Dict[str, Any]:
     """Execute end-to-end TreeSHAP attribution diagnostics workflow."""
     import duckdb
-    from src.models.validation import PurgedTemporalBlockSplitter
+
     from src.models.gbm import GradientBoostingBenchmark
+    from src.models.validation import PurgedTemporalBlockSplitter
 
     os.makedirs(output_dir, exist_ok=True)
     con = duckdb.connect()
     logger.info("Loading feature mart sample for TreeSHAP analysis...")
-    df = con.execute(f"SELECT * FROM '{feature_mart_path}' USING SAMPLE {sample_size} (reservoir, 42)").df()
+    df = con.execute(
+        f"SELECT * FROM '{feature_mart_path}' USING SAMPLE {sample_size} (reservoir, 42)"
+    ).df()
     if "is_terminal_stop" in df.columns:
         df = df[df["is_terminal_stop"] == False].copy()
     elif "trip_progress" in df.columns:
@@ -371,11 +406,12 @@ if __name__ == "__main__":
     mart_path = "data/processed/feature_mart.parquet"
     if not os.path.exists(mart_path):
         print(f"Error: {mart_path} not found.")
-        exit(1)
+        sys.exit(1)
 
     import duckdb
-    from src.models.validation import PurgedTemporalBlockSplitter
+
     from src.models.gbm import GradientBoostingBenchmark
+    from src.models.validation import PurgedTemporalBlockSplitter
 
     con = duckdb.connect()
     logger.info("Loading feature mart sample for TreeSHAP analysis...")
@@ -430,4 +466,6 @@ if __name__ == "__main__":
     cases = explainer.diagnose_extreme_delays(test_df, "reports/figures/xai", top_k=2)
     print("\nExtreme delay case studies diagnosed:")
     for c in cases:
-        print(f"  Case #{c['case_id']}: Route {c['route_id']}, Delay = {c['observed_delay_seconds']:.1f}s -> {c['plot_path']}")
+        print(
+            f"  Case #{c['case_id']}: Route {c['route_id']}, Delay = {c['observed_delay_seconds']:.1f}s -> {c['plot_path']}"
+        )

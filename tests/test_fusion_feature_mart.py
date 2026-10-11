@@ -1,10 +1,11 @@
 """Unit tests for spatial-temporal multi-source fusion and feature mart assembler."""
 
 import os
-import unittest
 import tempfile
-import pandas as pd
+import unittest
+
 import duckdb
+import pandas as pd
 
 from src.fusion.feature_mart import FeatureMartAssembler
 
@@ -19,71 +20,79 @@ class TestFeatureMartAssembler(unittest.TestCase):
         os.makedirs(self.mock_raw_dir, exist_ok=True)
         self.mock_raw_parquet = os.path.join(self.mock_raw_dir, "batch_test.parquet")
 
-        raw_df = pd.DataFrame([
-            {
-                "feed_timestamp": 1700000000,
-                "trip_id": "T1",
-                "route_id": "17",
-                "vehicle_id": "V1",
-                "stop_sequence": 1,
-                "stop_id": "1001",
-                "arrival_delay_seconds": 30,
-                "departure_delay_seconds": 30,
-                "rt_arrival_time": 1700000100,  # ~2023-11-14 22:15
-                "rt_departure_time": 1700000100,
-            },
-            {
-                "feed_timestamp": 1700000030,
-                "trip_id": "T1",
-                "route_id": "17",
-                "vehicle_id": "V1",
-                "stop_sequence": 2,
-                "stop_id": "1002",
-                "arrival_delay_seconds": 70,
-                "departure_delay_seconds": 70,
-                "rt_arrival_time": 1700000250,
-                "rt_departure_time": 1700000250,
-            },
-        ])
+        raw_df = pd.DataFrame(
+            [
+                {
+                    "feed_timestamp": 1700000000,
+                    "trip_id": "T1",
+                    "route_id": "17",
+                    "vehicle_id": "V1",
+                    "stop_sequence": 1,
+                    "stop_id": "1001",
+                    "arrival_delay_seconds": 30,
+                    "departure_delay_seconds": 30,
+                    "rt_arrival_time": 1700000100,  # ~2023-11-14 22:15
+                    "rt_departure_time": 1700000100,
+                },
+                {
+                    "feed_timestamp": 1700000030,
+                    "trip_id": "T1",
+                    "route_id": "17",
+                    "vehicle_id": "V1",
+                    "stop_sequence": 2,
+                    "stop_id": "1002",
+                    "arrival_delay_seconds": 70,
+                    "departure_delay_seconds": 70,
+                    "rt_arrival_time": 1700000250,
+                    "rt_departure_time": 1700000250,
+                },
+            ]
+        )
         raw_df.to_parquet(self.mock_raw_parquet)
 
         # 2. Create mock OSM corridor segments
         self.mock_osm_parquet = os.path.join(self.test_dir.name, "osm_segments.parquet")
-        osm_df = pd.DataFrame([
-            {
-                "edge_id": "1001_1002",
-                "corridor_name": "pulawska",
-                "stop_id_prev": "1001",
-                "stop_id_curr": "1002",
-                "stop_name_prev": "Stop A",
-                "stop_name_curr": "Stop B",
-                "segment_length_meters": 650.0,
-                "is_dedicated_right_of_way": True,
-                "signalized_intersection_count": 4,
-                "lane_capacity": 3,
-            }
-        ])
+        osm_df = pd.DataFrame(
+            [
+                {
+                    "edge_id": "1001_1002",
+                    "corridor_name": "pulawska",
+                    "stop_id_prev": "1001",
+                    "stop_id_curr": "1002",
+                    "stop_name_prev": "Stop A",
+                    "stop_name_curr": "Stop B",
+                    "segment_length_meters": 650.0,
+                    "is_dedicated_right_of_way": True,
+                    "signalized_intersection_count": 4,
+                    "lane_capacity": 3,
+                }
+            ]
+        )
         osm_df.to_parquet(self.mock_osm_parquet)
 
         # 3. Create mock IMGW weather
         self.mock_weather_parquet = os.path.join(self.test_dir.name, "weather.parquet")
-        expected_ts = duckdb.connect(":memory:").execute(
-            "SELECT date_trunc('hour', to_timestamp(1700000250)::TIMESTAMP)"
-        ).fetchone()[0]
-        weather_df = pd.DataFrame([
-            {
-                "station_id": "12375",
-                "station_name": "WARSZAWA",
-                "timestamp": pd.to_datetime(expected_ts),
-                "timestamp_bucket": pd.to_datetime(expected_ts),
-                "temperature_c": 8.5,
-                "relative_humidity": 82.0,
-                "precipitation_mm": 1.2,
-                "wind_speed_ms": 4.5,
-                "pressure_hpa": 1012.0,
-                "freezing_rain_flag": False,
-            }
-        ])
+        expected_ts = (
+            duckdb.connect(":memory:")
+            .execute("SELECT date_trunc('hour', to_timestamp(1700000250)::TIMESTAMP)")
+            .fetchone()[0]
+        )
+        weather_df = pd.DataFrame(
+            [
+                {
+                    "station_id": "12375",
+                    "station_name": "WARSZAWA",
+                    "timestamp": pd.to_datetime(expected_ts),
+                    "timestamp_bucket": pd.to_datetime(expected_ts),
+                    "temperature_c": 8.5,
+                    "relative_humidity": 82.0,
+                    "precipitation_mm": 1.2,
+                    "wind_speed_ms": 4.5,
+                    "pressure_hpa": 1012.0,
+                    "freezing_rain_flag": False,
+                }
+            ]
+        )
         weather_df.to_parquet(self.mock_weather_parquet)
 
     def tearDown(self):
@@ -133,17 +142,96 @@ class TestFeatureMartAssembler(unittest.TestCase):
     def test_cohort_and_terminal_stop_filtering(self):
         # Multi-stop trip testing terminal layover exclusion
         multi_raw_parquet = os.path.join(self.test_dir.name, "multi_raw.parquet")
-        raw_df = pd.DataFrame([
-            {"feed_timestamp": 1700000000, "trip_id": "T2", "route_id": "190", "vehicle_id": "V2", "stop_sequence": 1, "stop_id": "2001", "arrival_delay_seconds": 10, "departure_delay_seconds": 10, "rt_arrival_time": 1700000100, "rt_departure_time": 1700000100},
-            {"feed_timestamp": 1700000030, "trip_id": "T2", "route_id": "190", "vehicle_id": "V2", "stop_sequence": 2, "stop_id": "2002", "arrival_delay_seconds": 25, "departure_delay_seconds": 25, "rt_arrival_time": 1700000200, "rt_departure_time": 1700000200},
-            {"feed_timestamp": 1700000060, "trip_id": "T2", "route_id": "190", "vehicle_id": "V2", "stop_sequence": 3, "stop_id": "2003", "arrival_delay_seconds": 90, "departure_delay_seconds": 90, "rt_arrival_time": 1700000300, "rt_departure_time": 1700000300},
-            # Suburban route
-            {"feed_timestamp": 1700000000, "trip_id": "T3", "route_id": "709", "vehicle_id": "V3", "stop_sequence": 1, "stop_id": "3001", "arrival_delay_seconds": 5, "departure_delay_seconds": 5, "rt_arrival_time": 1700000100, "rt_departure_time": 1700000100},
-            {"feed_timestamp": 1700000030, "trip_id": "T3", "route_id": "709", "vehicle_id": "V3", "stop_sequence": 2, "stop_id": "3002", "arrival_delay_seconds": 15, "departure_delay_seconds": 15, "rt_arrival_time": 1700000200, "rt_departure_time": 1700000200},
-            # L-line
-            {"feed_timestamp": 1700000000, "trip_id": "T4", "route_id": "L41", "vehicle_id": "V4", "stop_sequence": 1, "stop_id": "4001", "arrival_delay_seconds": 0, "departure_delay_seconds": 0, "rt_arrival_time": 1700000100, "rt_departure_time": 1700000100},
-            {"feed_timestamp": 1700000030, "trip_id": "T4", "route_id": "L41", "vehicle_id": "V4", "stop_sequence": 2, "stop_id": "4002", "arrival_delay_seconds": 5, "departure_delay_seconds": 5, "rt_arrival_time": 1700000200, "rt_departure_time": 1700000200},
-        ])
+        raw_df = pd.DataFrame(
+            [
+                {
+                    "feed_timestamp": 1700000000,
+                    "trip_id": "T2",
+                    "route_id": "190",
+                    "vehicle_id": "V2",
+                    "stop_sequence": 1,
+                    "stop_id": "2001",
+                    "arrival_delay_seconds": 10,
+                    "departure_delay_seconds": 10,
+                    "rt_arrival_time": 1700000100,
+                    "rt_departure_time": 1700000100,
+                },
+                {
+                    "feed_timestamp": 1700000030,
+                    "trip_id": "T2",
+                    "route_id": "190",
+                    "vehicle_id": "V2",
+                    "stop_sequence": 2,
+                    "stop_id": "2002",
+                    "arrival_delay_seconds": 25,
+                    "departure_delay_seconds": 25,
+                    "rt_arrival_time": 1700000200,
+                    "rt_departure_time": 1700000200,
+                },
+                {
+                    "feed_timestamp": 1700000060,
+                    "trip_id": "T2",
+                    "route_id": "190",
+                    "vehicle_id": "V2",
+                    "stop_sequence": 3,
+                    "stop_id": "2003",
+                    "arrival_delay_seconds": 90,
+                    "departure_delay_seconds": 90,
+                    "rt_arrival_time": 1700000300,
+                    "rt_departure_time": 1700000300,
+                },
+                # Suburban route
+                {
+                    "feed_timestamp": 1700000000,
+                    "trip_id": "T3",
+                    "route_id": "709",
+                    "vehicle_id": "V3",
+                    "stop_sequence": 1,
+                    "stop_id": "3001",
+                    "arrival_delay_seconds": 5,
+                    "departure_delay_seconds": 5,
+                    "rt_arrival_time": 1700000100,
+                    "rt_departure_time": 1700000100,
+                },
+                {
+                    "feed_timestamp": 1700000030,
+                    "trip_id": "T3",
+                    "route_id": "709",
+                    "vehicle_id": "V3",
+                    "stop_sequence": 2,
+                    "stop_id": "3002",
+                    "arrival_delay_seconds": 15,
+                    "departure_delay_seconds": 15,
+                    "rt_arrival_time": 1700000200,
+                    "rt_departure_time": 1700000200,
+                },
+                # L-line
+                {
+                    "feed_timestamp": 1700000000,
+                    "trip_id": "T4",
+                    "route_id": "L41",
+                    "vehicle_id": "V4",
+                    "stop_sequence": 1,
+                    "stop_id": "4001",
+                    "arrival_delay_seconds": 0,
+                    "departure_delay_seconds": 0,
+                    "rt_arrival_time": 1700000100,
+                    "rt_departure_time": 1700000100,
+                },
+                {
+                    "feed_timestamp": 1700000030,
+                    "trip_id": "T4",
+                    "route_id": "L41",
+                    "vehicle_id": "V4",
+                    "stop_sequence": 2,
+                    "stop_id": "4002",
+                    "arrival_delay_seconds": 5,
+                    "departure_delay_seconds": 5,
+                    "rt_arrival_time": 1700000200,
+                    "rt_departure_time": 1700000200,
+                },
+            ]
+        )
         raw_df.to_parquet(multi_raw_parquet)
 
         out_parquet = os.path.join(self.test_dir.name, "multi_fused.parquet")
@@ -156,7 +244,9 @@ class TestFeatureMartAssembler(unittest.TestCase):
         )
 
         con = duckdb.connect(":memory:")
-        res_df = con.execute(f"SELECT trip_id, stop_sequence, route_id, transit_cohort, is_terminal_stop FROM read_parquet('{res_path}') ORDER BY trip_id, stop_sequence").df()
+        res_df = con.execute(
+            f"SELECT trip_id, stop_sequence, route_id, transit_cohort, is_terminal_stop FROM read_parquet('{res_path}') ORDER BY trip_id, stop_sequence"
+        ).df()
 
         # For T2 (3 stops: 1, 2, 3), stop 1 is dropped (origin, no prev_stop), stop 3 is dropped (terminal layover), stop 2 is kept!
         t2_df = res_df[res_df["trip_id"] == "T2"]

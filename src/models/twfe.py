@@ -13,7 +13,8 @@ Features:
 """
 
 import logging
-from typing import Dict, Any, List, Optional, Union
+from typing import Any, Dict, List
+
 import numpy as np
 import pandas as pd
 
@@ -101,8 +102,9 @@ class TWFEBaselineModel:
 
         # Filter out entity and time cols from feature_cols to prevent perfect collinearity
         candidate_features = [
-            c for c in feature_cols
-            if c in df.columns and c != self.target_col and c != self.entity_col and c != self.time_col
+            c
+            for c in feature_cols
+            if c in df.columns and c not in (self.target_col, self.entity_col, self.time_col)
         ]
 
         # Prepare working copy and drop missing values
@@ -155,21 +157,36 @@ class TWFEBaselineModel:
 
                 try:
                     import pyhdfe
+
                     algo = pyhdfe.create(data[fe_cols])
                     y_resid = algo.residualize(y[:, None]).ravel()
                     X_resid = algo.residualize(X_raw)
                 except Exception as e:
-                    logger.warning(f"pyhdfe residualization failed ({e}); falling back to sequential demeaning.")
+                    logger.warning(
+                        f"pyhdfe residualization failed ({e}); falling back to sequential demeaning."
+                    )
                     y_resid = y.copy()
                     X_resid = X_raw.copy()
                     if has_entity:
-                        y_resid -= data.groupby(self.entity_col)[self.target_col].transform("mean").to_numpy(float)
+                        y_resid -= (
+                            data.groupby(self.entity_col)[self.target_col]
+                            .transform("mean")
+                            .to_numpy(float)
+                        )
                         for idx, c in enumerate(self.feature_cols):
-                            X_resid[:, idx] -= data.groupby(self.entity_col)[c].transform("mean").to_numpy(float)
+                            X_resid[:, idx] -= (
+                                data.groupby(self.entity_col)[c].transform("mean").to_numpy(float)
+                            )
                     if has_time:
-                        y_resid -= data.groupby(self.time_col)[self.target_col].transform("mean").to_numpy(float)
+                        y_resid -= (
+                            data.groupby(self.time_col)[self.target_col]
+                            .transform("mean")
+                            .to_numpy(float)
+                        )
                         for idx, c in enumerate(self.feature_cols):
-                            X_resid[:, idx] -= data.groupby(self.time_col)[c].transform("mean").to_numpy(float)
+                            X_resid[:, idx] -= (
+                                data.groupby(self.time_col)[c].transform("mean").to_numpy(float)
+                            )
             else:
                 y_resid = y - mean_y
                 X_resid = X_raw - np.mean(X_raw, axis=0)
@@ -191,7 +208,9 @@ class TWFEBaselineModel:
                 self.p_values[col] = 1.0
                 self.t_stats[col] = 0.0
                 self.elasticities[col] = 0.0
-                logger.info(f"Feature '{col}' absorbed by fixed effects (var={res_var:.1e}); omitted from OLS.")
+                logger.info(
+                    f"Feature '{col}' absorbed by fixed effects (var={res_var:.1e}); omitted from OLS."
+                )
 
         if self.active_features:
             X_active = X_resid[:, active_indices]
@@ -199,6 +218,7 @@ class TWFEBaselineModel:
             # Fit OLS via statsmodels
             try:
                 import statsmodels.api as sm
+
                 ols_model = sm.OLS(y_resid, X_active)
                 cov_type = self.cov_type if self.cov_type in ["HC1", "HC3"] else "nonrobust"
                 res = ols_model.fit(cov_type=cov_type)
@@ -269,8 +289,10 @@ class TWFEBaselineModel:
 
         if self.active_features:
             ss_res_within = float(np.sum((y_resid - X_active @ beta) ** 2))
-            ss_tot_within = float(np.sum(y_resid ** 2))
-            within_r2 = float(1.0 - (ss_res_within / ss_tot_within)) if ss_tot_within > 1e-9 else 0.0
+            ss_tot_within = float(np.sum(y_resid**2))
+            within_r2 = (
+                float(1.0 - (ss_res_within / ss_tot_within)) if ss_tot_within > 1e-9 else 0.0
+            )
         else:
             within_r2 = 0.0
 
@@ -309,7 +331,9 @@ class TWFEBaselineModel:
 
         # Add entity fixed effect alpha_i if available
         if self.entity_col in df.columns and self.entity_effects:
-            entity_vals = df[self.entity_col].map(self.entity_effects).fillna(0.0).to_numpy(dtype=float)
+            entity_vals = (
+                df[self.entity_col].map(self.entity_effects).fillna(0.0).to_numpy(dtype=float)
+            )
             preds += entity_vals
 
         # Add time fixed effect lambda_t if available
@@ -345,30 +369,34 @@ class TWFEBaselineModel:
 
             sig = "***" if p < 0.001 else "**" if p < 0.01 else "*" if p < 0.05 else "ns"
 
-            records.append({
-                "feature": feat,
-                "coefficient": b,
-                "std_error": se,
-                "t_stat": t,
-                "p_value": p,
-                "ci_lower_95": ci_low,
-                "ci_upper_95": ci_high,
-                "elasticity": elas,
-                "significance": sig,
-            })
+            records.append(
+                {
+                    "feature": feat,
+                    "coefficient": b,
+                    "std_error": se,
+                    "t_stat": t,
+                    "p_value": p,
+                    "ci_lower_95": ci_low,
+                    "ci_upper_95": ci_high,
+                    "elasticity": elas,
+                    "significance": sig,
+                }
+            )
 
         for feat in self.absorbed_features:
-            records.append({
-                "feature": feat,
-                "coefficient": 0.0,
-                "std_error": 0.0,
-                "t_stat": 0.0,
-                "p_value": 1.0,
-                "ci_lower_95": 0.0,
-                "ci_upper_95": 0.0,
-                "elasticity": 0.0,
-                "significance": "[absorbed]",
-            })
+            records.append(
+                {
+                    "feature": feat,
+                    "coefficient": 0.0,
+                    "std_error": 0.0,
+                    "t_stat": 0.0,
+                    "p_value": 1.0,
+                    "ci_lower_95": 0.0,
+                    "ci_upper_95": 0.0,
+                    "elasticity": 0.0,
+                    "significance": "[absorbed]",
+                }
+            )
 
         return pd.DataFrame(records)
 

@@ -10,11 +10,11 @@ Validates:
 
 import os
 import unittest
+
 import numpy as np
 import pandas as pd
 
 from src.models.twfe import TWFEBaselineModel
-from src.models.metrics import compute_regression_metrics
 
 
 class TestModelsTWFE(unittest.TestCase):
@@ -26,7 +26,7 @@ class TestModelsTWFE(unittest.TestCase):
         n_entities = 10
         n_times = 8
         obs_per_cell = 25
-        n_total = n_entities * n_times * obs_per_cell
+        n_entities * n_times * obs_per_cell
 
         entity_ids = [f"route_{i}" for i in range(n_entities)]
         time_ids = [i for i in range(n_times)]
@@ -44,16 +44,25 @@ class TestModelsTWFE(unittest.TestCase):
                     signals = np.random.poisson(lam=3)
                     length = np.random.uniform(200, 1000)
                     noise = np.random.normal(0, 5)
-                    delay = 50.0 + alpha[e] + lambda_t[t] + beta_signal * signals + beta_length * length + noise
-                    records.append({
-                        "route_id": e,
-                        "hour_of_day": t,
-                        "signalized_intersection_count": signals,
-                        "segment_length_meters": length,
-                        "is_dedicated_right_of_way": np.random.choice([0, 1]),
-                        "zero_var_precipitation": 0.0,  # Regressor with zero variance
-                        "delta_t_run": delay,
-                    })
+                    delay = (
+                        50.0
+                        + alpha[e]
+                        + lambda_t[t]
+                        + beta_signal * signals
+                        + beta_length * length
+                        + noise
+                    )
+                    records.append(
+                        {
+                            "route_id": e,
+                            "hour_of_day": t,
+                            "signalized_intersection_count": signals,
+                            "segment_length_meters": length,
+                            "is_dedicated_right_of_way": np.random.choice([0, 1]),
+                            "zero_var_precipitation": 0.0,  # Regressor with zero variance
+                            "delta_t_run": delay,
+                        }
+                    )
 
         self.df = pd.DataFrame(records)
 
@@ -65,7 +74,11 @@ class TestModelsTWFE(unittest.TestCase):
             time_col="hour_of_day",
             cov_type="HC1",
         )
-        features = ["signalized_intersection_count", "segment_length_meters", "zero_var_precipitation"]
+        features = [
+            "signalized_intersection_count",
+            "segment_length_meters",
+            "zero_var_precipitation",
+        ]
         summary = twfe.fit(self.df, features)
 
         self.assertIn("rsquared", summary)
@@ -104,20 +117,22 @@ class TestModelsTWFE(unittest.TestCase):
         twfe.fit(self.df, ["signalized_intersection_count", "segment_length_meters"])
 
         # Test set with a mix of known and unseen routes
-        test_df = pd.DataFrame([
-            {
-                "route_id": "route_0",  # Known route
-                "hour_of_day": 2,       # Known hour
-                "signalized_intersection_count": 4,
-                "segment_length_meters": 500,
-            },
-            {
-                "route_id": "route_999",  # Unseen route
-                "hour_of_day": 99,        # Unseen hour
-                "signalized_intersection_count": 2,
-                "segment_length_meters": 300,
-            },
-        ])
+        test_df = pd.DataFrame(
+            [
+                {
+                    "route_id": "route_0",  # Known route
+                    "hour_of_day": 2,  # Known hour
+                    "signalized_intersection_count": 4,
+                    "segment_length_meters": 500,
+                },
+                {
+                    "route_id": "route_999",  # Unseen route
+                    "hour_of_day": 99,  # Unseen hour
+                    "signalized_intersection_count": 2,
+                    "segment_length_meters": 300,
+                },
+            ]
+        )
 
         preds = twfe.predict(test_df)
         self.assertEqual(len(preds), 2)
@@ -142,6 +157,7 @@ class TestModelsTWFE(unittest.TestCase):
             self.skipTest("Feature mart parquet not found locally.")
 
         import duckdb
+
         con = duckdb.connect()
         sample_df = con.execute(
             f"SELECT route_id, hour_of_day, delta_t_run, "
@@ -150,7 +166,11 @@ class TestModelsTWFE(unittest.TestCase):
         ).df()
 
         twfe = TWFEBaselineModel(target_col="delta_t_run")
-        features = ["signalized_intersection_count", "segment_length_meters", "is_dedicated_right_of_way"]
+        features = [
+            "signalized_intersection_count",
+            "segment_length_meters",
+            "is_dedicated_right_of_way",
+        ]
         res = twfe.fit(sample_df, features)
 
         self.assertGreater(res["nobs"], 0)

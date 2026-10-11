@@ -9,9 +9,10 @@ Validates:
 
 import os
 import unittest
+
+import lightgbm as lgb
 import numpy as np
 import pandas as pd
-import lightgbm as lgb
 
 from src.xai.ale_curves import ALENonLinearDetector
 
@@ -27,16 +28,24 @@ class TestXAIAle(unittest.TestCase):
         x2 = np.random.poisson(3, n)
 
         # Clear bifurcation at x1 = 3.0: below 3 slope is 0.5, above 3 slope is 6.0
-        y = np.where(x1 <= 3.0, 0.5 * x1, 1.5 + 6.0 * (x1 - 3.0)) + 2.0 * x2 + np.random.normal(0, 0.5, n)
+        y = (
+            np.where(x1 <= 3.0, 0.5 * x1, 1.5 + 6.0 * (x1 - 3.0))
+            + 2.0 * x2
+            + np.random.normal(0, 0.5, n)
+        )
 
-        self.df = pd.DataFrame({
-            "precipitation_mm": x1,
-            "signalized_intersection_count": x2,
-            "delta_t_run": y,
-        })
+        self.df = pd.DataFrame(
+            {
+                "precipitation_mm": x1,
+                "signalized_intersection_count": x2,
+                "delta_t_run": y,
+            }
+        )
         self.features = ["precipitation_mm", "signalized_intersection_count"]
 
-        self.model = lgb.LGBMRegressor(n_estimators=40, learning_rate=0.1, random_state=42, verbosity=-1)
+        self.model = lgb.LGBMRegressor(
+            n_estimators=40, learning_rate=0.1, random_state=42, verbosity=-1
+        )
         self.model.fit(self.df[self.features], self.df["delta_t_run"])
 
         self.output_dir = "reports/figures/xai_test_ale"
@@ -46,6 +55,7 @@ class TestXAIAle(unittest.TestCase):
         """Clean up test artifacts."""
         if os.path.exists(self.output_dir):
             import shutil
+
             shutil.rmtree(self.output_dir, ignore_errors=True)
 
     def test_compute_ale_values(self):

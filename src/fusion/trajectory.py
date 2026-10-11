@@ -17,12 +17,13 @@ Computes core decomposed transit delay metrics:
    trip_progress = (stop_sequence - min_seq) / (max_seq - min_seq)
 """
 
-import os
 import logging
-from typing import Optional, Dict, Any, Union
-import pandas as pd
-import numpy as np
+import os
+from typing import Any, Dict, Optional
+
 import duckdb
+import numpy as np
+import pandas as pd
 
 logger = logging.getLogger(__name__)
 
@@ -35,9 +36,7 @@ class TrajectoryReconstructor:
         self.raw_dir = os.path.join(data_dir, "raw")
         self.processed_dir = os.path.join(data_dir, "processed")
         os.makedirs(self.processed_dir, exist_ok=True)
-        self.output_parquet = os.path.join(
-            self.processed_dir, "reconstructed_trajectories.parquet"
-        )
+        self.output_parquet = os.path.join(self.processed_dir, "reconstructed_trajectories.parquet")
 
     # --------------------------------------------------------------------------
     # 1. In-Memory Pandas Vectorized Processing (for unit testing and batches)
@@ -116,17 +115,15 @@ class TrajectoryReconstructor:
         # Headway Deviation relative to preceding vehicle on the same route and stop
         if "route_id" in df.columns and "rt_arrival_time" in df.columns:
             df = df.sort_values(by=["route_id", "stop_id", "rt_arrival_time"])
-            prev_vehicle_arrival = df.groupby(["route_id", "stop_id"])[
-                "rt_arrival_time"
-            ].shift(1)
+            prev_vehicle_arrival = df.groupby(["route_id", "stop_id"])["rt_arrival_time"].shift(1)
             df["headway_actual_s"] = df["rt_arrival_time"] - prev_vehicle_arrival
             # Filter valid headway windows (e.g. 10s to 2 hours between successive vehicles)
             valid_headway = df["headway_actual_s"].apply(
                 lambda x: x if (pd.notna(x) and 10 <= x <= 7200) else np.nan
             )
-            median_headway = df.groupby(["route_id", "stop_id"])[
-                valid_headway.name
-            ].transform("median")
+            median_headway = df.groupby(["route_id", "stop_id"])[valid_headway.name].transform(
+                "median"
+            )
             df["headway_deviation"] = valid_headway - median_headway
             # Restore trip-based ordering
             df = df.sort_values(by=["_trip_instance", "stop_sequence"]).reset_index(drop=True)
@@ -151,7 +148,8 @@ class TrajectoryReconstructor:
         con = duckdb.connect()
         try:
             cols = [
-                c[0] for c in con.execute(
+                c[0]
+                for c in con.execute(
                     f"DESCRIBE SELECT * FROM read_parquet('{input_parquet_pattern}', hive_partitioning=true) LIMIT 1"
                 ).fetchall()
             ]
@@ -170,7 +168,7 @@ class TrajectoryReconstructor:
 
         return f"""
             WITH deduped AS (
-                SELECT 
+                SELECT
                     feed_timestamp,
                     trip_id,
                     {trip_key_sql} AS trip_instance_key,
@@ -186,13 +184,13 @@ class TrajectoryReconstructor:
                 FROM read_parquet('{input_parquet_pattern}', hive_partitioning=true)
                 WHERE ABS(arrival_delay_seconds) <= {max_delay_seconds}
                 QUALIFY ROW_NUMBER() OVER (
-                    PARTITION BY trip_instance_key, stop_sequence 
+                    PARTITION BY trip_instance_key, stop_sequence
                     ORDER BY feed_timestamp DESC
                 ) = 1
                 {limit_clause}
             ),
             base_ordered AS (
-                SELECT 
+                SELECT
                     feed_timestamp,
                     trip_id,
                     trip_instance_key,
@@ -215,7 +213,7 @@ class TrajectoryReconstructor:
                 FROM deduped
             ),
             decomposed AS (
-                SELECT 
+                SELECT
                     feed_timestamp,
                     trip_id,
                     route_id,
@@ -230,43 +228,43 @@ class TrajectoryReconstructor:
                     rt_arrival_time,
                     rt_departure_time,
                     -- Running Segment Delay (Delta t_run)
-                    CASE 
+                    CASE
                         WHEN prev_stop_delay IS NOT NULL THEN (arrival_delay_seconds - prev_stop_delay)
-                        ELSE 0.0 
+                        ELSE 0.0
                     END AS delta_t_run,
                     -- Platform Dwell Delay (Delta t_dwell)
                     (departure_delay_seconds - arrival_delay_seconds) AS delta_t_dwell,
                     -- Observed physical running time in seconds
-                    CASE 
-                        WHEN prev_rt_departure IS NOT NULL AND rt_arrival_time > prev_rt_departure 
-                        THEN (rt_arrival_time - prev_rt_departure) 
-                        ELSE NULL 
+                    CASE
+                        WHEN prev_rt_departure IS NOT NULL AND rt_arrival_time > prev_rt_departure
+                        THEN (rt_arrival_time - prev_rt_departure)
+                        ELSE NULL
                     END AS observed_run_time_s,
                     -- Trip progression ratio
-                    CASE 
-                        WHEN max_sequence > min_sequence 
+                    CASE
+                        WHEN max_sequence > min_sequence
                         THEN ROUND(CAST(stop_sequence - min_sequence AS DOUBLE) / (max_sequence - min_sequence), 3)
-                        ELSE 0.0 
+                        ELSE 0.0
                     END AS trip_progress,
                     CASE WHEN stop_sequence = min_sequence THEN true ELSE false END AS is_origin_stop,
                     CASE WHEN stop_sequence = max_sequence AND max_sequence > min_sequence THEN true ELSE false END AS is_terminal_stop
                 FROM base_ordered
             ),
             with_headway AS (
-                SELECT 
+                SELECT
                     *,
                     (rt_arrival_time - LAG(rt_arrival_time) OVER (
-                        PARTITION BY route_id, stop_id 
+                        PARTITION BY route_id, stop_id
                         ORDER BY rt_arrival_time
                     )) AS headway_actual_s
                 FROM decomposed
             )
-            SELECT 
+            SELECT
                 *,
-                CASE 
-                    WHEN headway_actual_s >= 10 AND headway_actual_s <= 7200 
+                CASE
+                    WHEN headway_actual_s >= 10 AND headway_actual_s <= 7200
                     THEN headway_actual_s - MEDIAN(headway_actual_s) OVER (PARTITION BY route_id, stop_id)
-                    ELSE NULL 
+                    ELSE NULL
                 END AS headway_deviation
             FROM with_headway
             ORDER BY trip_id, stop_sequence
@@ -285,9 +283,7 @@ class TrajectoryReconstructor:
         out_path = output_parquet or self.output_parquet
 
         con = duckdb.connect(":memory:")
-        sql = self.build_reconstruction_query(
-            in_pattern, max_records=max_records
-        )
+        sql = self.build_reconstruction_query(in_pattern, max_records=max_records)
         copy_query = f"COPY ({sql}) TO '{out_path}' (FORMAT PARQUET, COMPRESSION SNAPPY)"
 
         logger.info(f"Reconstructing vehicle trajectories from {in_pattern}...")
@@ -297,9 +293,7 @@ class TrajectoryReconstructor:
         logger.info(f"Reconstructed trajectories saved to: {out_path}")
         return out_path
 
-    def get_summary(
-        self, parquet_path: Optional[str] = None
-    ) -> Dict[str, Any]:
+    def get_summary(self, parquet_path: Optional[str] = None) -> Dict[str, Any]:
         """Fetch descriptive summary of the reconstructed trajectories via DuckDB."""
         path = parquet_path or self.output_parquet
         if not os.path.exists(path):
@@ -307,7 +301,7 @@ class TrajectoryReconstructor:
 
         con = duckdb.connect(":memory:")
         res = con.execute(f"""
-            SELECT 
+            SELECT
                 COUNT(*) AS total_records,
                 COUNT(DISTINCT trip_id) AS distinct_trips,
                 COUNT(DISTINCT route_id) AS distinct_routes,

@@ -5,17 +5,17 @@ Buffers in-memory and flushes every 5 minutes or 5,000 records.
 Avoids DuckDB write-lock corruption and guarantees high-performance parallel analytics.
 """
 
-import os
-import glob
-import time
-import logging
 import datetime
-from typing import Dict, List, Tuple, Optional, Any
+import glob
+import logging
+import os
+import time
+from typing import Any, Dict, List, Optional, Tuple
 
+import duckdb
+import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
-import pandas as pd
-import duckdb
 
 logger = logging.getLogger(__name__)
 
@@ -24,21 +24,23 @@ FLUSH_INTERVAL_SECONDS = 300  # 5 minutes
 FLUSH_RECORD_THRESHOLD = 5000  # 5,000 records
 
 # Explicit PyArrow schema for exact type safety across partitioned files
-PARQUET_SCHEMA = pa.schema([
-    ("feed_timestamp", pa.int64()),
-    ("trip_id", pa.string()),
-    ("route_id", pa.string()),
-    ("start_date", pa.string()),
-    ("start_time", pa.string()),
-    ("vehicle_id", pa.string()),
-    ("stop_sequence", pa.int32()),
-    ("stop_id", pa.string()),
-    ("arrival_delay_seconds", pa.int32()),
-    ("departure_delay_seconds", pa.int32()),
-    ("rt_arrival_time", pa.int64()),
-    ("rt_departure_time", pa.int64()),
-    ("record_ingested_at", pa.string()),
-])
+PARQUET_SCHEMA = pa.schema(
+    [
+        ("feed_timestamp", pa.int64()),
+        ("trip_id", pa.string()),
+        ("route_id", pa.string()),
+        ("start_date", pa.string()),
+        ("start_time", pa.string()),
+        ("vehicle_id", pa.string()),
+        ("stop_sequence", pa.int32()),
+        ("stop_id", pa.string()),
+        ("arrival_delay_seconds", pa.int32()),
+        ("departure_delay_seconds", pa.int32()),
+        ("rt_arrival_time", pa.int64()),
+        ("rt_departure_time", pa.int64()),
+        ("record_ingested_at", pa.string()),
+    ]
+)
 
 
 class ParquetPartitionStorage:
@@ -48,7 +50,7 @@ class ParquetPartitionStorage:
         self,
         base_dir: str = RAW_BASE_DIR,
         flush_interval: int = FLUSH_INTERVAL_SECONDS,
-        record_threshold: int = FLUSH_RECORD_THRESHOLD
+        record_threshold: int = FLUSH_RECORD_THRESHOLD,
     ):
         self.base_dir = base_dir
         self.flush_interval = flush_interval
@@ -85,7 +87,9 @@ class ParquetPartitionStorage:
         # Check if flush criteria met
         now = time.time()
         time_elapsed = now - self._last_flush_time
-        if len(self._buffer) >= self.record_threshold or (self._buffer and time_elapsed >= self.flush_interval):
+        if len(self._buffer) >= self.record_threshold or (
+            self._buffer and time_elapsed >= self.flush_interval
+        ):
             self.flush()
 
         return new_count
@@ -109,10 +113,7 @@ class ParquetPartitionStorage:
         epoch_ts = int(now_utc.timestamp())
 
         partition_dir = os.path.join(
-            self.base_dir,
-            f"year={year_str}",
-            f"month={month_str}",
-            f"day={day_str}"
+            self.base_dir, f"year={year_str}", f"month={month_str}", f"day={day_str}"
         )
         os.makedirs(partition_dir, exist_ok=True)
         file_path = os.path.join(partition_dir, f"batch_{epoch_ts}.parquet")
@@ -139,7 +140,9 @@ class ParquetPartitionStorage:
 
         self._total_flushed_records += len(batch_records)
         self._total_files_written += 1
-        logger.info(f"Flushed {len(batch_records):,} records to {file_path} (Total flushed: {self._total_flushed_records:,})")
+        logger.info(
+            f"Flushed {len(batch_records):,} records to {file_path} (Total flushed: {self._total_flushed_records:,})"
+        )
         return file_path
 
     def prune_old_state(self, max_keys: int = 50000):
@@ -147,7 +150,7 @@ class ParquetPartitionStorage:
         if len(self._last_seen_state) > max_keys:
             # Keep the newest half
             keys = list(self._last_seen_state.keys())
-            for k in keys[:len(keys) // 2]:
+            for k in keys[: len(keys) // 2]:
                 del self._last_seen_state[k]
 
     def get_current_day_storage_bytes(self) -> int:
@@ -157,7 +160,7 @@ class ParquetPartitionStorage:
             self.base_dir,
             f"year={now_utc.strftime('%Y')}",
             f"month={now_utc.strftime('%m')}",
-            f"day={now_utc.strftime('%d')}"
+            f"day={now_utc.strftime('%d')}",
         )
         if not os.path.exists(today_dir):
             return 0
@@ -183,7 +186,9 @@ class DuckDBCatalog:
         pattern = os.path.join(self.raw_base_dir, "**/*.parquet")
         files = glob.glob(pattern, recursive=True)
         if files:
-            con.execute(f"CREATE OR REPLACE VIEW raw_delays AS SELECT * FROM read_parquet('{pattern}')")
+            con.execute(
+                f"CREATE OR REPLACE VIEW raw_delays AS SELECT * FROM read_parquet('{pattern}')"
+            )
         return con
 
     def get_catalog_stats(self) -> Dict[str, Any]:
@@ -204,8 +209,9 @@ class DuckDBCatalog:
 
         total_bytes = sum(os.path.getsize(f) for f in files)
         con = self.get_connection()
-        res = con.execute("""
-            SELECT 
+        res = (
+            con.execute("""
+            SELECT
                 COUNT(*) AS total_rows,
                 COUNT(DISTINCT trip_id) AS distinct_trips,
                 COUNT(DISTINCT route_id) AS distinct_routes,
@@ -213,7 +219,11 @@ class DuckDBCatalog:
                 MAX(arrival_delay_seconds) AS max_delay_sec,
                 AVG(arrival_delay_seconds) AS avg_delay_sec
             FROM raw_delays
-        """).fetchdf().iloc[0].to_dict()
+        """)
+            .fetchdf()
+            .iloc[0]
+            .to_dict()
+        )
 
         res["total_files"] = len(files)
         res["total_bytes"] = total_bytes

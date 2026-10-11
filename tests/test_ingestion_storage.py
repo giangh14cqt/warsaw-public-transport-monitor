@@ -1,13 +1,10 @@
 """Unit tests for Warsaw transit telemetry ingestion and storage components."""
 
-import unittest
 import os
 import tempfile
-import pandas as pd
+import unittest
 
-from src.ingestion.storage import ParquetPartitionStorage, DuckDBCatalog
-from src.ingestion.fetcher import GTFSRTFetcher
-from src.ingestion.gtfs_manager import GTFSManager
+from src.ingestion.storage import ParquetPartitionStorage
 
 
 class TestIngestionStorage(unittest.TestCase):

@@ -1,10 +1,10 @@
 """Unit tests for trajectory reconstruction and delay decomposition component."""
 
 import os
-import unittest
 import tempfile
+import unittest
+
 import pandas as pd
-import numpy as np
 
 from src.fusion.trajectory import TrajectoryReconstructor
 
@@ -18,38 +18,40 @@ class TestTrajectoryReconstructor(unittest.TestCase):
         self.test_dir.cleanup()
 
     def test_compute_delays_and_lags_basic(self):
-        df = pd.DataFrame([
-            {
-                "trip_id": "T1",
-                "route_id": "17",
-                "stop_sequence": 1,
-                "stop_id": "1001",
-                "arrival_delay_seconds": 30,
-                "departure_delay_seconds": 35,
-                "rt_arrival_time": 1000,
-                "rt_departure_time": 1005,
-            },
-            {
-                "trip_id": "T1",
-                "route_id": "17",
-                "stop_sequence": 2,
-                "stop_id": "1002",
-                "arrival_delay_seconds": 50,
-                "departure_delay_seconds": 50,
-                "rt_arrival_time": 1120,
-                "rt_departure_time": 1120,
-            },
-            {
-                "trip_id": "T1",
-                "route_id": "17",
-                "stop_sequence": 3,
-                "stop_id": "1003",
-                "arrival_delay_seconds": 40,
-                "departure_delay_seconds": 45,
-                "rt_arrival_time": 1250,
-                "rt_departure_time": 1255,
-            },
-        ])
+        df = pd.DataFrame(
+            [
+                {
+                    "trip_id": "T1",
+                    "route_id": "17",
+                    "stop_sequence": 1,
+                    "stop_id": "1001",
+                    "arrival_delay_seconds": 30,
+                    "departure_delay_seconds": 35,
+                    "rt_arrival_time": 1000,
+                    "rt_departure_time": 1005,
+                },
+                {
+                    "trip_id": "T1",
+                    "route_id": "17",
+                    "stop_sequence": 2,
+                    "stop_id": "1002",
+                    "arrival_delay_seconds": 50,
+                    "departure_delay_seconds": 50,
+                    "rt_arrival_time": 1120,
+                    "rt_departure_time": 1120,
+                },
+                {
+                    "trip_id": "T1",
+                    "route_id": "17",
+                    "stop_sequence": 3,
+                    "stop_id": "1003",
+                    "arrival_delay_seconds": 40,
+                    "departure_delay_seconds": 45,
+                    "rt_arrival_time": 1250,
+                    "rt_departure_time": 1255,
+                },
+            ]
+        )
 
         processed = self.reconstructor.compute_delays_and_lags(df)
 
@@ -83,35 +85,37 @@ class TestTrajectoryReconstructor(unittest.TestCase):
 
     def test_headway_deviation(self):
         # Two vehicles on the same route serving the same stop at different times
-        df = pd.DataFrame([
-            # Trip 1 (runs first)
-            {
-                "trip_id": "T1",
-                "route_id": "17",
-                "stop_sequence": 1,
-                "stop_id": "1001",
-                "arrival_delay_seconds": 10,
-                "rt_arrival_time": 1000,
-            },
-            # Trip 2 (runs 600 seconds later)
-            {
-                "trip_id": "T2",
-                "route_id": "17",
-                "stop_sequence": 1,
-                "stop_id": "1001",
-                "arrival_delay_seconds": 20,
-                "rt_arrival_time": 1600,
-            },
-            # Trip 3 (runs 900 seconds later - wide headway)
-            {
-                "trip_id": "T3",
-                "route_id": "17",
-                "stop_sequence": 1,
-                "stop_id": "1001",
-                "arrival_delay_seconds": 40,
-                "rt_arrival_time": 2500,
-            },
-        ])
+        df = pd.DataFrame(
+            [
+                # Trip 1 (runs first)
+                {
+                    "trip_id": "T1",
+                    "route_id": "17",
+                    "stop_sequence": 1,
+                    "stop_id": "1001",
+                    "arrival_delay_seconds": 10,
+                    "rt_arrival_time": 1000,
+                },
+                # Trip 2 (runs 600 seconds later)
+                {
+                    "trip_id": "T2",
+                    "route_id": "17",
+                    "stop_sequence": 1,
+                    "stop_id": "1001",
+                    "arrival_delay_seconds": 20,
+                    "rt_arrival_time": 1600,
+                },
+                # Trip 3 (runs 900 seconds later - wide headway)
+                {
+                    "trip_id": "T3",
+                    "route_id": "17",
+                    "stop_sequence": 1,
+                    "stop_id": "1001",
+                    "arrival_delay_seconds": 40,
+                    "rt_arrival_time": 2500,
+                },
+            ]
+        )
 
         processed = self.reconstructor.compute_delays_and_lags(df)
         t2_row = processed[processed["trip_id"] == "T2"].iloc[0]
@@ -125,32 +129,34 @@ class TestTrajectoryReconstructor(unittest.TestCase):
 
     def test_deduplication_on_repeated_pings(self):
         # Telemetry updates for the same stop sequence
-        df = pd.DataFrame([
-            {
-                "trip_id": "T1",
-                "route_id": "17",
-                "stop_sequence": 1,
-                "stop_id": "1001",
-                "arrival_delay_seconds": 10,
-                "feed_timestamp": 100,
-            },
-            {
-                "trip_id": "T1",
-                "route_id": "17",
-                "stop_sequence": 1,
-                "stop_id": "1001",
-                "arrival_delay_seconds": 15,
-                "feed_timestamp": 130,  # Later ping
-            },
-            {
-                "trip_id": "T1",
-                "route_id": "17",
-                "stop_sequence": 2,
-                "stop_id": "1002",
-                "arrival_delay_seconds": 25,
-                "feed_timestamp": 200,
-            },
-        ])
+        df = pd.DataFrame(
+            [
+                {
+                    "trip_id": "T1",
+                    "route_id": "17",
+                    "stop_sequence": 1,
+                    "stop_id": "1001",
+                    "arrival_delay_seconds": 10,
+                    "feed_timestamp": 100,
+                },
+                {
+                    "trip_id": "T1",
+                    "route_id": "17",
+                    "stop_sequence": 1,
+                    "stop_id": "1001",
+                    "arrival_delay_seconds": 15,
+                    "feed_timestamp": 130,  # Later ping
+                },
+                {
+                    "trip_id": "T1",
+                    "route_id": "17",
+                    "stop_sequence": 2,
+                    "stop_id": "1002",
+                    "arrival_delay_seconds": 25,
+                    "feed_timestamp": 200,
+                },
+            ]
+        )
         processed = self.reconstructor.compute_delays_and_lags(df)
         self.assertEqual(len(processed), 2)
         # Should keep latest arrival delay of 15s for stop 1
@@ -160,39 +166,40 @@ class TestTrajectoryReconstructor(unittest.TestCase):
 
     def test_duckdb_parquet_pipeline(self):
         # Create small test parquet partition
-        sample_df = pd.DataFrame([
-            {
-                "feed_timestamp": 1700000000,
-                "trip_id": "T1",
-                "route_id": "17",
-                "vehicle_id": "V1",
-                "stop_sequence": 1,
-                "stop_id": "1001",
-                "arrival_delay_seconds": 30,
-                "departure_delay_seconds": 30,
-                "rt_arrival_time": 1700000100,
-                "rt_departure_time": 1700000100,
-            },
-            {
-                "feed_timestamp": 1700000030,
-                "trip_id": "T1",
-                "route_id": "17",
-                "vehicle_id": "V1",
-                "stop_sequence": 2,
-                "stop_id": "1002",
-                "arrival_delay_seconds": 55,
-                "departure_delay_seconds": 55,
-                "rt_arrival_time": 1700000220,
-                "rt_departure_time": 1700000220,
-            },
-        ])
+        sample_df = pd.DataFrame(
+            [
+                {
+                    "feed_timestamp": 1700000000,
+                    "trip_id": "T1",
+                    "route_id": "17",
+                    "vehicle_id": "V1",
+                    "stop_sequence": 1,
+                    "stop_id": "1001",
+                    "arrival_delay_seconds": 30,
+                    "departure_delay_seconds": 30,
+                    "rt_arrival_time": 1700000100,
+                    "rt_departure_time": 1700000100,
+                },
+                {
+                    "feed_timestamp": 1700000030,
+                    "trip_id": "T1",
+                    "route_id": "17",
+                    "vehicle_id": "V1",
+                    "stop_sequence": 2,
+                    "stop_id": "1002",
+                    "arrival_delay_seconds": 55,
+                    "departure_delay_seconds": 55,
+                    "rt_arrival_time": 1700000220,
+                    "rt_departure_time": 1700000220,
+                },
+            ]
+        )
         in_path = os.path.join(self.test_dir.name, "input.parquet")
         out_path = os.path.join(self.test_dir.name, "output.parquet")
         sample_df.to_parquet(in_path)
 
         res_path = self.reconstructor.reconstruct_trajectories(
-            input_parquet_pattern=in_path,
-            output_parquet=out_path
+            input_parquet_pattern=in_path, output_parquet=out_path
         )
         self.assertTrue(os.path.exists(res_path))
 

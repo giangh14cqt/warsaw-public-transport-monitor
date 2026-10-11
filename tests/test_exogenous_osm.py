@@ -1,8 +1,9 @@
 """Unit tests for OSMnx corridor & road topology extraction component."""
 
 import os
-import unittest
 import tempfile
+import unittest
+
 import pandas as pd
 
 from src.exogenous.osm import OSMCorridorExtractor
@@ -47,11 +48,13 @@ class TestOSMCorridorExtractor(unittest.TestCase):
 
     def test_count_signals_along_segment(self):
         # Line from (52.230, 21.000) to (52.240, 21.000)
-        signals = pd.DataFrame([
-            {"osmid": "sig_1", "lat": 52.235, "lon": 21.000},  # Directly on segment
-            {"osmid": "sig_2", "lat": 52.238, "lon": 21.0001}, # Within ~10m buffer
-            {"osmid": "sig_3", "lat": 52.235, "lon": 21.050},  # 5km away
-        ])
+        signals = pd.DataFrame(
+            [
+                {"osmid": "sig_1", "lat": 52.235, "lon": 21.000},  # Directly on segment
+                {"osmid": "sig_2", "lat": 52.238, "lon": 21.0001},  # Within ~10m buffer
+                {"osmid": "sig_3", "lat": 52.235, "lon": 21.050},  # 5km away
+            ]
+        )
         count = self.extractor.count_signals_along_segment(
             lat1=52.230,
             lon1=21.000,
@@ -104,30 +107,34 @@ class TestOSMCorridorExtractor(unittest.TestCase):
         mock_gtfs_dir = os.path.join(self.test_dir.name, "gtfs")
         os.makedirs(mock_gtfs_dir, exist_ok=True)
 
-        stops_df = pd.DataFrame([
-            {
-                "stop_id": "1001",
-                "stop_name": "Kijowska 01",
-                "stop_lat": 52.248,
-                "stop_lon": 21.044,
-                "zone_id": 1,
-                "street": "Targowa",
-            },
-            {
-                "stop_id": "1002",
-                "stop_name": "Kijowska 02",
-                "stop_lat": 52.250,
-                "stop_lon": 21.045,
-                "zone_id": 1,
-                "street": "Targowa",
-            },
-        ])
+        stops_df = pd.DataFrame(
+            [
+                {
+                    "stop_id": "1001",
+                    "stop_name": "Kijowska 01",
+                    "stop_lat": 52.248,
+                    "stop_lon": 21.044,
+                    "zone_id": 1,
+                    "street": "Targowa",
+                },
+                {
+                    "stop_id": "1002",
+                    "stop_name": "Kijowska 02",
+                    "stop_lat": 52.250,
+                    "stop_lon": 21.045,
+                    "zone_id": 1,
+                    "street": "Targowa",
+                },
+            ]
+        )
         stops_df.to_csv(os.path.join(mock_gtfs_dir, "stops.txt"), index=False)
 
-        stop_times_df = pd.DataFrame([
-            {"trip_id": "T1", "stop_id": "1001", "stop_sequence": 1},
-            {"trip_id": "T1", "stop_id": "1002", "stop_sequence": 2},
-        ])
+        stop_times_df = pd.DataFrame(
+            [
+                {"trip_id": "T1", "stop_id": "1001", "stop_sequence": 1},
+                {"trip_id": "T1", "stop_id": "1002", "stop_sequence": 2},
+            ]
+        )
         stop_times_df.to_csv(os.path.join(mock_gtfs_dir, "stop_times.txt"), index=False)
 
         custom_corridors = {
@@ -145,9 +152,7 @@ class TestOSMCorridorExtractor(unittest.TestCase):
         )
         self.assertEqual(len(corr_stops), 2)
 
-        pairs = self.extractor.extract_adjacent_stop_pairs(
-            mock_gtfs_dir, corridor_stops=corr_stops
-        )
+        pairs = self.extractor.extract_adjacent_stop_pairs(mock_gtfs_dir, corridor_stops=corr_stops)
         self.assertEqual(len(pairs), 1)
         self.assertEqual(pairs.iloc[0]["stop_id_prev"], "1001")
         self.assertEqual(pairs.iloc[0]["stop_id_curr"], "1002")

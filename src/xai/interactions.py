@@ -14,14 +14,17 @@ Capabilities:
    dedicated vs mixed-traffic corridors.
 """
 
-import os
 import logging
-from typing import Dict, Any, List, Optional, Tuple, Union
+import os
+from typing import Any, Dict, List, Optional, Tuple
+
+import matplotlib
 import numpy as np
 import pandas as pd
-import matplotlib
 
 matplotlib.use("Agg")
+import sys
+
 import matplotlib.pyplot as plt
 import shap
 
@@ -113,7 +116,9 @@ class InteractionQuantifier:
             mean_int_matrix = np.mean(np.abs(interaction_tensor), axis=0)
             return mean_int_matrix, active_features
         except Exception as e:
-            logger.warning(f"TreeSHAP interaction values computation failed ({e}); estimating bivariate interaction.")
+            logger.warning(
+                f"TreeSHAP interaction values computation failed ({e}); estimating bivariate interaction."
+            )
             M = len(active_features)
             mean_int_matrix = np.zeros((M, M))
             return mean_int_matrix, active_features
@@ -175,7 +180,9 @@ class InteractionQuantifier:
 
         # Buffering effect: delay escalation prevented by dedicated ROW
         buffering_seconds = float(delta_mixed - delta_dedicated)
-        mitigation_pct = float((buffering_seconds / delta_mixed * 100.0)) if delta_mixed > 0 else 0.0
+        mitigation_pct = (
+            float((buffering_seconds / delta_mixed * 100.0)) if delta_mixed > 0 else 0.0
+        )
 
         res = {
             "shock_feature": shock_feature,
@@ -206,7 +213,9 @@ class InteractionQuantifier:
         across Mixed Traffic (ROW=0) vs Dedicated Infrastructure (ROW=1).
         """
         if data is None or shock_feature not in data.columns:
-            raise ValueError(f"Valid DataFrame with '{shock_feature}' required for interaction plot.")
+            raise ValueError(
+                f"Valid DataFrame with '{shock_feature}' required for interaction plot."
+            )
 
         if output_path:
             os.makedirs(os.path.dirname(output_path), exist_ok=True)
@@ -235,8 +244,17 @@ class InteractionQuantifier:
         preds_dedicated = np.array(preds_dedicated)
 
         plt.figure(figsize=(9, 6), dpi=300)
-        plt.plot(x_grid, preds_mixed, color="#d62728", lw=2.5, label="Shared Mixed Traffic (ROW = 0)")
-        plt.plot(x_grid, preds_dedicated, color="#2ca02c", lw=2.5, linestyle="--", label="Dedicated Right-of-Way (ROW = 1)")
+        plt.plot(
+            x_grid, preds_mixed, color="#d62728", lw=2.5, label="Shared Mixed Traffic (ROW = 0)"
+        )
+        plt.plot(
+            x_grid,
+            preds_dedicated,
+            color="#2ca02c",
+            lw=2.5,
+            linestyle="--",
+            label="Dedicated Right-of-Way (ROW = 1)",
+        )
 
         # Fill buffering gap
         plt.fill_between(
@@ -252,7 +270,11 @@ class InteractionQuantifier:
         clean_shock = shock_feature.replace("_", " ").title()
         plt.xlabel(f"{clean_shock}", fontsize=11)
         plt.ylabel("Expected Delay Output (seconds)", fontsize=11)
-        plt.title(f"Infrastructure Buffering Interaction: {clean_shock} vs Dedicated ROW", fontsize=12, pad=12)
+        plt.title(
+            f"Infrastructure Buffering Interaction: {clean_shock} vs Dedicated ROW",
+            fontsize=12,
+            pad=12,
+        )
         plt.grid(True, linestyle=":", alpha=0.6)
         plt.legend(loc="best", framealpha=0.9, fontsize=9)
         plt.tight_layout()
@@ -290,7 +312,9 @@ class InteractionQuantifier:
             if sf not in data.columns or infra_feature not in data.columns:
                 continue
 
-            buffering_res = self.compute_buffering_effect(data, shock_feature=sf, infra_feature=infra_feature)
+            buffering_res = self.compute_buffering_effect(
+                data, shock_feature=sf, infra_feature=infra_feature
+            )
             chart_path = os.path.join(output_dir, f"interaction_{sf}_vs_dedicated_row.png")
             self.plot_interaction(sf, infra_feature, data=data, output_path=chart_path)
             buffering_res["chart_path"] = chart_path
@@ -306,13 +330,16 @@ def run_interaction_pipeline(
 ) -> Dict[str, Any]:
     """Execute end-to-end interaction and infrastructure buffering workflow."""
     import duckdb
+
     from src.models.gbm import GradientBoostingBenchmark
     from src.models.validation import PurgedTemporalBlockSplitter
 
     os.makedirs(output_dir, exist_ok=True)
     con = duckdb.connect()
     logger.info("Loading feature mart sample for interaction quantification...")
-    df = con.execute(f"SELECT * FROM '{feature_mart_path}' USING SAMPLE {sample_size} (reservoir, 42)").df()
+    df = con.execute(
+        f"SELECT * FROM '{feature_mart_path}' USING SAMPLE {sample_size} (reservoir, 42)"
+    ).df()
     if "is_terminal_stop" in df.columns:
         df = df[df["is_terminal_stop"] == False].copy()
     elif "trip_progress" in df.columns:
@@ -350,9 +377,10 @@ if __name__ == "__main__":
     mart_path = "data/processed/feature_mart.parquet"
     if not os.path.exists(mart_path):
         print(f"Error: {mart_path} not found.")
-        exit(1)
+        sys.exit(1)
 
     import duckdb
+
     from src.models.gbm import GradientBoostingBenchmark
 
     con = duckdb.connect()
@@ -389,6 +417,8 @@ if __name__ == "__main__":
         print(f"  Baseline Value: {res['baseline_value']} -> Shock Value: {res['shock_value']}")
         print(f"  Delay Increase in Mixed Traffic: +{res['delay_increase_mixed_traffic_s']:.2f} s")
         print(f"  Delay Increase on Dedicated ROW: +{res['delay_increase_dedicated_row_s']:.2f} s")
-        print(f"  -> Buffering Savings: {res['buffering_effect_seconds_saved']:.2f} s ({res['buffering_mitigation_pct']:.1f}% reduction)")
+        print(
+            f"  -> Buffering Savings: {res['buffering_effect_seconds_saved']:.2f} s ({res['buffering_mitigation_pct']:.1f}% reduction)"
+        )
         print(f"  Chart: {res['chart_path']}")
     print("=" * 76 + "\n")

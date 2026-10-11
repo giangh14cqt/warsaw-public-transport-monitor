@@ -8,17 +8,17 @@ Supports:
 4. Clean DuckDB analytical integration.
 """
 
-import os
-import io
-import re
-import zipfile
-import logging
 import argparse
-from typing import Optional, List, Dict, Any
+import io
+import logging
+import os
+import zipfile
 from datetime import datetime, timezone
-import requests
+from typing import Any, Dict, List, Optional
+
 import duckdb
 import pandas as pd
+import requests
 
 logger = logging.getLogger(__name__)
 
@@ -81,9 +81,15 @@ class IMGWWeatherHarvester:
             ts = pd.to_datetime(timestamp_str)
 
             temp = float(raw["temperatura"]) if raw.get("temperatura") is not None else None
-            humidity = float(raw["wilgotnosc_wzgledna"]) if raw.get("wilgotnosc_wzgledna") is not None else None
+            humidity = (
+                float(raw["wilgotnosc_wzgledna"])
+                if raw.get("wilgotnosc_wzgledna") is not None
+                else None
+            )
             precip = float(raw["suma_opadu"]) if raw.get("suma_opadu") is not None else 0.0
-            wind_speed = float(raw["predkosc_wiatru"]) if raw.get("predkosc_wiatru") is not None else None
+            wind_speed = (
+                float(raw["predkosc_wiatru"]) if raw.get("predkosc_wiatru") is not None else None
+            )
             pressure = float(raw["cisnienie"]) if raw.get("cisnienie") is not None else None
 
             freezing_rain = bool(precip > 0.0 and temp is not None and temp <= 0.0)
@@ -143,7 +149,9 @@ class IMGWWeatherHarvester:
             logger.error(f"Failed to process historical archive {archive_name}: {e}")
             return []
 
-    def _parse_historical_csv(self, file_obj, station_filter: Optional[str]) -> List[Dict[str, Any]]:
+    def _parse_historical_csv(
+        self, file_obj, station_filter: Optional[str]
+    ) -> List[Dict[str, Any]]:
         """Parse raw IMGW historical CSV lines encoded in ISO-8859-2."""
         records = []
         filter_upper = station_filter.upper() if station_filter else None
@@ -189,20 +197,22 @@ class IMGWWeatherHarvester:
 
                 freezing_rain = bool(precip > 0.0 and temp is not None and temp <= 0.0)
 
-                records.append({
-                    "station_id": station_code,
-                    "station_name": parts[1],
-                    "timestamp": ts,
-                    "timestamp_bucket": ts.floor("h"),
-                    "temperature_c": temp,
-                    "relative_humidity": humidity,
-                    "precipitation_mm": precip,
-                    "wind_speed_ms": wind_speed,
-                    "pressure_hpa": pressure,
-                    "visibility_m": visibility,
-                    "freezing_rain_flag": freezing_rain,
-                })
-            except Exception as e:
+                records.append(
+                    {
+                        "station_id": station_code,
+                        "station_name": parts[1],
+                        "timestamp": ts,
+                        "timestamp_bucket": ts.floor("h"),
+                        "temperature_c": temp,
+                        "relative_humidity": humidity,
+                        "precipitation_mm": precip,
+                        "wind_speed_ms": wind_speed,
+                        "pressure_hpa": pressure,
+                        "visibility_m": visibility,
+                        "freezing_rain_flag": freezing_rain,
+                    }
+                )
+            except Exception:
                 continue
 
         logger.info(f"Extracted {len(records)} hourly historical observations for {station_filter}")
@@ -228,7 +238,9 @@ class IMGWWeatherHarvester:
             f"hourly=temperature_2m,relative_humidity_2m,precipitation,wind_speed_10m&"
             f"timezone=Europe%2FWarsaw"
         )
-        logger.info(f"Fetching meteorological telemetry from Open-Meteo archive for Warsaw ({start_date} to {end_date})...")
+        logger.info(
+            f"Fetching meteorological telemetry from Open-Meteo archive for Warsaw ({start_date} to {end_date})..."
+        )
         try:
             resp = requests.get(url, timeout=20)
             if resp.status_code != 200:
@@ -246,24 +258,30 @@ class IMGWWeatherHarvester:
                 ts = pd.to_datetime(t_str)
                 temp = float(temps[i]) if temps and temps[i] is not None else 11.3
                 precip = float(precips[i]) if precips and precips[i] is not None else 0.0
-                humidity = float(humidities[i]) if humidities and humidities[i] is not None else 75.0
+                humidity = (
+                    float(humidities[i]) if humidities and humidities[i] is not None else 75.0
+                )
                 wind = float(winds[i]) if winds and winds[i] is not None else 3.0
                 freezing = bool(precip > 0.0 and temp <= 0.0)
 
-                records.append({
-                    "station_id": station_id,
-                    "station_name": station_name,
-                    "timestamp": ts,
-                    "timestamp_bucket": ts.floor("h"),
-                    "temperature_c": temp,
-                    "relative_humidity": humidity,
-                    "precipitation_mm": precip,
-                    "wind_speed_ms": wind,
-                    "pressure_hpa": 1013.25,
-                    "visibility_m": 10000.0,
-                    "freezing_rain_flag": freezing,
-                })
-            logger.info(f"Extracted {len(records)} hourly meteorological observations from Open-Meteo.")
+                records.append(
+                    {
+                        "station_id": station_id,
+                        "station_name": station_name,
+                        "timestamp": ts,
+                        "timestamp_bucket": ts.floor("h"),
+                        "temperature_c": temp,
+                        "relative_humidity": humidity,
+                        "precipitation_mm": precip,
+                        "wind_speed_ms": wind,
+                        "pressure_hpa": 1013.25,
+                        "visibility_m": 10000.0,
+                        "freezing_rain_flag": freezing,
+                    }
+                )
+            logger.info(
+                f"Extracted {len(records)} hourly meteorological observations from Open-Meteo."
+            )
             return records
         except Exception as e:
             logger.error(f"Failed to fetch Open-Meteo meteorological telemetry: {e}")
@@ -298,8 +316,9 @@ class IMGWWeatherHarvester:
             return {"status": "empty", "records": 0}
 
         con = duckdb.connect(":memory:")
-        res = con.execute(f"""
-            SELECT 
+        res = (
+            con.execute(f"""
+            SELECT
                 COUNT(*) AS total_records,
                 MIN(timestamp) AS earliest_timestamp,
                 MAX(timestamp) AS latest_timestamp,
@@ -310,7 +329,11 @@ class IMGWWeatherHarvester:
                 ROUND(MAX(precipitation_mm), 2) AS max_precipitation,
                 COUNT(DISTINCT station_name) AS active_stations
             FROM read_parquet('{self.output_parquet}')
-        """).fetchdf().iloc[0].to_dict()
+        """)
+            .fetchdf()
+            .iloc[0]
+            .to_dict()
+        )
         con.close()
         return res
 
@@ -319,11 +342,15 @@ def main():
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        datefmt="%H:%M:%S"
+        datefmt="%H:%M:%S",
     )
     parser = argparse.ArgumentParser(description="IMGW Meteorological Telemetry Ingestion")
-    parser.add_argument("--mode", choices=["live", "backfill", "summary"], default="live",
-                        help="Operation mode: 'live' (current hourly API), 'backfill' (historical archive), 'summary'")
+    parser.add_argument(
+        "--mode",
+        choices=["live", "backfill", "summary"],
+        default="live",
+        help="Operation mode: 'live' (current hourly API), 'backfill' (historical archive), 'summary'",
+    )
     parser.add_argument("--year", type=int, default=2026, help="Year for historical backfill")
     parser.add_argument("--month", type=int, default=9, help="Month for historical backfill")
     args = parser.parse_args()
@@ -331,7 +358,7 @@ def main():
     harvester = IMGWWeatherHarvester()
 
     if args.mode == "live":
-        print(f"Fetching live hourly observations for Warsaw...")
+        print("Fetching live hourly observations for Warsaw...")
         obs = harvester.fetch_all_warsaw_live()
         inserted = harvester.upsert_to_parquet(obs)
         print(f"Successfully processed {inserted} live observation(s).")

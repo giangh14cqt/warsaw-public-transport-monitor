@@ -1,10 +1,10 @@
 """Unit tests for IMGW weather ingestion component."""
 
-import unittest
 import os
 import tempfile
+import unittest
+
 import pandas as pd
-from datetime import datetime
 
 from src.exogenous.imgw import IMGWWeatherHarvester
 

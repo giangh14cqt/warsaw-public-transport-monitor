@@ -5,19 +5,18 @@ Verifies GTFS archival, fetches a single GTFS-RT snapshot, validates schema & de
 tests Parquet partition storage and read-only DuckDB catalog queries.
 """
 
-import os
-import sys
 import logging
+
 import pandas as pd
 
-from src.gtfs_manager import GTFSManager
 from src.fetcher import GTFSRTFetcher
-from src.storage import ParquetPartitionStorage, DuckDBCatalog
+from src.gtfs_manager import GTFSManager
+from src.storage import DuckDBCatalog, ParquetPartitionStorage
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    datefmt="%H:%M:%S"
+    datefmt="%H:%M:%S",
 )
 logger = logging.getLogger("run_preflight")
 
@@ -42,11 +41,15 @@ def main():
     # 3. Parse and Extract Normalized Records
     logger.info("Parsing protobuf payload and mapping against static schedule...")
     records, stats = fetcher.parse_feed(feed_bytes, gtfs_mgr)
-    logger.info(f"Parsed {stats['total_entities']} entities ({stats['total_trip_updates']} trip updates).")
+    logger.info(
+        f"Parsed {stats['total_entities']} entities ({stats['total_trip_updates']} trip updates)."
+    )
 
     # 4. Filter and Verify Delay Metrics
     records_with_delay = [r for r in records if r["arrival_delay_seconds"] is not None]
-    logger.info(f"Records with valid arrival delay: {len(records_with_delay):,} of {len(records):,}")
+    logger.info(
+        f"Records with valid arrival delay: {len(records_with_delay):,} of {len(records):,}"
+    )
 
     # 5. Test Parquet Partition Storage
     logger.info("Testing Parquet partition write & buffer flush...")
@@ -82,9 +85,15 @@ def main():
     print("-" * 80)
     df_sample = pd.DataFrame(records[:15])
     sample_cols = [
-        "route_id", "trip_id", "vehicle_id", "stop_id",
-        "stop_sequence", "arrival_delay_seconds", "departure_delay_seconds",
-        "start_date", "start_time"
+        "route_id",
+        "trip_id",
+        "vehicle_id",
+        "stop_id",
+        "stop_sequence",
+        "arrival_delay_seconds",
+        "departure_delay_seconds",
+        "start_date",
+        "start_time",
     ]
     pd.set_option("display.max_columns", None)
     pd.set_option("display.width", 140)

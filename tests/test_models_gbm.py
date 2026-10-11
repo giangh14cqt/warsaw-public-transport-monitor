@@ -9,11 +9,11 @@ Validates:
 
 import os
 import unittest
+
 import numpy as np
 import pandas as pd
 
 from src.models.gbm import GradientBoostingBenchmark, train_gbm_suite
-from src.models.metrics import compute_regression_metrics
 
 
 class TestModelsGBM(unittest.TestCase):
@@ -27,14 +27,16 @@ class TestModelsGBM(unittest.TestCase):
         x2 = np.random.poisson(3, n)
         x3 = np.random.choice([0, 1], n)
         # Non-linear relationship: y = 2 * x1^1.5 - 3 * x2 + 5 * x3 + noise
-        y = 2.0 * (x1 ** 1.5) - 3.0 * x2 + 5.0 * x3 + np.random.normal(0, 1, n)
+        y = 2.0 * (x1**1.5) - 3.0 * x2 + 5.0 * x3 + np.random.normal(0, 1, n)
 
-        self.df = pd.DataFrame({
-            "feature_continuous": x1,
-            "feature_discrete": x2,
-            "feature_binary": x3,
-            "delta_t_run": y,
-        })
+        self.df = pd.DataFrame(
+            {
+                "feature_continuous": x1,
+                "feature_discrete": x2,
+                "feature_binary": x3,
+                "delta_t_run": y,
+            }
+        )
         self.train_df = self.df.iloc[:700].copy()
         self.val_df = self.df.iloc[700:].copy()
         self.features = ["feature_continuous", "feature_discrete", "feature_binary"]
@@ -88,17 +90,28 @@ class TestModelsGBM(unittest.TestCase):
             self.skipTest("Feature mart parquet not found locally.")
 
         import duckdb
+
         con = duckdb.connect()
         sample_df = con.execute(
             f"SELECT arrival_ts, delta_t_run, prev_stop_delay, signalized_intersection_count, "
             f"segment_length_meters, trip_progress FROM '{mart_path}' "
             f"WHERE delta_t_run IS NOT NULL USING SAMPLE 5000"
         ).df()
+        con.close()
 
-        train_sample = sample_df.iloc[:3500]
-        val_sample = sample_df.iloc[3500:]
+        if len(sample_df) < 50:
+            self.skipTest("Insufficient records in feature mart for GBM test.")
 
-        features = ["prev_stop_delay", "signalized_intersection_count", "segment_length_meters", "trip_progress"]
+        split_idx = max(int(len(sample_df) * 0.7), 1)
+        train_sample = sample_df.iloc[:split_idx]
+        val_sample = sample_df.iloc[split_idx:]
+
+        features = [
+            "prev_stop_delay",
+            "signalized_intersection_count",
+            "segment_length_meters",
+            "trip_progress",
+        ]
         gbm = GradientBoostingBenchmark(target_col="delta_t_run", model_type="lightgbm")
         metrics = gbm.train(train_sample, val_sample, features, n_estimators=50)
 

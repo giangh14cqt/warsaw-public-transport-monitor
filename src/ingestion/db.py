@@ -1,7 +1,8 @@
 import os
+from typing import Any, Dict, List, Optional
+
 import duckdb
 import pandas as pd
-from typing import List, Dict, Any, Optional
 
 DEFAULT_DB_PATH = "data/delays.duckdb"
 
@@ -25,6 +26,7 @@ CREATE TABLE IF NOT EXISTS trip_delays (
     PRIMARY KEY (trip_id, stop_id, stop_sequence, observed_at)
 );
 """
+
 
 class DelayDatabase:
     """Manages DuckDB storage and queries for Warsaw transit delay data."""
@@ -51,12 +53,16 @@ class DelayDatabase:
 
         # Ensure datetime columns are properly formatted
         datetime_cols = [
-            'feed_timestamp', 'scheduled_arrival', 'rt_arrival',
-            'scheduled_departure', 'rt_departure', 'observed_at'
+            "feed_timestamp",
+            "scheduled_arrival",
+            "rt_arrival",
+            "scheduled_departure",
+            "rt_departure",
+            "observed_at",
         ]
         for col in datetime_cols:
             if col in df.columns:
-                df[col] = pd.to_datetime(df[col], errors='coerce')
+                df[col] = pd.to_datetime(df[col], errors="coerce")
 
         # Insert or ignore duplicates
         initial_count = self.conn.execute("SELECT COUNT(*) FROM trip_delays").fetchone()[0]
@@ -64,7 +70,7 @@ class DelayDatabase:
         self.conn.register("batch_df", df)
         self.conn.execute("""
             INSERT OR IGNORE INTO trip_delays
-            SELECT 
+            SELECT
                 feed_timestamp,
                 trip_id,
                 route_id,
@@ -90,7 +96,7 @@ class DelayDatabase:
     def get_summary_stats(self) -> Dict[str, Any]:
         """Fetch summary metrics from the delays table."""
         res = self.conn.execute("""
-            SELECT 
+            SELECT
                 COUNT(*) AS total_records,
                 COUNT(DISTINCT trip_id) AS active_trips,
                 COUNT(DISTINCT vehicle_id) AS active_vehicles,
@@ -101,7 +107,7 @@ class DelayDatabase:
             FROM trip_delays
         """).fetchdf()
 
-        if res.empty or res['total_records'].iloc[0] == 0:
+        if res.empty or res["total_records"].iloc[0] == 0:
             return {
                 "total_records": 0,
                 "active_trips": 0,
@@ -110,27 +116,29 @@ class DelayDatabase:
                 "min_delay_sec": None,
                 "max_delay_sec": None,
                 "avg_delay_sec": None,
-                "db_size_bytes": self.get_storage_size_bytes()
+                "db_size_bytes": self.get_storage_size_bytes(),
             }
 
         row = res.iloc[0].to_dict()
         row["db_size_bytes"] = self.get_storage_size_bytes()
         return row
 
-    def get_sample_rows(self, limit: int = 20, route_ids: Optional[List[str]] = None) -> pd.DataFrame:
+    def get_sample_rows(
+        self, limit: int = 20, route_ids: Optional[List[str]] = None
+    ) -> pd.DataFrame:
         """Retrieve a sample of rows from the database."""
         if route_ids:
             placeholders = ",".join([f"'{r}'" for r in route_ids])
             query = f"""
-                SELECT * FROM trip_delays 
+                SELECT * FROM trip_delays
                 WHERE route_id IN ({placeholders})
-                ORDER BY observed_at DESC, trip_id, stop_sequence 
+                ORDER BY observed_at DESC, trip_id, stop_sequence
                 LIMIT {limit}
             """
         else:
             query = f"""
-                SELECT * FROM trip_delays 
-                ORDER BY observed_at DESC, trip_id, stop_sequence 
+                SELECT * FROM trip_delays
+                ORDER BY observed_at DESC, trip_id, stop_sequence
                 LIMIT {limit}
             """
         return self.conn.execute(query).fetchdf()
