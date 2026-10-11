@@ -134,7 +134,11 @@ def plot_ale_curve(
             tx = pt["threshold_value"]
             ty = pt["ale_effect_at_threshold"]
             ax_main.axvline(
-                tx, color=COLORS["secondary"], linestyle="--", lw=1.5, label=f"Tipping Point ({tx:.2f})"
+                tx,
+                color=COLORS["secondary"],
+                linestyle="--",
+                lw=1.5,
+                label=f"Tipping Point ({tx:.2f})",
             )
             ax_main.scatter([tx], [ty], color=COLORS["secondary"], s=60, zorder=5)
             ax_main.annotate(
@@ -244,8 +248,22 @@ def plot_counterfactual_case_study(
     cf_vals = [float(counterfactual_row.get(f, 0.0)) for f in actionable_features]
 
     width = 0.35
-    ax.barh(y_pos - width / 2, orig_vals, width, label="Observed Severe Incident", color=COLORS["danger"], alpha=0.8)
-    ax.barh(y_pos + width / 2, cf_vals, width, label="Counterfactual On-Time Remedy", color=COLORS["success"], alpha=0.8)
+    ax.barh(
+        y_pos - width / 2,
+        orig_vals,
+        width,
+        label="Observed Severe Incident",
+        color=COLORS["danger"],
+        alpha=0.8,
+    )
+    ax.barh(
+        y_pos + width / 2,
+        cf_vals,
+        width,
+        label="Counterfactual On-Time Remedy",
+        color=COLORS["success"],
+        alpha=0.8,
+    )
 
     ax.set_yticks(y_pos)
     ax.set_yticklabels([f.replace("_", " ").title() for f in actionable_features])

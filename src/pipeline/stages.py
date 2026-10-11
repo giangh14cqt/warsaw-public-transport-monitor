@@ -83,6 +83,19 @@ def run_stage_preflight(args: argparse.Namespace) -> Dict[str, Any]:
     }
 
 
+def run_stage_ranges(args: argparse.Namespace) -> Dict[str, Any]:
+    """Inspect and display available temporal ranges across all data sources."""
+    from src.pipeline.ranges import inspect_available_ranges, print_range_report
+
+    banner("DATA SOURCE TEMPORAL RANGE AUDIT")
+    report = inspect_available_ranges(data_dir=str(paths.data_dir))
+    print_range_report(report)
+    return {
+        "status": "success",
+        "report": report,
+    }
+
+
 def run_stage_exogenous(args: argparse.Namespace) -> Dict[str, Any]:
     """Verify or harvest exogenous IMGW weather and OSM corridor topology."""
     banner("STAGE 2: EXOGENOUS FEATURE MART INTEGRATION")
@@ -91,17 +104,42 @@ def run_stage_exogenous(args: argparse.Namespace) -> Dict[str, Any]:
     weather_path = str(paths.weather_hourly)
     osm_path = str(paths.osm_corridors)
     force_rebuild = getattr(args, "force_rebuild", False)
+    start_date = getattr(args, "start_date", None)
+    end_date = getattr(args, "end_date", None)
 
-    # Weather check
-    if os.path.exists(weather_path) and not force_rebuild:
+    # Weather check: rebuild if missing, force_rebuild, or if requested end_date exceeds current data
+    need_weather_rebuild = not os.path.exists(weather_path) or force_rebuild
+    if not need_weather_rebuild and end_date:
+        import duckdb
+
+        con = duckdb.connect(":memory:")
+        try:
+            curr_max = con.execute(f"SELECT MAX(timestamp) FROM '{weather_path}'").fetchone()[0]
+            if curr_max and str(curr_max)[:10] < end_date[:10]:
+                logger.info(
+                    f"Requested end_date '{end_date}' extends beyond current weather ({str(curr_max)[:10]}); triggering weather rebuild..."
+                )
+                need_weather_rebuild = True
+        except Exception:
+            need_weather_rebuild = True
+        finally:
+            con.close()
+
+    if not need_weather_rebuild:
         logger.info(
             f"Found active IMGW weather telemetry at {weather_path} ({os.path.getsize(weather_path):,} bytes)."
         )
     else:
-        logger.info("Harvesting IMGW-PIB hourly synoptic weather telemetry...")
+        logger.info(
+            f"Harvesting IMGW-PIB hourly synoptic weather telemetry (window: {start_date or '2026-10-04'} to {end_date or 'latest'})..."
+        )
         from src.exogenous.imgw import fetch_imgw_synoptic_archive
 
-        fetch_imgw_synoptic_archive(output_path=weather_path)
+        fetch_imgw_synoptic_archive(
+            output_path=weather_path,
+            start_date=start_date or "2026-10-04",
+            end_date=end_date,
+        )
 
     # OSM corridors check
     if os.path.exists(osm_path) and not force_rebuild:
@@ -139,19 +177,27 @@ def run_stage_fusion(args: argparse.Namespace) -> Dict[str, Any]:
 
     force_rebuild = getattr(args, "force_rebuild", False)
     raw_pat = getattr(args, "raw_pattern", None)
+    start_date = getattr(args, "start_date", None)
+    end_date = getattr(args, "end_date", None)
 
-    if os.path.exists(mart_path) and not force_rebuild:
+    # If start_date or end_date are specified, we must rebuild feature mart to match requested range
+    need_rebuild = not os.path.exists(mart_path) or force_rebuild or bool(start_date or end_date)
+
+    if not need_rebuild:
         logger.info(
             f"Existing feature mart verified at {mart_path} ({os.path.getsize(mart_path):,} bytes)."
         )
         total_rows = get_parquet_row_count(mart_path)
         logger.info(f"Feature mart contains {total_rows:,} rows.")
     else:
-        logger.info(f"Assembling unified feature mart into {mart_path}...")
+        range_desc = f"{start_date or 'earliest'} to {end_date or 'latest'}"
+        logger.info(f"Assembling unified feature mart into {mart_path} (range: {range_desc})...")
         assembler.assemble_mart(
             raw_pattern=raw_pat,
             output_parquet=mart_path,
             max_records=max_records,
+            start_date=start_date,
+            end_date=end_date,
         )
         total_rows = get_parquet_row_count(mart_path)
         logger.info(f"Successfully assembled {total_rows:,} feature records.")
@@ -162,6 +208,8 @@ def run_stage_fusion(args: argparse.Namespace) -> Dict[str, Any]:
         "duration_seconds": duration,
         "mart_path": mart_path,
         "total_rows": total_rows,
+        "start_date": start_date,
+        "end_date": end_date,
     }
 
 
@@ -182,12 +230,29 @@ def run_stage_benchmark(args: argparse.Namespace) -> Dict[str, Any]:
         sample_size = 100000
     exclude_terminals = not getattr(args, "include_terminals", False)
     cohort_arg = getattr(args, "cohort", "stratified")
+    start_date = getattr(args, "start_date", None)
+    end_date = getattr(args, "end_date", None)
+
+    date_where_sql = ""
+    if start_date or end_date:
+        from src.pipeline.ranges import build_date_filter_clause
+
+        date_filter = build_date_filter_clause(
+            "arrival_ts", start_date=start_date, end_date=end_date
+        )
+        if date_filter and date_filter != "1=1":
+            date_where_sql = f"WHERE {date_filter}"
 
     con = duckdb.connect()
-    logger.info(f"Loading {sample_size:,} sample rows from {mart_path}...")
+    range_lbl = (
+        f" ({start_date or 'earliest'} to {end_date or 'latest'})"
+        if (start_date or end_date)
+        else ""
+    )
+    logger.info(f"Loading {sample_size:,} sample rows from {mart_path}{range_lbl}...")
     try:
         df_sample = con.execute(
-            f"SELECT * FROM '{mart_path}' USING SAMPLE {sample_size} (reservoir, 42)"
+            f"SELECT * FROM '{mart_path}' {date_where_sql} USING SAMPLE {sample_size} (reservoir, 42)"
         ).df()
     finally:
         con.close()
@@ -271,23 +336,44 @@ def run_stage_xai(args: argparse.Namespace) -> Dict[str, Any]:
     os.makedirs(tables_dir, exist_ok=True)
 
     mart_path = paths.get_feature_mart_str()
+    start_date = getattr(args, "start_date", None)
+    end_date = getattr(args, "end_date", None)
 
     # 1. TreeSHAP Attribution
     logger.info("1/4: Computing global TreeSHAP beeswarm and local waterfall attributions...")
-    shap_res = run_shap_pipeline(feature_mart_path=mart_path, output_dir=figures_dir)
+    shap_res = run_shap_pipeline(
+        feature_mart_path=mart_path,
+        output_dir=figures_dir,
+        start_date=start_date,
+        end_date=end_date,
+    )
 
     # 2. ALE Non-Linear Thresholds
     logger.info("2/4: Computing Accumulated Local Effects (ALE) non-linear curves...")
-    ale_res = run_ale_pipeline(feature_mart_path=mart_path, output_dir=figures_dir)
+    ale_res = run_ale_pipeline(
+        feature_mart_path=mart_path,
+        output_dir=figures_dir,
+        start_date=start_date,
+        end_date=end_date,
+    )
 
     # 3. Infrastructure Buffering & Interactions
     logger.info("3/4: Quantifying dedicated right-of-way infrastructure buffering...")
-    inter_res = run_interaction_pipeline(feature_mart_path=mart_path, output_dir=figures_dir)
+    inter_res = run_interaction_pipeline(
+        feature_mart_path=mart_path,
+        output_dir=figures_dir,
+        start_date=start_date,
+        end_date=end_date,
+    )
 
     # 4. DiCE Counterfactual Diagnostics
     logger.info("4/4: Generating actionable counterfactual intervention diagnostics...")
     cf_res = run_counterfactual_pipeline(
-        feature_mart_path=mart_path, output_dir=figures_dir, tables_dir=tables_dir
+        feature_mart_path=mart_path,
+        output_dir=figures_dir,
+        tables_dir=tables_dir,
+        start_date=start_date,
+        end_date=end_date,
     )
 
     duration = time.time() - t0

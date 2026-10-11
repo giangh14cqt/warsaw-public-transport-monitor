@@ -29,7 +29,6 @@ logger = logging.getLogger(__name__)
 DEFAULT_FEATURE_GROUPS = features.feature_groups
 
 
-
 class TreeSHAPExplainer:
     """Computes exact TreeSHAP values for global and local transit delay attribution."""
 
@@ -208,7 +207,10 @@ class TreeSHAPExplainer:
             return ""
 
         return plot_shap_waterfall(
-            self.explanation[sample_idx], output_path, sample_idx=sample_idx, max_display=max_display
+            self.explanation[sample_idx],
+            output_path,
+            sample_idx=sample_idx,
+            max_display=max_display,
         )
 
     def find_extreme_delay_events(
@@ -287,21 +289,34 @@ def run_shap_pipeline(
     feature_mart_path: Optional[str] = None,
     output_dir: Optional[str] = None,
     sample_size: int = 30000,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Execute end-to-end TreeSHAP attribution diagnostics workflow."""
     import duckdb
 
     from src.models.gbm import GradientBoostingBenchmark
     from src.models.validation import PurgedTemporalBlockSplitter
+    from src.pipeline.ranges import build_date_filter_clause
 
     mart_path_str = feature_mart_path or paths.get_feature_mart_str()
     out_dir_str = output_dir or str(paths.figures_xai)
     os.makedirs(out_dir_str, exist_ok=True)
     con = duckdb.connect()
     logger.info("Loading feature mart sample for TreeSHAP analysis...")
-    df = con.execute(
-        f"SELECT * FROM '{mart_path_str}' USING SAMPLE {sample_size} (reservoir, 42)"
-    ).df()
+    try:
+        if start_date or end_date:
+            date_where = build_date_filter_clause(
+                "arrival_ts", start_date=start_date, end_date=end_date
+            )
+            sample_query = f"SELECT * FROM '{mart_path_str}' WHERE {date_where} USING SAMPLE {sample_size} (reservoir, 42)"
+        else:
+            sample_query = (
+                f"SELECT * FROM '{mart_path_str}' USING SAMPLE {sample_size} (reservoir, 42)"
+            )
+        df = con.execute(sample_query).df()
+    finally:
+        con.close()
     if "is_terminal_stop" in df.columns:
         df = df[df["is_terminal_stop"] == False].copy()
     elif "trip_progress" in df.columns:
@@ -349,6 +364,7 @@ def run_shap_pipeline(
 
 if __name__ == "__main__":
     import sys
+
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
     mart_path = paths.get_feature_mart_str()
     if not os.path.exists(mart_path):

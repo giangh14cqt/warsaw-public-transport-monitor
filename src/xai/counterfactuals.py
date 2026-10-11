@@ -585,12 +585,15 @@ def run_counterfactual_pipeline(
     feature_mart_path: Optional[str] = None,
     output_dir: Optional[str] = None,
     tables_dir: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Execute end-to-end Counterfactual Diagnostics workflow."""
     import duckdb
 
     from src.models.gbm import GradientBoostingBenchmark
     from src.models.validation import PurgedTemporalBlockSplitter
+    from src.pipeline.ranges import build_date_filter_clause
 
     mart_path_str = feature_mart_path or paths.get_feature_mart_str()
     out_dir_str = output_dir or str(paths.figures_xai)
@@ -600,9 +603,17 @@ def run_counterfactual_pipeline(
 
     con = duckdb.connect()
     logger.info(f"Loading feature mart from {mart_path_str}...")
-    sample_df = con.execute(
-        f"SELECT * FROM '{mart_path_str}' USING SAMPLE 100000 (reservoir, 42)"
-    ).df()
+    try:
+        if start_date or end_date:
+            date_where = build_date_filter_clause(
+                "arrival_ts", start_date=start_date, end_date=end_date
+            )
+            sample_query = f"SELECT * FROM '{mart_path_str}' WHERE {date_where} USING SAMPLE 100000 (reservoir, 42)"
+        else:
+            sample_query = f"SELECT * FROM '{mart_path_str}' USING SAMPLE 100000 (reservoir, 42)"
+        sample_df = con.execute(sample_query).df()
+    finally:
+        con.close()
 
     target_col = "delta_t_run" if "delta_t_run" in sample_df.columns else "arrival_delay_seconds"
     feature_cols = [

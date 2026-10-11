@@ -189,21 +189,27 @@ Using Diverse Counterfactual Explanations (DiCE), we evaluated actionable remedi
 
 ## 7. Master Pipeline Runner (`run_pipeline.py`)
 
-The entire end-to-end analytical workflow can be orchestrated through the unified master CLI runner:
+The entire end-to-end analytical workflow can be orchestrated through the unified master CLI runner, including automated temporal range inspection across all multi-source inputs and customizable study window selection:
 
 ```bash
-# 1. Execute complete end-to-end pipeline across all stages
+# 1. Audit available date ranges across all data sources (Raw, Weather, GTFS, OSM)
+python3 run_pipeline.py --check-ranges
+
+# 2. Execute complete pipeline across all stages (or select custom temporal range)
 python3 run_pipeline.py --stage all
+python3 run_pipeline.py --stage all --start-date 2026-10-05 --end-date 2026-10-09
 
-# 2. Run individual stages
-python3 run_pipeline.py --stage preflight       # Live GTFS-RT feed & static archive validation
-python3 run_pipeline.py --stage exogenous       # IMGW weather & OSMnx road topology
-python3 run_pipeline.py --stage fusion          # Spatiotemporal fusion into feature_mart.parquet
-python3 run_pipeline.py --stage benchmark       # TWFE panel regression vs LightGBM vs CatBoost
-python3 run_pipeline.py --stage xai             # TreeSHAP, ALE curves, buffering & DiCE counterfactuals
+# 3. Rebuild exogenous weather data for an extended or custom date range
+python3 run_pipeline.py --stage exogenous --force-rebuild --start-date 2026-10-04 --end-date 2026-10-11
 
-# 3. Fast benchmark iteration with custom sample size
-python3 run_pipeline.py --stage benchmark --sample-size 50000
+# 4. Spatiotemporal fusion for a specific date range
+python3 run_pipeline.py --stage fusion --start-date 2026-10-05 --end-date 2026-10-09
+
+# 5. Run econometric & machine learning benchmarks on selected date range
+python3 run_pipeline.py --stage benchmark --start-date 2026-10-05 --end-date 2026-10-09 --sample-size 50000
+
+# 6. Generate explainable AI diagnostics (TreeSHAP, ALE, Interactions, DiCE)
+python3 run_pipeline.py --stage xai --start-date 2026-10-04 --end-date 2026-10-10
 ```
 
 ---

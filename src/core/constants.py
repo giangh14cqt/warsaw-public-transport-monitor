@@ -98,8 +98,6 @@ def classify_cohort_series(df: pd.DataFrame) -> pd.Series:
         return df["transit_cohort"]
 
     return df.apply(
-        lambda row: classify_transit_cohort(
-            row.get("route_id", ""), row.get("is_tram", 0)
-        ),
+        lambda row: classify_transit_cohort(row.get("route_id", ""), row.get("is_tram", 0)),
         axis=1,
     )

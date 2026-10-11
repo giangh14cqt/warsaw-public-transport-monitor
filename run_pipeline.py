@@ -2,6 +2,7 @@
 """
 Warsaw Transit Delay Telemetry & Attribution System: Master Pipeline Runner.
 Orchestrates end-to-end execution across:
+0. Temporal Range Audit: Inspect available data ranges across raw, weather, GTFS, and OSM sources.
 1. Pre-Flight Integrity Check: GTFS schedule archive & live GTFS-RT feed validation.
 2. Exogenous Data Fusion: IMGW weather harvesting & OSMnx corridor road topology.
 3. Feature Mart Assembly: DuckDB spatiotemporal fusion and delay lag decomposition.
@@ -9,9 +10,17 @@ Orchestrates end-to-end execution across:
 5. Explainable AI Diagnostics: TreeSHAP attribution, ALE curves, interaction buffering, and DiCE counterfactuals.
 
 Usage:
-    python3 run_pipeline.py --stage all
-    python3 run_pipeline.py --stage benchmark --sample-size 50000
-    python3 run_pipeline.py --stage xai
+    # 1. Audit available date ranges across all data sources
+    python3 run_pipeline.py --check-ranges
+
+    # 2. Run full pipeline on specific date range
+    python3 run_pipeline.py --stage all --start-date 2026-10-04 --end-date 2026-10-10
+
+    # 3. Train models on specific workweek
+    python3 run_pipeline.py --stage benchmark --start-date 2026-10-05 --end-date 2026-10-09 --sample-size 50000
+
+    # 4. Generate xAI diagnostics on selected date range
+    python3 run_pipeline.py --stage xai --start-date 2026-10-04 --end-date 2026-10-10
 """
 
 import argparse
@@ -26,6 +35,7 @@ from src.pipeline.stages import (
     run_stage_exogenous,
     run_stage_fusion,
     run_stage_preflight,
+    run_stage_ranges,
     run_stage_xai,
 )
 
@@ -44,6 +54,7 @@ __all__ = [
     "run_stage_fusion",
     "run_stage_benchmark",
     "run_stage_xai",
+    "run_stage_ranges",
     "main",
 ]
 
@@ -56,8 +67,34 @@ def main():
         "--stage",
         type=str,
         default="all",
-        choices=["preflight", "exogenous", "fusion", "benchmark", "xai", "all"],
+        choices=[
+            "preflight",
+            "exogenous",
+            "fusion",
+            "benchmark",
+            "xai",
+            "ranges",
+            "check-ranges",
+            "all",
+        ],
         help="Pipeline stage to execute (default: all).",
+    )
+    parser.add_argument(
+        "--check-ranges",
+        action="store_true",
+        help="Inspect and display available date ranges across all data sources and exit.",
+    )
+    parser.add_argument(
+        "--start-date",
+        type=str,
+        default=None,
+        help="Start date for data range selection (YYYY-MM-DD or YYYY-MM-DD HH:MM:SS, Europe/Warsaw local time).",
+    )
+    parser.add_argument(
+        "--end-date",
+        type=str,
+        default=None,
+        help="End date for data range selection (YYYY-MM-DD or YYYY-MM-DD HH:MM:SS, Europe/Warsaw local time).",
     )
     parser.add_argument(
         "--sample-size",
@@ -108,9 +145,23 @@ def main():
 
     args = parser.parse_args()
 
+    # Range inspection shortcut
+    if args.check_ranges or args.stage in ("ranges", "check-ranges"):
+        run_stage_ranges(args)
+        return 0
+
+    # Validate custom date range if supplied
+    if args.start_date or args.end_date:
+        from src.pipeline.ranges import validate_date_range
+
+        args.start_date, args.end_date = validate_date_range(args.start_date, args.end_date)
+
     total_t0 = time.time()
     banner("WARSAW PUBLIC TRANSPORT DELAY ATTRIBUTION PIPELINE", fill="#")
-    logger.info(f"Target Stage: {args.stage.upper()} | Sample Size: {args.sample_size:,}")
+    range_info = f" | Date Range: {args.start_date or 'earliest'} -> {args.end_date or 'latest'}"
+    logger.info(
+        f"Target Stage: {args.stage.upper()} | Sample Size: {args.sample_size:,}{range_info}"
+    )
 
     stages_executed = {}
 

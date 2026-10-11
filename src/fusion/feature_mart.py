@@ -35,6 +35,8 @@ class FeatureMartAssembler:
         max_delay_seconds: int = 7200,
         max_records: Optional[int] = None,
         exclude_terminals: bool = True,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
     ) -> str:
         """Construct the optimized DuckDB SQL query for multi-source spatiotemporal fusion."""
         limit_clause = f"LIMIT {max_records}" if max_records else ""
@@ -45,6 +47,19 @@ class FeatureMartAssembler:
             if exclude_terminals
             else ""
         )
+
+        date_filter_clause = ""
+        if start_date or end_date:
+            from src.pipeline.ranges import build_date_filter_clause
+
+            filter_expr = build_date_filter_clause(
+                "feed_timestamp",
+                start_date=start_date,
+                end_date=end_date,
+                is_epoch_seconds=True,
+            )
+            if filter_expr and filter_expr != "1=1":
+                date_filter_clause = f"AND {filter_expr}"
 
         weather_subquery = (
             f"SELECT * FROM read_parquet('{weather_parquet_path}')"
@@ -116,6 +131,7 @@ class FeatureMartAssembler:
                     rt_departure_time
                 FROM read_parquet('{raw_pattern}', hive_partitioning=true)
                 WHERE ABS(arrival_delay_seconds) <= {max_delay_seconds}
+                {date_filter_clause}
                 QUALIFY ROW_NUMBER() OVER (
                     PARTITION BY trip_instance_key, stop_sequence
                     ORDER BY feed_timestamp DESC
@@ -268,6 +284,8 @@ class FeatureMartAssembler:
         output_parquet: Optional[str] = None,
         max_records: Optional[int] = None,
         exclude_terminals: bool = True,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
     ) -> str:
         """Execute full spatial-temporal join and anomaly filtering in DuckDB."""
         in_raw = raw_pattern or os.path.join(self.raw_dir, "**/*.parquet")
@@ -286,6 +304,8 @@ class FeatureMartAssembler:
             osm_parquet_path=in_osm,
             max_records=max_records,
             exclude_terminals=exclude_terminals,
+            start_date=start_date,
+            end_date=end_date,
         )
 
         copy_query = f"COPY ({sql}) TO '{out_path}' (FORMAT PARQUET, COMPRESSION SNAPPY)"
