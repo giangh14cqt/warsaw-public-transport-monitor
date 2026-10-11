@@ -17,47 +17,17 @@ import logging
 import os
 from typing import Any, Dict, List, Optional
 
-import matplotlib
 import numpy as np
 import pandas as pd
-
-matplotlib.use("Agg")
-import sys
-
-import matplotlib.pyplot as plt
 import shap
+
+from src.core.config import features, paths
+from src.visualization.plots import plot_shap_beeswarm, plot_shap_waterfall
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_FEATURE_GROUPS = {
-    # Operational features
-    "prev_stop_delay": "Operational Delay Propagation",
-    "prev2_stop_delay": "Operational Delay Propagation",
-    "trip_progress": "Operational Schedule Profile",
-    "headway_deviation": "Operational Dispatch Regularity",
-    "headway_actual_s": "Operational Dispatch Regularity",
-    "is_origin_stop": "Operational Schedule Profile",
-    "is_tram": "Operational Fleet Type",
-    # Infrastructure & Roadway Topology
-    "signalized_intersection_count": "Infrastructure Bottlenecks",
-    "segment_length_meters": "Infrastructure Geometry",
-    "is_dedicated_right_of_way": "Infrastructure Right-of-Way",
-    "lane_capacity": "Infrastructure Geometry",
-    "is_study_corridor": "Infrastructure Corridor",
-    # Temporal Dynamics
-    "hour_of_day": "Temporal Congestion Peaks",
-    "day_of_week": "Temporal Day-to-Day",
-    "is_peak_hour": "Temporal Congestion Peaks",
-    "is_morning_peak": "Temporal Congestion Peaks",
-    "is_evening_peak": "Temporal Congestion Peaks",
-    "is_weekend": "Temporal Day-to-Day",
-    # Meteorological Telemetry
-    "precipitation_mm": "Meteorological Conditions",
-    "temperature_c": "Meteorological Conditions",
-    "relative_humidity": "Meteorological Conditions",
-    "wind_speed_ms": "Meteorological Conditions",
-    "freezing_rain_flag": "Meteorological Conditions",
-}
+DEFAULT_FEATURE_GROUPS = features.feature_groups
+
 
 
 class TreeSHAPExplainer:
@@ -212,26 +182,10 @@ class TreeSHAPExplainer:
         if self.explanation is None:
             raise RuntimeError("Must call explain() before plotting summary.")
 
-        if output_path:
-            os.makedirs(os.path.dirname(output_path), exist_ok=True)
-
-        plt.figure(figsize=(10, 7), dpi=300)
-        shap.plots.beeswarm(self.explanation, max_display=max_display, show=False)
-        plt.title(
-            "Warsaw Transit Delay Telemetry: Global TreeSHAP Feature Attribution",
-            fontsize=12,
-            pad=12,
-        )
-        plt.tight_layout()
-
-        if output_path:
-            plt.savefig(output_path, bbox_inches="tight")
-            plt.close("all")
-            logger.info(f"Saved global TreeSHAP summary plot to: {output_path}")
-            return output_path
-        else:
-            plt.close("all")
+        if not output_path:
             return ""
+
+        return plot_shap_beeswarm(self.explanation, output_path, max_display=max_display)
 
     def plot_waterfall(
         self,
@@ -250,22 +204,12 @@ class TreeSHAPExplainer:
                 f"Sample index {sample_idx} out of range [0, {len(self.explanation) - 1}]."
             )
 
-        if output_path:
-            os.makedirs(os.path.dirname(output_path), exist_ok=True)
-
-        plt.figure(figsize=(9, 6), dpi=300)
-        shap.plots.waterfall(self.explanation[sample_idx], max_display=max_display, show=False)
-        plt.title(f"Local Delay Decomposition (Observation #{sample_idx})", fontsize=12, pad=12)
-        plt.tight_layout()
-
-        if output_path:
-            plt.savefig(output_path, bbox_inches="tight")
-            plt.close("all")
-            logger.info(f"Saved local waterfall plot to: {output_path}")
-            return output_path
-        else:
-            plt.close("all")
+        if not output_path:
             return ""
+
+        return plot_shap_waterfall(
+            self.explanation[sample_idx], output_path, sample_idx=sample_idx, max_display=max_display
+        )
 
     def find_extreme_delay_events(
         self,
@@ -340,8 +284,8 @@ class TreeSHAPExplainer:
 
 
 def run_shap_pipeline(
-    feature_mart_path: str = "data/processed/feature_mart.parquet",
-    output_dir: str = "reports/figures/xai",
+    feature_mart_path: Optional[str] = None,
+    output_dir: Optional[str] = None,
     sample_size: int = 30000,
 ) -> Dict[str, Any]:
     """Execute end-to-end TreeSHAP attribution diagnostics workflow."""
@@ -350,11 +294,13 @@ def run_shap_pipeline(
     from src.models.gbm import GradientBoostingBenchmark
     from src.models.validation import PurgedTemporalBlockSplitter
 
-    os.makedirs(output_dir, exist_ok=True)
+    mart_path_str = feature_mart_path or paths.get_feature_mart_str()
+    out_dir_str = output_dir or str(paths.figures_xai)
+    os.makedirs(out_dir_str, exist_ok=True)
     con = duckdb.connect()
     logger.info("Loading feature mart sample for TreeSHAP analysis...")
     df = con.execute(
-        f"SELECT * FROM '{feature_mart_path}' USING SAMPLE {sample_size} (reservoir, 42)"
+        f"SELECT * FROM '{mart_path_str}' USING SAMPLE {sample_size} (reservoir, 42)"
     ).df()
     if "is_terminal_stop" in df.columns:
         df = df[df["is_terminal_stop"] == False].copy()
@@ -388,10 +334,10 @@ def run_shap_pipeline(
     explainer = TreeSHAPExplainer(gbm)
     explainer.explain(test_df[valid_features], max_samples=1000)
 
-    beeswarm_path = explainer.plot_summary(os.path.join(output_dir, "shap_beeswarm_summary.png"))
+    beeswarm_path = explainer.plot_summary(os.path.join(out_dir_str, "shap_beeswarm_summary.png"))
     mean_shap_df = explainer.get_mean_absolute_shap()
     group_df = explainer.get_feature_group_attribution()
-    cases = explainer.diagnose_extreme_delays(test_df, output_dir, top_k=2)
+    cases = explainer.diagnose_extreme_delays(test_df, out_dir_str, top_k=2)
 
     return {
         "beeswarm_path": beeswarm_path,
@@ -402,8 +348,9 @@ def run_shap_pipeline(
 
 
 if __name__ == "__main__":
+    import sys
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-    mart_path = "data/processed/feature_mart.parquet"
+    mart_path = paths.get_feature_mart_str()
     if not os.path.exists(mart_path):
         print(f"Error: {mart_path} not found.")
         sys.exit(1)

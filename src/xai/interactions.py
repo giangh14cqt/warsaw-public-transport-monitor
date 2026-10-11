@@ -18,15 +18,12 @@ import logging
 import os
 from typing import Any, Dict, List, Optional, Tuple
 
-import matplotlib
 import numpy as np
 import pandas as pd
-
-matplotlib.use("Agg")
-import sys
-
-import matplotlib.pyplot as plt
 import shap
+
+from src.core.config import paths
+from src.visualization.plots import plot_interaction_buffering
 
 logger = logging.getLogger(__name__)
 
@@ -243,50 +240,16 @@ class InteractionQuantifier:
         preds_mixed = np.array(preds_mixed)
         preds_dedicated = np.array(preds_dedicated)
 
-        plt.figure(figsize=(9, 6), dpi=300)
-        plt.plot(
-            x_grid, preds_mixed, color="#d62728", lw=2.5, label="Shared Mixed Traffic (ROW = 0)"
-        )
-        plt.plot(
-            x_grid,
-            preds_dedicated,
-            color="#2ca02c",
-            lw=2.5,
-            linestyle="--",
-            label="Dedicated Right-of-Way (ROW = 1)",
-        )
-
-        # Fill buffering gap
-        plt.fill_between(
-            x_grid,
-            preds_dedicated,
-            preds_mixed,
-            where=(preds_mixed >= preds_dedicated),
-            color="#2ca02c",
-            alpha=0.15,
-            label="Infrastructure Delay Buffering Zone",
-        )
-
-        clean_shock = shock_feature.replace("_", " ").title()
-        plt.xlabel(f"{clean_shock}", fontsize=11)
-        plt.ylabel("Expected Delay Output (seconds)", fontsize=11)
-        plt.title(
-            f"Infrastructure Buffering Interaction: {clean_shock} vs Dedicated ROW",
-            fontsize=12,
-            pad=12,
-        )
-        plt.grid(True, linestyle=":", alpha=0.6)
-        plt.legend(loc="best", framealpha=0.9, fontsize=9)
-        plt.tight_layout()
-
-        if output_path:
-            plt.savefig(output_path, bbox_inches="tight")
-            plt.close("all")
-            logger.info(f"Saved interaction plot to: {output_path}")
-            return output_path
-        else:
-            plt.close("all")
+        if not output_path:
             return ""
+
+        return plot_interaction_buffering(
+            shock_feature=shock_feature,
+            x_grid=x_grid,
+            preds_mixed=preds_mixed,
+            preds_dedicated=preds_dedicated,
+            output_path=output_path,
+        )
 
     def run_suite(
         self,
@@ -324,8 +287,8 @@ class InteractionQuantifier:
 
 
 def run_interaction_pipeline(
-    feature_mart_path: str = "data/processed/feature_mart.parquet",
-    output_dir: str = "reports/figures/xai",
+    feature_mart_path: Optional[str] = None,
+    output_dir: Optional[str] = None,
     sample_size: int = 30000,
 ) -> Dict[str, Any]:
     """Execute end-to-end interaction and infrastructure buffering workflow."""
@@ -334,11 +297,13 @@ def run_interaction_pipeline(
     from src.models.gbm import GradientBoostingBenchmark
     from src.models.validation import PurgedTemporalBlockSplitter
 
-    os.makedirs(output_dir, exist_ok=True)
+    mart_path_str = feature_mart_path or paths.get_feature_mart_str()
+    out_dir_str = output_dir or str(paths.figures_xai)
+    os.makedirs(out_dir_str, exist_ok=True)
     con = duckdb.connect()
     logger.info("Loading feature mart sample for interaction quantification...")
     df = con.execute(
-        f"SELECT * FROM '{feature_mart_path}' USING SAMPLE {sample_size} (reservoir, 42)"
+        f"SELECT * FROM '{mart_path_str}' USING SAMPLE {sample_size} (reservoir, 42)"
     ).df()
     if "is_terminal_stop" in df.columns:
         df = df[df["is_terminal_stop"] == False].copy()
@@ -368,13 +333,14 @@ def run_interaction_pipeline(
     gbm.train(train_df, val_df, valid_features, n_estimators=80)
 
     quantifier = InteractionQuantifier(gbm)
-    suite_res = quantifier.run_suite(test_df[valid_features], output_dir=output_dir)
+    suite_res = quantifier.run_suite(test_df[valid_features], output_dir=out_dir_str)
     return suite_res
 
 
 if __name__ == "__main__":
+    import sys
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-    mart_path = "data/processed/feature_mart.parquet"
+    mart_path = paths.get_feature_mart_str()
     if not os.path.exists(mart_path):
         print(f"Error: {mart_path} not found.")
         sys.exit(1)

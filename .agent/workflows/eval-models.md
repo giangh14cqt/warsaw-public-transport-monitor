@@ -12,10 +12,15 @@ This workflow executes Phase 4 modeling POC benchmarks:
 
 ## Step 1: Run Model Benchmark Suite
 ```bash
+python3 run_pipeline.py --stage benchmark
+# Or directly via module:
 python3 -m src.models.benchmark
 ```
 
 ## Step 2: Generate xAI Attributions
 ```bash
+python3 run_pipeline.py --stage xai
+# Or directly via module:
 python3 -m src.xai.shap_explainer
 ```
+

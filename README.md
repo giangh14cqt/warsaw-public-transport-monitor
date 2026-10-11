@@ -99,10 +99,10 @@ The pipeline executes across six decoupled, modular layers:
 ## 3. Exogenous Data Fusion & Feature Mart
 
 Raw vehicle telemetry is enriched with exogenous environmental and infrastructural data using DuckDB:
-1. **Meteorological Telemetry (`src/exogenous/weather.py`)**:
+1. **Meteorological Telemetry (`src/exogenous/imgw.py`)**:
    - Harvested from official IMGW-PIB Polish synoptic weather archives.
    - Metrics: Precipitation intensity (`mm/h`), surface temperature (°C), relative humidity (%), wind speed (`m/s`), and freezing rain flags.
-2. **Road Corridor Topology (`src/exogenous/osm_corridors.py`)**:
+2. **Road Corridor Topology (`src/exogenous/osm.py`)**:
    - Extracted from OpenStreetMap via OSMnx along core Warsaw transit corridors (*Al. Jerozolimskie, Puławska, Trasa W-Z, Towarowa/Okopowa*).
    - Metrics: `is_dedicated_right_of_way` (segregated tram tracks or dedicated bus lanes), `signalized_intersection_count`, `segment_length_meters`, and `lane_capacity`.
 3. **Autoregressive Trajectory Lags (`src/fusion/trajectory.py`)**:
@@ -218,11 +218,14 @@ python3 run_pipeline.py --stage benchmark --sample-size 50000
 ├── backup_to_gdrive.sh       # Automated rclone backup to Google Drive
 ├── pull_from_gdrive.sh       # Local data sync from Google Drive
 ├── src/
+│   ├── core/                 # Centralized configuration, paths, features & domain constants
 │   ├── ingestion/            # Phase 1: GTFS-RT fetcher, static manager, Parquet storage
 │   ├── exogenous/            # Phase 2: IMGW weather harvester, OSMnx road topology
 │   ├── fusion/               # Phase 3: Trajectory reconstruction, DuckDB feature mart
 │   ├── models/               # Phase 4: Purged temporal splitter, TWFE panel, GBM benchmarks
-│   └── xai/                  # Phase 5: TreeSHAP, ALE curves, interactions, DiCE counterfactuals
+│   ├── xai/                  # Phase 5: TreeSHAP, ALE curves, interactions, DiCE counterfactuals
+│   ├── visualization/        # Academic publication styling & reusable plot generators
+│   └── pipeline/             # Modular stage executors (Stages 1 through 5)
 ├── reports/
 │   ├── EXECUTIVE_REPORT.md   # Comprehensive executive thesis findings report
 │   ├── PRESENTATION_SLIDES.md# 12 Marp-ready presentation slides

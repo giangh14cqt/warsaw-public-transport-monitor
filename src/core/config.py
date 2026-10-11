@@ -1,0 +1,182 @@
+"""
+Warsaw Transit Telemetry & Attribution System: Centralized Configuration.
+Provides immutable dataclasses for project paths, ingestion parameters, and feature registries.
+"""
+
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Dict, List
+
+# Anchor project root dynamically relative to this file
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+
+
+@dataclass(frozen=True)
+class DataPaths:
+    """Canonical path registry for datasets, archives, logs, and artifacts."""
+
+    root: Path = PROJECT_ROOT
+    data_dir: Path = root / "data"
+    raw_dir: Path = data_dir / "raw"
+    raw_pattern: str = "data/raw/**/*.parquet"
+    gtfs_dir: Path = data_dir / "gtfs"
+    processed_dir: Path = data_dir / "processed"
+
+    # Processed Datasets
+    feature_mart: Path = processed_dir / "feature_mart.parquet"
+    weather_hourly: Path = processed_dir / "imgw_weather_hourly.parquet"
+    osm_corridors: Path = processed_dir / "osm_corridor_segments.parquet"
+
+    # Output Artifacts & Exhibits
+    reports_dir: Path = root / "reports"
+    figures_xai: Path = reports_dir / "figures" / "xai"
+    tables_dir: Path = reports_dir / "tables"
+    logs_dir: Path = root / "logs"
+
+    def get_feature_mart_str(self) -> str:
+        return str(self.feature_mart)
+
+    def get_raw_pattern(self) -> str:
+        return self.raw_pattern
+
+
+@dataclass(frozen=True)
+class IngestionConfig:
+    """Runtime thresholds and remote endpoints for telemetry collection."""
+
+    feed_url: str = "https://cdn.zbiorkom.live/gtfs-rt/warsaw.pb"
+    static_gtfs_url: str = "https://cdn.zbiorkom.live/gtfs/warsaw.zip"
+    poll_interval_seconds: int = 30
+    flush_interval_seconds: int = 300  # 5 minutes
+    flush_record_threshold: int = 5000  # 5,000 records
+    health_report_interval_seconds: int = 900  # 15 minutes
+    weekly_check_interval_seconds: int = 86400  # 24 hours
+
+
+@dataclass(frozen=True)
+class FeatureRegistry:
+    """Canonical taxonomy of engineered transit, infrastructure, temporal, and weather features."""
+
+    operational: List[str] = field(
+        default_factory=lambda: [
+            "prev_stop_delay",
+            "prev2_stop_delay",
+            "trip_progress",
+            "headway_deviation",
+            "headway_actual_s",
+            "is_origin_stop",
+            "is_tram",
+        ]
+    )
+
+    infrastructure: List[str] = field(
+        default_factory=lambda: [
+            "signalized_intersection_count",
+            "segment_length_meters",
+            "is_dedicated_right_of_way",
+            "lane_capacity",
+            "is_study_corridor",
+        ]
+    )
+
+    temporal: List[str] = field(
+        default_factory=lambda: [
+            "hour_of_day",
+            "day_of_week",
+            "is_peak_hour",
+            "is_morning_peak",
+            "is_evening_peak",
+            "is_weekend",
+        ]
+    )
+
+    meteorological: List[str] = field(
+        default_factory=lambda: [
+            "precipitation_mm",
+            "temperature_c",
+            "relative_humidity",
+            "wind_speed_ms",
+            "freezing_rain_flag",
+        ]
+    )
+
+    actionable: List[str] = field(
+        default_factory=lambda: [
+            "prev_stop_delay",
+            "headway_deviation",
+            "is_dedicated_right_of_way",
+            "signalized_intersection_count",
+        ]
+    )
+
+    immutable: List[str] = field(
+        default_factory=lambda: [
+            "hour_of_day",
+            "day_of_week",
+            "is_peak_hour",
+            "segment_length_meters",
+            "lane_capacity",
+            "is_tram",
+            "precipitation_mm",
+            "temperature_c",
+            "relative_humidity",
+            "wind_speed_ms",
+            "freezing_rain_flag",
+        ]
+    )
+
+    benchmark_features: List[str] = field(
+        default_factory=lambda: [
+            "prev_stop_delay",
+            "signalized_intersection_count",
+            "segment_length_meters",
+            "is_dedicated_right_of_way",
+            "trip_progress",
+            "headway_deviation",
+            "hour_of_day",
+            "day_of_week",
+            "is_peak_hour",
+            "is_tram",
+            "lane_capacity",
+            "precipitation_mm",
+            "temperature_c",
+        ]
+    )
+
+    feature_groups: Dict[str, str] = field(
+        default_factory=lambda: {
+            # Operational features
+            "prev_stop_delay": "Operational Delay Propagation",
+            "prev2_stop_delay": "Operational Delay Propagation",
+            "trip_progress": "Operational Schedule Profile",
+            "headway_deviation": "Operational Dispatch Regularity",
+            "headway_actual_s": "Operational Dispatch Regularity",
+            "is_origin_stop": "Operational Schedule Profile",
+            "is_tram": "Operational Fleet Type",
+            # Infrastructure & Roadway Topology
+            "signalized_intersection_count": "Infrastructure Bottlenecks",
+            "segment_length_meters": "Infrastructure Geometry",
+            "is_dedicated_right_of_way": "Infrastructure Right-of-Way",
+            "lane_capacity": "Infrastructure Geometry",
+            "is_study_corridor": "Infrastructure Corridor",
+            # Temporal Dynamics
+            "hour_of_day": "Temporal Congestion Peaks",
+            "day_of_week": "Temporal Day-to-Day",
+            "is_peak_hour": "Temporal Congestion Peaks",
+            "is_morning_peak": "Temporal Congestion Peaks",
+            "is_evening_peak": "Temporal Congestion Peaks",
+            "is_weekend": "Temporal Day-to-Day",
+            # Meteorological Telemetry
+            "precipitation_mm": "Meteorological Conditions",
+            "temperature_c": "Meteorological Conditions",
+            "relative_humidity": "Meteorological Conditions",
+            "wind_speed_ms": "Meteorological Conditions",
+            "freezing_rain_flag": "Meteorological Conditions",
+        }
+    )
+
+
+# Canonical singletons for easy import across modules
+paths = DataPaths()
+features = FeatureRegistry()
+ingestion_config = IngestionConfig()

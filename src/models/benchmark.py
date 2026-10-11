@@ -10,6 +10,8 @@ from typing import List, Optional
 import duckdb
 import pandas as pd
 
+from src.core.config import features, paths
+from src.core.constants import classify_cohort_series
 from src.models.gbm import GradientBoostingBenchmark
 from src.models.metrics import compute_regression_metrics
 from src.models.twfe import TWFEBaselineModel
@@ -20,23 +22,7 @@ logger = logging.getLogger(__name__)
 
 def classify_cohort(df: pd.DataFrame) -> pd.Series:
     """Classify Warsaw transit line into operational cohort."""
-    if "transit_cohort" in df.columns:
-        return df["transit_cohort"]
-
-    def _get_cohort(row) -> str:
-        r_str = str(row.get("route_id", "")).strip()
-        is_tram = row.get("is_tram", 0)
-        if is_tram == 1 or (r_str.isdigit() and 1 <= int(r_str) <= 79):
-            return "urban_tram"
-        if r_str.isdigit() and 100 <= int(r_str) <= 599:
-            return "urban_bus"
-        if (r_str.isdigit() and 700 <= int(r_str) <= 899) or r_str.upper().startswith("L"):
-            return "suburban_bus"
-        if r_str.upper().startswith("N"):
-            return "night_bus"
-        return "other"
-
-    return df.apply(_get_cohort, axis=1)
+    return classify_cohort_series(df)
 
 
 def run_benchmark(
@@ -101,22 +87,7 @@ def run_benchmark(
         f"{audit['val_rows']} val, {audit['test_rows']} test records."
     )
 
-    feature_cols = [
-        "prev_stop_delay",
-        "signalized_intersection_count",
-        "segment_length_meters",
-        "is_dedicated_right_of_way",
-        "trip_progress",
-        "headway_deviation",
-        "hour_of_day",
-        "day_of_week",
-        "is_peak_hour",
-        "is_tram",
-        "lane_capacity",
-        "precipitation_mm",
-        "temperature_c",
-    ]
-    valid_features = [c for c in feature_cols if c in train_df.columns]
+    valid_features = [c for c in features.benchmark_features if c in train_df.columns]
 
     # 1. TWFE Panel Regression Baseline
     logger.info("Training TWFE baseline model...")
@@ -207,7 +178,7 @@ def run_stratified_benchmark(
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-    mart_path = "data/processed/feature_mart.parquet"
+    mart_path = paths.get_feature_mart_str()
     if os.path.exists(mart_path):
         con = duckdb.connect()
         logger.info(f"Loading feature mart from {mart_path}...")

@@ -31,32 +31,17 @@ try:
 except ImportError:
     HAS_DICE = False
 
+from src.core.config import features, paths
+from src.visualization.plots import plot_counterfactual_policy_summary
+
 logger = logging.getLogger(__name__)
 
 
 class CounterfactualDiagnostics:
     """Generates and analyzes actionable counterfactual interventions for transit delay mitigation."""
 
-    ACTIONABLE_FEATURES = [
-        "prev_stop_delay",
-        "headway_deviation",
-        "is_dedicated_right_of_way",
-        "signalized_intersection_count",
-    ]
-
-    IMMUTABLE_FEATURES = [
-        "hour_of_day",
-        "day_of_week",
-        "is_peak_hour",
-        "segment_length_meters",
-        "lane_capacity",
-        "is_tram",
-        "precipitation_mm",
-        "temperature_c",
-        "relative_humidity",
-        "wind_speed_ms",
-        "freezing_rain_flag",
-    ]
+    ACTIONABLE_FEATURES = features.actionable
+    IMMUTABLE_FEATURES = features.immutable
 
     def __init__(
         self,
@@ -593,98 +578,13 @@ class CounterfactualDiagnostics:
         """
         Plot comparative bar chart comparing mean delay reduction and on-time recovery rates across policies.
         """
-        os.makedirs(os.path.dirname(output_path), exist_ok=True)
-        savings = summary_dict["mean_delay_reduction_seconds"]
-        recovery = summary_dict["on_time_recovery_rates"]
-
-        policy_names = [
-            "Dedicated ROW\nUpgrade",
-            "Headway\nRegularization",
-            "Upstream Delay\nAbsorption",
-            "Transit Signal\nPriority (TSP)",
-            "Joint Multimodal\nRemedy",
-        ]
-        keys = [
-            "dedicated_row_upgrade",
-            "headway_regularization",
-            "upstream_delay_absorption",
-            "transit_signal_priority",
-            "joint_multimodal_remedy",
-        ]
-
-        savings_vals = [savings.get(k, 0.0) for k in keys]
-        recovery_vals = [recovery.get(k, 0.0) * 100 for k in keys]
-
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5.5))
-
-        # Panel 1: Mean Delay Reduction (Seconds)
-        bar_colors = ["#0275d8", "#5bc0de", "#f0ad4e", "#9b59b6", "#5cb85c"]
-        bars1 = ax1.bar(
-            policy_names, savings_vals, color=bar_colors, edgecolor="black", alpha=0.85, width=0.55
-        )
-        ax1.set_ylabel("Mean Delay Reduction (seconds)", fontsize=11, fontweight="bold")
-        ax1.set_title("Average Delay Attenuation by Intervention", fontsize=12, fontweight="bold")
-        ax1.grid(axis="y", linestyle=":", alpha=0.6)
-
-        ax1.set_ylim(0, max(max(savings_vals) * 1.25, 1.0) if savings_vals else 5.0)
-
-        for bar in bars1:
-            h = bar.get_height()
-            offset = max(h * 0.04, 0.1)
-            ax1.text(
-                bar.get_x() + bar.get_width() / 2,
-                h + offset,
-                f"+{h:.1f}s",
-                ha="center",
-                va="bottom",
-                fontweight="bold",
-                fontsize=10,
-            )
-
-        # Panel 2: On-Time Recovery Rate (%)
-        bars2 = ax2.bar(
-            policy_names, recovery_vals, color=bar_colors, edgecolor="black", alpha=0.85, width=0.55
-        )
-        ax2.set_ylabel("On-Time Restoration Rate (%)", fontsize=11, fontweight="bold")
-        ax2.set_title(
-            "Probability of Achieving On-Time Status ($\\Delta t \\leq 120$s)",
-            fontsize=12,
-            fontweight="bold",
-        )
-        ax2.grid(axis="y", linestyle=":", alpha=0.6)
-        ax2.set_ylim(0, 115)
-
-        for bar in bars2:
-            h = bar.get_height()
-            ax2.text(
-                bar.get_x() + bar.get_width() / 2,
-                h + 2.0,
-                f"{h:.1f}%",
-                ha="center",
-                va="bottom",
-                fontweight="bold",
-                fontsize=10,
-            )
-
-        plt.suptitle(
-            "Empirical Policy Efficacy: Transit Delay Counterfactual Remedies (N = {})".format(
-                summary_dict.get("total_incidents_analyzed", 0)
-            ),
-            fontsize=14,
-            fontweight="bold",
-            y=1.02,
-        )
-        plt.tight_layout()
-        plt.savefig(output_path, dpi=300)
-        plt.close()
-        logger.info(f"Counterfactual policy summary chart saved to {output_path}")
-        return output_path
+        return plot_counterfactual_policy_summary(summary_dict, output_path)
 
 
 def run_counterfactual_pipeline(
-    feature_mart_path: str = "data/processed/feature_mart.parquet",
-    output_dir: str = "reports/figures/xai",
-    tables_dir: str = "reports/tables/xai",
+    feature_mart_path: Optional[str] = None,
+    output_dir: Optional[str] = None,
+    tables_dir: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Execute end-to-end Counterfactual Diagnostics workflow."""
     import duckdb
@@ -692,13 +592,16 @@ def run_counterfactual_pipeline(
     from src.models.gbm import GradientBoostingBenchmark
     from src.models.validation import PurgedTemporalBlockSplitter
 
-    os.makedirs(output_dir, exist_ok=True)
-    os.makedirs(tables_dir, exist_ok=True)
+    mart_path_str = feature_mart_path or paths.get_feature_mart_str()
+    out_dir_str = output_dir or str(paths.figures_xai)
+    tbl_dir_str = tables_dir or str(paths.tables_dir / "xai")
+    os.makedirs(out_dir_str, exist_ok=True)
+    os.makedirs(tbl_dir_str, exist_ok=True)
 
     con = duckdb.connect()
-    logger.info(f"Loading feature mart from {feature_mart_path}...")
+    logger.info(f"Loading feature mart from {mart_path_str}...")
     sample_df = con.execute(
-        f"SELECT * FROM '{feature_mart_path}' USING SAMPLE 100000 (reservoir, 42)"
+        f"SELECT * FROM '{mart_path_str}' USING SAMPLE 100000 (reservoir, 42)"
     ).df()
 
     target_col = "delta_t_run" if "delta_t_run" in sample_df.columns else "arrival_delay_seconds"
@@ -738,9 +641,9 @@ def run_counterfactual_pipeline(
     )
 
     # Save summary tables
-    summary_csv = os.path.join(tables_dir, "counterfactual_summary.csv")
+    summary_csv = os.path.join(tbl_dir_str, "counterfactual_summary.csv")
     batch_df.to_csv(summary_csv, index=False)
-    summary_json = os.path.join(tables_dir, "counterfactual_policy_metrics.json")
+    summary_json = os.path.join(tbl_dir_str, "counterfactual_policy_metrics.json")
     with open(summary_json, "w") as f:
         json.dump(summary, f, indent=2)
 
@@ -751,14 +654,14 @@ def run_counterfactual_pipeline(
         worst_instance, target_on_time_threshold=120.0
     )
 
-    case_plot = os.path.join(output_dir, "counterfactual_case_study.png")
+    case_plot = os.path.join(out_dir_str, "counterfactual_case_study.png")
     cf_engine.plot_counterfactual_case_study(
         case_diag,
         output_path=case_plot,
         title=f"Route {worst_instance.get('route_id', 'Unknown')} Incident (Observed Delay: {worst_instance[target_col]:.0f}s)",
     )
 
-    policy_plot = os.path.join(output_dir, "counterfactual_policy_impact.png")
+    policy_plot = os.path.join(out_dir_str, "counterfactual_policy_impact.png")
     cf_engine.plot_policy_remedy_summary(summary, output_path=policy_plot)
 
     return {

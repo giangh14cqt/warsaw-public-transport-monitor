@@ -17,3 +17,15 @@
 
 ## 3. Weekly Static Timetable Versioning
 - Static GTFS snapshots must be versioned by schedule date in `data/gtfs/gtfs_YYYY_MM_DD.zip` and unpacked into isolated date folders to prevent schedule schema drift.
+
+## 4. Modular Codebase Architecture
+The system is partitioned into clean, decoupled layers:
+- `src/core/`: Centralized configuration, project paths, feature registry, and domain constants.
+- `src/ingestion/`: GTFS-RT protobuf poller + weekly static GTFS archiver + partitioned Parquet writer.
+- `src/exogenous/`: IMGW-PIB weather telemetry + OSMnx road corridor topology.
+- `src/fusion/`: Trajectory delay decomposition + multi-source feature mart assembly.
+- `src/models/`: Purged temporal block splitting + TWFE panel regression + LightGBM/CatBoost benchmarks.
+- `src/xai/`: TreeSHAP attribution + ALE threshold detection + interaction buffering + DiCE counterfactuals.
+- `src/visualization/`: Centralized academic publication styling & standalone plot generators.
+- `src/pipeline/`: Modular stage executors (`stages.py`) coordinated via CLI runner (`run_pipeline.py`).
+

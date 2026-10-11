@@ -11,14 +11,11 @@ import logging
 import os
 from typing import Any, Dict, List, Optional
 
-import matplotlib
 import numpy as np
 import pandas as pd
 
-matplotlib.use("Agg")
-import sys
-
-import matplotlib.pyplot as plt
+from src.core.config import paths
+from src.visualization.plots import plot_ale_curve
 
 logger = logging.getLogger(__name__)
 
@@ -258,77 +255,12 @@ class ALENonLinearDetector:
         """
         Generate and save a publication-quality 1D ALE diagnostic chart.
         """
-        if output_path:
-            os.makedirs(os.path.dirname(output_path), exist_ok=True)
-
-        fig, (ax_main, ax_rug) = plt.subplots(
-            2, 1, figsize=(9, 6), gridspec_kw={"height_ratios": [5, 1]}, sharex=True, dpi=300
+        return plot_ale_curve(
+            feature_name=feature_name,
+            ale_df=ale_df,
+            tipping_points=tipping_points,
+            output_path=output_path,
         )
-
-        x = ale_df["grid_val"].to_numpy()
-        y = ale_df["ale_centered"].to_numpy()
-
-        # Main ALE curve
-        ax_main.plot(x, y, color="#1f77b4", lw=2.5, label="1D Accumulated Local Effect (ALE)")
-        ax_main.axhline(0, color="gray", linestyle="--", alpha=0.5, lw=1)
-
-        # Highlight zero / freezing point for temperature
-        if "temp" in feature_name.lower() and x.min() <= 0 <= x.max():
-            ax_main.axvline(
-                0, color="#d62728", linestyle=":", lw=1.8, label="Freezing Boundary (0°C)"
-            )
-
-        # Highlight tipping points
-        if tipping_points:
-            for pt in tipping_points:
-                tx = pt["threshold_value"]
-                ty = pt["ale_effect_at_threshold"]
-                ax_main.axvline(
-                    tx, color="#ff7f0e", linestyle="--", lw=1.5, label=f"Tipping Point ({tx:.2f})"
-                )
-                ax_main.scatter([tx], [ty], color="#ff7f0e", s=60, zorder=5)
-                ax_main.annotate(
-                    f"{pt['threshold_value']:.1f}",
-                    xy=(tx, ty),
-                    xytext=(tx + 0.05 * (x.max() - x.min()), ty + 1.0),
-                    fontsize=9,
-                    fontweight="bold",
-                    color="#d95f02",
-                    arrowprops=dict(arrowstyle="->", color="#ff7f0e", lw=1),
-                )
-
-        ax_main.set_ylabel("Accumulated Delay Effect (seconds)", fontsize=11)
-        clean_name = feature_name.replace("_", " ").title()
-        ax_main.set_title(f"Accumulated Local Effects (ALE): {clean_name}", fontsize=13, pad=10)
-        ax_main.grid(True, linestyle=":", alpha=0.6)
-        ax_main.legend(loc="best", framealpha=0.9, fontsize=9)
-
-        # Bottom density / rug plot
-        if data_rug is not None and feature_name in data_rug.columns:
-            rug_vals = data_rug[feature_name].dropna().astype(float).to_numpy()
-            bins = min(30, max(len(np.unique(rug_vals)), 2))
-            ax_rug.hist(rug_vals, bins=bins, color="#aec7e8", edgecolor="white", density=True)
-            ax_rug.set_ylabel("Density", fontsize=8)
-        else:
-            counts = ale_df["bin_count"].to_numpy()[:-1]
-            mid_x = (x[:-1] + x[1:]) / 2.0
-            ax_rug.bar(mid_x, counts, width=(x[1:] - x[:-1]), color="#aec7e8", edgecolor="white")
-            ax_rug.set_ylabel("Count", fontsize=8)
-
-        ax_rug.set_xlabel(f"{clean_name}", fontsize=11)
-        ax_rug.set_yticks([])
-        ax_rug.grid(False)
-
-        plt.tight_layout()
-
-        if output_path:
-            plt.savefig(output_path, bbox_inches="tight")
-            plt.close("all")
-            logger.info(f"Saved ALE chart to: {output_path}")
-            return output_path
-        else:
-            plt.close("all")
-            return ""
 
     def run_suite(
         self,
@@ -372,8 +304,8 @@ class ALENonLinearDetector:
 
 
 def run_ale_pipeline(
-    feature_mart_path: str = "data/processed/feature_mart.parquet",
-    output_dir: str = "reports/figures/xai",
+    feature_mart_path: Optional[str] = None,
+    output_dir: Optional[str] = None,
     sample_size: int = 30000,
 ) -> Dict[str, Any]:
     """Execute end-to-end ALE non-linear curve diagnostics workflow."""
@@ -382,11 +314,13 @@ def run_ale_pipeline(
     from src.models.gbm import GradientBoostingBenchmark
     from src.models.validation import PurgedTemporalBlockSplitter
 
-    os.makedirs(output_dir, exist_ok=True)
+    mart_path_str = feature_mart_path or paths.get_feature_mart_str()
+    out_dir_str = output_dir or str(paths.figures_xai)
+    os.makedirs(out_dir_str, exist_ok=True)
     con = duckdb.connect()
     logger.info("Loading feature mart sample for ALE curve diagnostics...")
     df = con.execute(
-        f"SELECT * FROM '{feature_mart_path}' USING SAMPLE {sample_size} (reservoir, 42)"
+        f"SELECT * FROM '{mart_path_str}' USING SAMPLE {sample_size} (reservoir, 42)"
     ).df()
     if "is_terminal_stop" in df.columns:
         df = df[df["is_terminal_stop"] == False].copy()
@@ -427,14 +361,15 @@ def run_ale_pipeline(
             "temperature_c",
             "precipitation_mm",
         ],
-        output_dir=output_dir,
+        output_dir=out_dir_str,
     )
     return report
 
 
 if __name__ == "__main__":
+    import sys
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-    mart_path = "data/processed/feature_mart.parquet"
+    mart_path = paths.get_feature_mart_str()
     if not os.path.exists(mart_path):
         print(f"Error: {mart_path} not found.")
         sys.exit(1)
