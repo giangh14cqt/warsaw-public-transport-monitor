@@ -339,6 +339,247 @@ class OSMCorridorExtractor:
         logger.info(f"Successfully processed {len(df)} corridor topology segments")
         return df
 
+    def process_citywide_network(
+        self,
+        gtfs_dir: Optional[str] = None,
+        signals_parquet: Optional[str] = None,
+    ) -> pd.DataFrame:
+        """
+        Extract and compute road topology metrics for ALL directed stop-to-stop links
+        across the entire Warsaw metropolitan transit network.
+        """
+        import glob
+
+        if gtfs_dir is None:
+            gtfs_dirs = sorted(glob.glob("data/gtfs/202*"))
+            gtfs_dir = gtfs_dirs[-1] if gtfs_dirs else "data/gtfs/2026_10_11"
+
+        stops_file = os.path.join(gtfs_dir, "stops.txt")
+        stop_times_file = os.path.join(gtfs_dir, "stop_times.txt")
+        trips_file = os.path.join(gtfs_dir, "trips.txt")
+        routes_file = os.path.join(gtfs_dir, "routes.txt")
+
+        if not os.path.exists(stops_file) or not os.path.exists(stop_times_file):
+            logger.warning(
+                f"GTFS files not found in {gtfs_dir}, falling back to corridor filter."
+            )
+            return self.process_corridors(gtfs_dir=gtfs_dir)
+
+        con = duckdb.connect()
+        try:
+            stops_df = con.execute(f"""
+                SELECT 
+                    stop_id, 
+                    stop_name, 
+                    CAST(stop_lat AS DOUBLE) as stop_lat, 
+                    CAST(stop_lon AS DOUBLE) as stop_lon,
+                    COALESCE(street, '') as street,
+                    zone_id
+                FROM read_csv_auto('{stops_file}')
+            """).df().set_index("stop_id")
+
+            has_routes = os.path.exists(routes_file) and os.path.exists(trips_file)
+            if has_routes:
+                links_sql = f"""
+                    WITH trips_route AS (
+                        SELECT t.trip_id, r.route_id, r.route_type
+                        FROM read_csv_auto('{trips_file}') t
+                        JOIN read_csv_auto('{routes_file}') r ON t.route_id = r.route_id
+                    ),
+                    st AS (
+                        SELECT s.trip_id, CAST(s.stop_sequence AS INT) as seq, s.stop_id, tr.route_id, tr.route_type
+                        FROM read_csv_auto('{stop_times_file}') s
+                        JOIN trips_route tr ON s.trip_id = tr.trip_id
+                    ),
+                    pairs AS (
+                        SELECT 
+                            LAG(stop_id) OVER (PARTITION BY trip_id ORDER BY seq) as stop_id_prev,
+                            stop_id as stop_id_curr,
+                            route_id,
+                            route_type
+                        FROM st
+                    )
+                    SELECT 
+                        stop_id_prev, 
+                        stop_id_curr,
+                        MAX(CASE WHEN route_type = 0 OR TRY_CAST(route_id AS INT) < 100 THEN 1 ELSE 0 END) as is_tram_link
+                    FROM pairs
+                    WHERE stop_id_prev IS NOT NULL
+                    GROUP BY stop_id_prev, stop_id_curr
+                """
+            else:
+                links_sql = f"""
+                    WITH st AS (
+                        SELECT trip_id, CAST(stop_sequence AS INT) as seq, stop_id
+                        FROM read_csv_auto('{stop_times_file}')
+                    ),
+                    pairs AS (
+                        SELECT 
+                            LAG(stop_id) OVER (PARTITION BY trip_id ORDER BY seq) as stop_id_prev,
+                            stop_id as stop_id_curr
+                        FROM st
+                    )
+                    SELECT 
+                        stop_id_prev, 
+                        stop_id_curr,
+                        0 as is_tram_link
+                    FROM pairs
+                    WHERE stop_id_prev IS NOT NULL
+                    GROUP BY stop_id_prev, stop_id_curr
+                """
+            links_df = con.execute(links_sql).df()
+        finally:
+            con.close()
+
+        valid_mask = links_df["stop_id_prev"].isin(stops_df.index) & links_df["stop_id_curr"].isin(stops_df.index)
+        links_df = links_df[valid_mask].reset_index(drop=True)
+
+        s1_lats = stops_df.loc[links_df["stop_id_prev"], "stop_lat"].values
+        s1_lons = stops_df.loc[links_df["stop_id_prev"], "stop_lon"].values
+        s2_lats = stops_df.loc[links_df["stop_id_curr"], "stop_lat"].values
+        s2_lons = stops_df.loc[links_df["stop_id_curr"], "stop_lon"].values
+
+        r = 6371000.0
+        dlat = np.radians(s2_lats - s1_lats)
+        dlon = np.radians(s2_lons - s1_lons)
+        a = np.sin(dlat / 2.0)**2 + np.cos(np.radians(s1_lats)) * np.cos(np.radians(s2_lats)) * np.sin(dlon / 2.0)**2
+        dists = np.round(2.0 * r * np.arctan2(np.sqrt(a), np.sqrt(1.0 - a)), 1)
+        links_df["segment_length_meters"] = dists
+
+        sig_file = signals_parquet or os.path.join(self.cache_dir, "osm_signals_warsaw_citywide.parquet")
+        if not os.path.exists(sig_file):
+            sig_files = glob.glob(os.path.join(self.cache_dir, "osm_signals_*.parquet"))
+            if sig_files:
+                sig_df = pd.concat([pd.read_parquet(f) for f in sig_files]).drop_duplicates(subset=["osmid"])
+            else:
+                sig_df = pd.DataFrame(columns=["osmid", "lat", "lon"])
+        else:
+            sig_df = pd.read_parquet(sig_file)
+
+        sig_counts = np.zeros(len(links_df), dtype=int)
+        if not sig_df.empty:
+            sig_lats = sig_df["lat"].values
+            sig_lons = sig_df["lon"].values
+            buffer_deg = 0.00035
+            buffer_deg_sq = buffer_deg ** 2
+
+            for i in range(len(links_df)):
+                lat1, lon1 = s1_lats[i], s1_lons[i]
+                lat2, lon2 = s2_lats[i], s2_lons[i]
+                min_lat, max_lat = min(lat1, lat2) - buffer_deg, max(lat1, lat2) + buffer_deg
+                min_lon, max_lon = min(lon1, lon2) - buffer_deg, max(lon1, lon2) + buffer_deg
+                cand = (sig_lats >= min_lat) & (sig_lats <= max_lat) & (sig_lons >= min_lon) & (sig_lons <= max_lon)
+                if not np.any(cand):
+                    continue
+                c_lats, c_lons = sig_lats[cand], sig_lons[cand]
+                p1 = np.array([lon1, lat1])
+                p2 = np.array([lon2, lat2])
+                v = p2 - p1
+                v_len_sq = np.dot(v, v)
+                if v_len_sq == 0:
+                    sig_counts[i] = len(c_lats)
+                    continue
+                p = np.column_stack([c_lons, c_lats])
+                t = np.clip(np.dot(p - p1, v) / v_len_sq, 0.0, 1.0)
+                proj = p1 + np.outer(t, v)
+                dist_sq = np.sum((p - proj) ** 2, axis=1)
+                sig_counts[i] = np.sum(dist_sq <= buffer_deg_sq)
+
+        links_df["signalized_intersection_count"] = sig_counts
+
+        s1_streets = stops_df.loc[links_df["stop_id_prev"], "street"].values
+        s2_streets = stops_df.loc[links_df["stop_id_curr"], "street"].values
+
+        corridor_names = []
+        dedicated_row = []
+        lane_capacity = []
+
+        for i in range(len(links_df)):
+            st1 = str(s1_streets[i]).lower()
+            st2 = str(s2_streets[i]).lower()
+            is_tram = bool(links_df["is_tram_link"][i] == 1)
+
+            if "jerozolimsk" in st1 or "jerozolimsk" in st2:
+                c_name = "al_jerozolimskie"
+                row = True
+                lanes = 3
+            elif "puławsk" in st1 or "puławsk" in st2:
+                c_name = "pulawska"
+                row = True
+                lanes = 3
+            elif "solidarnośc" in st1 or "solidarnośc" in st2:
+                c_name = "trasa_wz"
+                row = True
+                lanes = 2
+            elif "towarow" in st1 or "towarow" in st2 or "okopow" in st1 or "okopow" in st2:
+                c_name = "towarowa_okopowa"
+                row = True
+                lanes = 3
+            elif "łazienkowsk" in st1 or "łazienkowsk" in st2 or "stanów zjednoczonych" in st1 or "wawelsk" in st1:
+                c_name = "trasa_lazienkowska"
+                row = True
+                lanes = 3
+            elif "radzymińsk" in st1 or "radzymińsk" in st2:
+                c_name = "radzyminska"
+                row = True
+                lanes = 3
+            elif "górczewsk" in st1 or "górczewsk" in st2:
+                c_name = "gorczewska"
+                row = True
+                lanes = 3
+            elif "modlińsk" in st1 or "modlińsk" in st2:
+                c_name = "modlinska"
+                row = True
+                lanes = 3
+            elif "wisłostrad" in st1 or "czerniakowsk" in st1 or "wybrzeże" in st1:
+                c_name = "wislostrada"
+                row = False
+                lanes = 3
+            elif "kasprzak" in st1 or "prost" in st1:
+                c_name = "prosta_kasprzaka"
+                row = True
+                lanes = 3
+            elif "marszałkowsk" in st1 or "marszałkowsk" in st2:
+                c_name = "marszalkowska"
+                row = is_tram
+                lanes = 3
+            elif "jana pawła" in st1 or "chałubińsk" in st1 or "niepodległoś" in st1:
+                c_name = "al_jana_pawla_ii"
+                row = is_tram
+                lanes = 3
+            else:
+                c_name = None
+                row = is_tram
+                lanes = 2 if dists[i] < 1500 else 3
+
+            if is_tram:
+                row = True
+
+            corridor_names.append(c_name)
+            dedicated_row.append(row)
+            lane_capacity.append(lanes)
+
+        links_df["corridor_name"] = corridor_names
+        links_df["is_dedicated_right_of_way"] = dedicated_row
+        links_df["lane_capacity"] = lane_capacity
+        links_df["edge_id"] = links_df["stop_id_prev"].astype(str) + "_" + links_df["stop_id_curr"].astype(str)
+        links_df["stop_name_prev"] = stops_df.loc[links_df["stop_id_prev"], "stop_name"].values
+        links_df["stop_name_curr"] = stops_df.loc[links_df["stop_id_curr"], "stop_name"].values
+
+        cols = [
+            "edge_id", "corridor_name", "stop_id_prev", "stop_id_curr",
+            "stop_name_prev", "stop_name_curr", "segment_length_meters",
+            "is_dedicated_right_of_way", "signalized_intersection_count", "lane_capacity"
+        ]
+        result_df = links_df[cols]
+        logger.info(
+            f"Successfully processed {len(result_df)} citywide network topology segments "
+            f"({result_df['is_dedicated_right_of_way'].sum()} dedicated ROW links, "
+            f"avg {result_df['segment_length_meters'].mean():.1f}m, "
+            f"avg {result_df['signalized_intersection_count'].mean():.2f} signals)"
+        )
+        return result_df
+
     def save_segments(self, df_or_segments: Union[pd.DataFrame, List[Dict[str, Any]]]) -> str:
         """Persist extracted corridor segments to Parquet."""
         if isinstance(df_or_segments, pd.DataFrame):
@@ -374,7 +615,7 @@ class OSMCorridorExtractor:
         by_corr = (
             con.execute(f"""
             SELECT
-                corridor_name,
+                COALESCE(corridor_name, 'network_general') as corridor_name,
                 COUNT(*) as segments,
                 ROUND(SUM(segment_length_meters) / 1000.0, 2) as length_km,
                 ROUND(AVG(signalized_intersection_count), 1) as avg_signals
@@ -401,14 +642,19 @@ class OSMCorridorExtractor:
         }
 
 
-def extract_default_corridors(output_path: Optional[str] = None) -> str:
-    """Convenience helper to extract and save default study corridors."""
+def extract_default_corridors(
+    output_path: Optional[str] = None, citywide: bool = True
+) -> str:
+    """Convenience helper to extract and save default study corridors or citywide network."""
     extractor = OSMCorridorExtractor(
         data_dir=os.path.dirname(output_path) if output_path else "data/processed"
     )
     if output_path:
         extractor.output_parquet = output_path
-    df_segments = extractor.process_corridors()
+    if citywide:
+        df_segments = extractor.process_citywide_network()
+    else:
+        df_segments = extractor.process_corridors()
     if not df_segments.empty:
         extractor.save_segments(df_segments)
     return extractor.output_parquet
@@ -417,20 +663,21 @@ def extract_default_corridors(output_path: Optional[str] = None) -> str:
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
     extractor = OSMCorridorExtractor()
-    df_segments = extractor.process_corridors()
+    df_segments = extractor.process_citywide_network()
     if not df_segments.empty:
         extractor.save_segments(df_segments)
         summary = extractor.get_summary()
-        print("\n=== OSM Corridor Segments Summary ===")
-        print(f"Total Segments: {summary['total_segments']}")
+        print("\n=== OSM Warsaw Citywide Segments Summary ===")
+        print(f"Total Segments: {summary['total_segments']:,}")
         print(f"Total Corridors: {summary['total_corridors']}")
-        print(f"Total Network Length: {summary['total_network_km']} km")
+        print(f"Total Network Length: {summary['total_network_km']:,} km")
         print(f"Avg Segment Length: {summary['avg_segment_meters']} m")
         print(f"Avg Signals per Segment: {summary['avg_signals_per_segment']}")
-        print(f"Total Signals: {summary['total_signals_detected']}")
-        print(f"Dedicated ROW Segments: {summary['dedicated_row_segments']}")
-        print("\nCorridor Breakdown:")
-        for c in summary["corridors"]:
+        print(f"Total Signals Detected: {summary['total_signals_detected']:,}")
+        print(f"Dedicated ROW Segments: {summary['dedicated_row_segments']:,}")
+        print("\nTop Corridors:")
+        for c in summary["corridors"][:10]:
             print(
                 f"  - {c['corridor_name']}: {c['segments']} segments, {c['length_km']} km, avg {c['avg_signals']} signals"
             )
+
