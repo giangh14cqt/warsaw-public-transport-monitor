@@ -7,6 +7,13 @@ from typing import Any, Dict, List, Union
 
 import pandas as pd
 
+from src.core.polish_calendar import (
+    calculate_easter,
+    generate_polish_calendar_df,
+    get_polish_public_holidays,
+    is_polish_school_day,
+)
+
 # Core study corridors in Warsaw (GTFS street search pattern & spatial bounds)
 DEFAULT_CORRIDORS: Dict[str, Dict[str, Any]] = {
     "al_jerozolimskie": {

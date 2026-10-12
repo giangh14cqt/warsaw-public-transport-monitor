@@ -1,13 +1,13 @@
 cohort,model,val_mae,val_rmse,val_medae,val_wape,val_r2
-pooled,TWFE Panel Regression,29.7854,51.2923,21.273,101.0252,0.0136
-pooled,LightGBM Regressor,29.2894,50.7993,20.6785,99.3428,0.0325
-pooled,CatBoost Regressor,29.262,50.7153,20.729,99.2499,0.0357
-urban_tram,TWFE Panel Regression,26.1995,34.7915,19.368,99.1964,0.0118
-urban_tram,LightGBM Regressor,24.0305,32.4751,18.4349,90.9844,0.139
-urban_tram,CatBoost Regressor,25.1782,33.6317,18.9663,95.3299,0.0766
-urban_bus,TWFE Panel Regression,31.2662,56.2051,22.3458,101.1983,0.0181
-urban_bus,LightGBM Regressor,30.9092,55.9874,21.6668,100.0429,0.0257
-urban_bus,CatBoost Regressor,30.8497,55.9736,21.8287,99.8503,0.0262
-suburban_bus,TWFE Panel Regression,30.7369,55.8058,20.8889,105.4406,-0.0399
-suburban_bus,LightGBM Regressor,29.3003,54.0527,19.9244,100.5125,0.0244
-suburban_bus,CatBoost Regressor,29.1481,53.8912,19.7987,99.9902,0.0302
+pooled,TWFE Panel Regression,29.9246,51.2176,21.1143,100.6088,0.0048
+pooled,LightGBM Regressor,29.053,50.1738,20.1639,97.6783,0.045
+pooled,CatBoost Regressor,29.4377,50.6986,20.5726,98.9717,0.0249
+urban_tram,TWFE Panel Regression,26.4533,38.8022,19.9242,98.9198,0.0153
+urban_tram,LightGBM Regressor,22.9835,35.3282,17.8353,85.9448,0.1837
+urban_tram,CatBoost Regressor,24.4151,36.6441,18.966,91.298,0.1218
+urban_bus,TWFE Panel Regression,31.025,52.8407,21.6657,100.9565,0.0087
+urban_bus,LightGBM Regressor,30.3202,52.156,20.7595,98.6633,0.0342
+urban_bus,CatBoost Regressor,30.3938,52.1921,20.9029,98.9026,0.0329
+suburban_bus,TWFE Panel Regression,30.0044,56.2796,21.3983,101.5475,-0.0106
+suburban_bus,LightGBM Regressor,29.4048,55.2919,20.5668,99.5181,0.0245
+suburban_bus,CatBoost Regressor,29.2434,55.4339,19.8105,98.9721,0.0195

@@ -73,6 +73,135 @@ class OSMCorridorExtractor:
         a = np.sin(dphi / 2.0) ** 2 + np.cos(phi1) * np.cos(phi2) * np.sin(dlambda / 2.0) ** 2
         return float(2.0 * r * np.arctan2(np.sqrt(a), np.sqrt(1.0 - a)))
 
+    @staticmethod
+    def haversine_distance_vectorized(
+        lat1: np.ndarray, lon1: np.ndarray, lat2: np.ndarray, lon2: np.ndarray
+    ) -> np.ndarray:
+        """Vectorized great-circle distance calculation in meters."""
+        r = 6371000.0
+        dlat = np.radians(lat2 - lat1)
+        dlon = np.radians(lon2 - lon1)
+        a = (
+            np.sin(dlat / 2.0) ** 2
+            + np.cos(np.radians(lat1)) * np.cos(np.radians(lat2)) * np.sin(dlon / 2.0) ** 2
+        )
+        return 2.0 * r * np.arctan2(np.sqrt(a), np.sqrt(1.0 - a))
+
+    @classmethod
+    def compute_shape_path_lengths(cls, gtfs_dir: str) -> pd.DataFrame:
+        """
+        Compute actual physical path length along GTFS shapes for each consecutive stop pair.
+        Returns DataFrame with columns ['stop_id_prev', 'stop_id_curr', 'actual_path_length_meters'].
+        """
+        shapes_file = os.path.join(gtfs_dir, "shapes.txt")
+        trips_file = os.path.join(gtfs_dir, "trips.txt")
+        stop_times_file = os.path.join(gtfs_dir, "stop_times.txt")
+        stops_file = os.path.join(gtfs_dir, "stops.txt")
+
+        if not (
+            os.path.exists(shapes_file)
+            and os.path.exists(trips_file)
+            and os.path.exists(stop_times_file)
+            and os.path.exists(stops_file)
+        ):
+            return pd.DataFrame(
+                columns=["stop_id_prev", "stop_id_curr", "actual_path_length_meters"]
+            )
+
+        con = duckdb.connect()
+        try:
+            shapes_df = con.execute(f"""
+                SELECT shape_id, shape_pt_sequence, CAST(shape_pt_lat AS DOUBLE) as lat, CAST(shape_pt_lon AS DOUBLE) as lon
+                FROM read_csv_auto('{shapes_file}')
+                ORDER BY shape_id, shape_pt_sequence
+            """).df()
+
+            stops_df = con.execute(f"""
+                SELECT stop_id, CAST(stop_lat AS DOUBLE) as lat, CAST(stop_lon AS DOUBLE) as lon
+                FROM read_csv_auto('{stops_file}')
+            """).df().set_index("stop_id")
+
+            shape_stops_df = con.execute(f"""
+                WITH trip_shapes AS (
+                    SELECT trip_id, shape_id
+                    FROM read_csv_auto('{trips_file}')
+                    WHERE shape_id IS NOT NULL AND shape_id != ''
+                ),
+                st AS (
+                    SELECT s.stop_id, CAST(s.stop_sequence AS INT) as seq, ts.shape_id
+                    FROM read_csv_auto('{stop_times_file}') s
+                    JOIN trip_shapes ts ON s.trip_id = ts.trip_id
+                    GROUP BY ts.shape_id, s.stop_id, seq
+                )
+                SELECT shape_id, stop_id, seq
+                FROM st
+                ORDER BY shape_id, seq
+            """).df()
+        finally:
+            con.close()
+
+        # Vectorized shape cumulative distances
+        shape_groups = {}
+        for s_id, group in shapes_df.groupby("shape_id", sort=False):
+            lats = group["lat"].values
+            lons = group["lon"].values
+            if len(lats) < 2:
+                cum_dists = np.array([0.0])
+            else:
+                dists = cls.haversine_distance_vectorized(lats[:-1], lons[:-1], lats[1:], lons[1:])
+                cum_dists = np.concatenate([[0.0], np.cumsum(dists)])
+            shape_groups[s_id] = (lats, lons, cum_dists)
+
+        pair_lengths = []
+        for s_id, group in shape_stops_df.groupby("shape_id", sort=False):
+            if s_id not in shape_groups:
+                continue
+            sh_lats, sh_lons, cum_d = shape_groups[s_id]
+            if len(sh_lats) == 0:
+                continue
+
+            stop_ids = group["stop_id"].values
+            curr_idx = 0
+            stop_shape_dists = []
+
+            for sid in stop_ids:
+                if sid not in stops_df.index:
+                    stop_shape_dists.append(None)
+                    continue
+                slat = stops_df.loc[sid, "lat"]
+                slon = stops_df.loc[sid, "lon"]
+                if isinstance(slat, pd.Series):
+                    slat, slon = slat.iloc[0], slon.iloc[0]
+
+                sub_lats = sh_lats[curr_idx:]
+                sub_lons = sh_lons[curr_idx:]
+                d_sq = (sub_lats - slat) ** 2 + (sub_lons - slon) ** 2
+                best_rel = int(np.argmin(d_sq))
+                best_idx = curr_idx + best_rel
+                curr_idx = best_idx
+                stop_shape_dists.append(cum_d[best_idx])
+
+            for i in range(len(stop_ids) - 1):
+                d1 = stop_shape_dists[i]
+                d2 = stop_shape_dists[i + 1]
+                if d1 is not None and d2 is not None and d2 >= d1:
+                    pair_lengths.append((stop_ids[i], stop_ids[i + 1], d2 - d1))
+
+        if not pair_lengths:
+            return pd.DataFrame(
+                columns=["stop_id_prev", "stop_id_curr", "actual_path_length_meters"]
+            )
+
+        df_pairs = pd.DataFrame(
+            pair_lengths, columns=["stop_id_prev", "stop_id_curr", "actual_path_length_meters"]
+        )
+        agg_pairs = (
+            df_pairs.groupby(["stop_id_prev", "stop_id_curr"])["actual_path_length_meters"]
+            .median()
+            .reset_index()
+        )
+        return agg_pairs
+
     def extract_corridor_stops(
         self,
         gtfs_dir: str,
@@ -254,8 +383,26 @@ class OSMCorridorExtractor:
         is_dedicated_right_of_way: bool = True,
         signal_count: int = 0,
         lane_capacity: int = 3,
+        actual_path_length_meters: Optional[float] = None,
+        tortuosity_ratio: Optional[float] = None,
     ) -> Dict[str, Any]:
         """Compute standardized attributes for a transit segment edge."""
+        act_len = float(
+            round(
+                actual_path_length_meters
+                if actual_path_length_meters is not None
+                else length_meters,
+                1,
+            )
+        )
+        tort = float(
+            round(
+                tortuosity_ratio
+                if tortuosity_ratio is not None
+                else max(1.0, act_len / max(length_meters, 1.0)),
+                3,
+            )
+        )
         return {
             "edge_id": edge_id,
             "corridor_name": corridor_name,
@@ -264,6 +411,8 @@ class OSMCorridorExtractor:
             "stop_name_prev": str(stop_name_prev),
             "stop_name_curr": str(stop_name_curr),
             "segment_length_meters": float(round(length_meters, 1)),
+            "actual_path_length_meters": act_len,
+            "tortuosity_ratio": tort,
             "is_dedicated_right_of_way": bool(is_dedicated_right_of_way),
             "signalized_intersection_count": int(signal_count),
             "lane_capacity": int(lane_capacity),
@@ -442,9 +591,33 @@ class OSMCorridorExtractor:
         r = 6371000.0
         dlat = np.radians(s2_lats - s1_lats)
         dlon = np.radians(s2_lons - s1_lons)
-        a = np.sin(dlat / 2.0)**2 + np.cos(np.radians(s1_lats)) * np.cos(np.radians(s2_lats)) * np.sin(dlon / 2.0)**2
+        a = (
+            np.sin(dlat / 2.0) ** 2
+            + np.cos(np.radians(s1_lats)) * np.cos(np.radians(s2_lats)) * np.sin(dlon / 2.0) ** 2
+        )
         dists = np.round(2.0 * r * np.arctan2(np.sqrt(a), np.sqrt(1.0 - a)), 1)
         links_df["segment_length_meters"] = dists
+
+        # Integrate GTFS shape path length & geometric tortuosity
+        shape_pairs_df = self.compute_shape_path_lengths(gtfs_dir)
+        if not shape_pairs_df.empty:
+            links_df = links_df.merge(
+                shape_pairs_df, on=["stop_id_prev", "stop_id_curr"], how="left"
+            )
+        else:
+            links_df["actual_path_length_meters"] = np.nan
+
+        links_df["actual_path_length_meters"] = np.where(
+            links_df["actual_path_length_meters"].isna()
+            | (links_df["actual_path_length_meters"] < links_df["segment_length_meters"]),
+            links_df["segment_length_meters"],
+            np.round(links_df["actual_path_length_meters"], 1),
+        )
+        links_df["tortuosity_ratio"] = np.round(
+            links_df["actual_path_length_meters"]
+            / np.maximum(links_df["segment_length_meters"], 1.0),
+            3,
+        )
 
         sig_file = signals_parquet or os.path.join(self.cache_dir, "osm_signals_warsaw_citywide.parquet")
         if not os.path.exists(sig_file):
@@ -567,9 +740,18 @@ class OSMCorridorExtractor:
         links_df["stop_name_curr"] = stops_df.loc[links_df["stop_id_curr"], "stop_name"].values
 
         cols = [
-            "edge_id", "corridor_name", "stop_id_prev", "stop_id_curr",
-            "stop_name_prev", "stop_name_curr", "segment_length_meters",
-            "is_dedicated_right_of_way", "signalized_intersection_count", "lane_capacity"
+            "edge_id",
+            "corridor_name",
+            "stop_id_prev",
+            "stop_id_curr",
+            "stop_name_prev",
+            "stop_name_curr",
+            "segment_length_meters",
+            "actual_path_length_meters",
+            "tortuosity_ratio",
+            "is_dedicated_right_of_way",
+            "signalized_intersection_count",
+            "lane_capacity",
         ]
         result_df = links_df[cols]
         logger.info(
@@ -597,6 +779,23 @@ class OSMCorridorExtractor:
             return {"status": "empty", "records": 0}
 
         con = duckdb.connect(":memory:")
+        has_tort = False
+        try:
+            cols = [
+                c[0]
+                for c in con.execute(
+                    f"DESCRIBE SELECT * FROM read_parquet('{self.output_parquet}')"
+                ).fetchall()
+            ]
+            has_tort = "tortuosity_ratio" in cols
+        except Exception:
+            pass
+
+        tort_sql = (
+            "ROUND(AVG(tortuosity_ratio), 3) AS avg_tortuosity"
+            if has_tort
+            else "1.0::DOUBLE AS avg_tortuosity"
+        )
         res = con.execute(f"""
             SELECT
                 COUNT(*) AS total_segments,
@@ -608,7 +807,8 @@ class OSMCorridorExtractor:
                 ROUND(AVG(signalized_intersection_count), 2) AS avg_signals_per_segment,
                 SUM(signalized_intersection_count) AS total_signals_detected,
                 SUM(CASE WHEN is_dedicated_right_of_way THEN 1 ELSE 0 END) AS dedicated_row_segments,
-                ROUND(AVG(lane_capacity), 2) AS avg_lane_capacity
+                ROUND(AVG(lane_capacity), 2) AS avg_lane_capacity,
+                {tort_sql}
             FROM read_parquet('{self.output_parquet}')
         """).fetchone()
 
@@ -638,6 +838,7 @@ class OSMCorridorExtractor:
             "total_signals_detected": int(res[7]),
             "dedicated_row_segments": int(res[8]),
             "avg_lane_capacity": float(res[9]),
+            "avg_tortuosity": float(res[10]) if len(res) > 10 and res[10] is not None else 1.0,
             "corridors": by_corr,
         }
 

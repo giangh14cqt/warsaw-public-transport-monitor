@@ -130,20 +130,50 @@ To make the thesis visually compelling and demonstrative during defenses and pre
 
 ---
 
-## 8. Prioritized Phased Implementation Plan
+---
+
+## 8. Completed Phase: Top 3 High-Impact Feature Enhancements (October 2026)
+
+Based on feasibility and econometric impact assessment, the top 3 candidate features were engineered, validated, and fused into the production feature mart (`4,527,951` records):
+
+### 8.1 Implemented Feature Sets
+1. **Polish Academic & Public Holiday Calendar** ([`src/core/polish_calendar.py`](file:///Users/truonggiangdo/Data/LearningMaterials/UW/Thesis/DelayTraffic/playground/src/core/polish_calendar.py)):
+   - `is_school_day`: Exact Mazowieckie voivodeship academic calendar (Winter breaks *ferie zimowe*, summer breaks, Christmas/Easter breaks, Teacher's Day).
+   - `is_public_holiday`: Polish statutory holidays computed via Anonymous Gregorian Easter algorithm.
+2. **Transit Transfer Hub Density & Metro Proximity** ([`src/exogenous/interchange.py`](file:///Users/truonggiangdo/Data/LearningMaterials/UW/Thesis/DelayTraffic/playground/src/exogenous/interchange.py)):
+   - `interchange_line_count`: Multimodal stop post route degree (7,241 GTFS stops mapped).
+   - `is_metro_proximity`: Vectorized 300m geodesic buffer to 39 Warsaw Metro (M1 & M2) stations (600 stops flagged).
+3. **GTFS Route Shape Micro-Topology & Tortuosity** ([`src/exogenous/osm.py`](file:///Users/truonggiangdo/Data/LearningMaterials/UW/Thesis/DelayTraffic/playground/src/exogenous/osm.py)):
+   - `actual_path_length_meters`: Cumulative polyline length along GTFS shapes.
+   - `tortuosity_ratio`: Ratio of actual route trajectory length to Euclidean displacement ($\ge 1.0$), capturing chicanes, roundabouts, and sharp curves across 10,081 corridor segments (mean tortuosity = 1.219).
+
+### 8.2 Empirical Uplift Across Cohorts
+
+| Cohort | Best Model | Baseline MAE | New MAE | Baseline RMSE | New RMSE | Baseline $R^2$ | **New $R^2$** | Relative $R^2$ Gain |
+| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **Pooled Network** | LightGBM | 29.26s | **29.05s** | 50.72s | **50.17s** | +0.0357 | **+0.0450** | **+26.1%** |
+| **Urban Trams** | LightGBM | 24.03s | **22.98s** | 35.83s | **35.33s** | +0.1390 | **+0.1837** | **+32.2%** |
+| **Urban Buses** | LightGBM | 30.85s | **30.32s** | 55.97s | **52.16s** | +0.0262 | **+0.0342** | **+30.5%** |
+| **Suburban Buses** | CatBoost | 29.15s | **29.24s** | 55.89s | **55.43s** | +0.0169 | **+0.0195** | **+15.4%** |
+
+---
+
+## 9. Prioritized Phased Implementation Plan
 
 ```
-Phase A: Data & Hygiene Refinements (Weeks 1–2)
+Phase A: Data & Hygiene Refinements
 ├── Keep background daemon capturing winter telemetry continuously
 ├── [x] Exclude terminal turnaround idling records (stop_sequence == 1 or max_seq)
-└── [x] Stratify evaluation by transit cohort (Trams vs Core Buses vs Suburban)
+├── [x] Stratify evaluation by transit cohort (Trams vs Core Buses vs Suburban)
+└── [x] Top 3 High-Impact Features: Polish Calendar, Metro/Hub Proximity, Shape Tortuosity
 
-Phase B: Advanced Econometric & Spatial Upgrades (Weeks 3–4)
+Phase B: Advanced Econometric & Spatial Upgrades
 ├── Add Two-Way Clustered Standard Errors (route_id x date) in TWFE
 ├── [x] Map-match full citywide stop pairs against OSMnx via GTFS shapes.txt (10,081 segments, 4,179 signals)
+├── [x] Compute shape tortuosity ratio and polyline lengths across all corridor links
 └── Attach Vistula river bridge bottleneck indicator flags
 
-Phase C: Causal ML & Interactive Interface (Weeks 5–6)
+Phase C: Causal ML & Interactive Interface
 ├── Implement Double Machine Learning (DML) for Causal ROW Treatment Effects
 ├── Fit Hazard / Duration models for schedule recovery rates
 └── Deploy Streamlit interactive policy sandbox for route-level simulation

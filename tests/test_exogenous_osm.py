@@ -157,6 +157,62 @@ class TestOSMCorridorExtractor(unittest.TestCase):
         self.assertEqual(pairs.iloc[0]["stop_id_prev"], "1001")
         self.assertEqual(pairs.iloc[0]["stop_id_curr"], "1002")
 
+    def test_shape_path_length_and_tortuosity(self):
+        mock_gtfs = os.path.join(self.test_dir.name, "gtfs_shapes")
+        os.makedirs(mock_gtfs, exist_ok=True)
+
+        # Stop A at (52.230, 21.000), Stop B at (52.230, 21.010)
+        # Straight distance is ~680m
+        stops_df = pd.DataFrame(
+            [
+                {"stop_id": "S1", "stop_name": "A", "stop_lat": 52.230, "stop_lon": 21.000},
+                {"stop_id": "S2", "stop_name": "B", "stop_lat": 52.230, "stop_lon": 21.010},
+            ]
+        )
+        stops_df.to_csv(os.path.join(mock_gtfs, "stops.txt"), index=False)
+
+        trips_df = pd.DataFrame([{"trip_id": "T1", "shape_id": "SH1"}])
+        trips_df.to_csv(os.path.join(mock_gtfs, "trips.txt"), index=False)
+
+        stop_times_df = pd.DataFrame(
+            [
+                {"trip_id": "T1", "stop_id": "S1", "stop_sequence": 1},
+                {"trip_id": "T1", "stop_id": "S2", "stop_sequence": 2},
+            ]
+        )
+        stop_times_df.to_csv(os.path.join(mock_gtfs, "stop_times.txt"), index=False)
+
+        # Curved shape detour via (52.235, 21.005)
+        shapes_df = pd.DataFrame(
+            [
+                {"shape_id": "SH1", "shape_pt_sequence": 0, "shape_pt_lat": 52.230, "shape_pt_lon": 21.000},
+                {"shape_id": "SH1", "shape_pt_sequence": 1, "shape_pt_lat": 52.235, "shape_pt_lon": 21.005},
+                {"shape_id": "SH1", "shape_pt_sequence": 2, "shape_pt_lat": 52.230, "shape_pt_lon": 21.010},
+            ]
+        )
+        shapes_df.to_csv(os.path.join(mock_gtfs, "shapes.txt"), index=False)
+
+        df_lengths = self.extractor.compute_shape_path_lengths(mock_gtfs)
+        self.assertEqual(len(df_lengths), 1)
+        actual_len = df_lengths.iloc[0]["actual_path_length_meters"]
+        # Detour path should be significantly longer than straight line (~680m)
+        self.assertGreater(actual_len, 800.0)
+
+        # Check compute_segment_metrics with tortuosity
+        metrics = self.extractor.compute_segment_metrics(
+            edge_id="S1_S2",
+            stop_id_prev="S1",
+            stop_id_curr="S2",
+            stop_name_prev="A",
+            stop_name_curr="B",
+            corridor_name="custom",
+            length_meters=680.0,
+            actual_path_length_meters=actual_len,
+        )
+        self.assertEqual(metrics["actual_path_length_meters"], round(actual_len, 1))
+        self.assertGreater(metrics["tortuosity_ratio"], 1.1)
+
 
 if __name__ == "__main__":
     unittest.main()
+

@@ -26,6 +26,8 @@ class DataPaths:
     feature_mart: Path = processed_dir / "feature_mart.parquet"
     weather_hourly: Path = processed_dir / "imgw_weather_hourly.parquet"
     osm_corridors: Path = processed_dir / "osm_corridor_segments.parquet"
+    calendar_lookup: Path = processed_dir / "calendar_lookup.parquet"
+    stop_interchanges: Path = processed_dir / "transit_stop_interchanges.parquet"
 
     # Output Artifacts & Exhibits
     reports_dir: Path = root / "reports"
@@ -73,6 +75,10 @@ class FeatureRegistry:
         default_factory=lambda: [
             "signalized_intersection_count",
             "segment_length_meters",
+            "actual_path_length_meters",
+            "tortuosity_ratio",
+            "interchange_line_count",
+            "is_metro_proximity",
             "is_dedicated_right_of_way",
             "lane_capacity",
             "is_study_corridor",
@@ -87,6 +93,8 @@ class FeatureRegistry:
             "is_morning_peak",
             "is_evening_peak",
             "is_weekend",
+            "is_school_day",
+            "is_public_holiday",
         ]
     )
 
@@ -114,7 +122,13 @@ class FeatureRegistry:
             "hour_of_day",
             "day_of_week",
             "is_peak_hour",
+            "is_school_day",
+            "is_public_holiday",
             "segment_length_meters",
+            "actual_path_length_meters",
+            "tortuosity_ratio",
+            "interchange_line_count",
+            "is_metro_proximity",
             "lane_capacity",
             "is_tram",
             "precipitation_mm",
@@ -130,12 +144,18 @@ class FeatureRegistry:
             "prev_stop_delay",
             "signalized_intersection_count",
             "segment_length_meters",
+            "actual_path_length_meters",
+            "tortuosity_ratio",
+            "interchange_line_count",
+            "is_metro_proximity",
             "is_dedicated_right_of_way",
             "trip_progress",
             "headway_deviation",
             "hour_of_day",
             "day_of_week",
             "is_peak_hour",
+            "is_school_day",
+            "is_public_holiday",
             "is_tram",
             "lane_capacity",
             "precipitation_mm",
@@ -156,6 +176,10 @@ class FeatureRegistry:
             # Infrastructure & Roadway Topology
             "signalized_intersection_count": "Infrastructure Bottlenecks",
             "segment_length_meters": "Infrastructure Geometry",
+            "actual_path_length_meters": "Infrastructure Geometry",
+            "tortuosity_ratio": "Infrastructure Geometry",
+            "interchange_line_count": "Infrastructure Bottlenecks",
+            "is_metro_proximity": "Infrastructure Bottlenecks",
             "is_dedicated_right_of_way": "Infrastructure Right-of-Way",
             "lane_capacity": "Infrastructure Geometry",
             "is_study_corridor": "Infrastructure Corridor",
@@ -166,6 +190,8 @@ class FeatureRegistry:
             "is_morning_peak": "Temporal Congestion Peaks",
             "is_evening_peak": "Temporal Congestion Peaks",
             "is_weekend": "Temporal Day-to-Day",
+            "is_school_day": "Temporal Day-to-Day",
+            "is_public_holiday": "Temporal Day-to-Day",
             # Meteorological Telemetry
             "precipitation_mm": "Meteorological Conditions",
             "temperature_c": "Meteorological Conditions",

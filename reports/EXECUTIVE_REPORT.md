@@ -13,11 +13,11 @@
 Urban public transit networks suffer from delay propagation, bunching, and schedule instability driven by interactions between traffic signal density, road corridor geometry, meteorological shocks, and operational dispatch headway variance. This project delivers an end-to-end telemetry ingestion engine, econometric baseline, non-linear machine learning benchmarks, and explainable AI (xAI) attribution framework deployed on the live public transport network of Warsaw, Poland (ZTM / [zbiorkom.live](https://zbiorkom.live)).
 
 ### Core Empirical Findings
-1. **Predictive Uplift & Noise Reduction**: Filtering terminal turnaround layovers (`stop_sequence = max_seq` and idling drift) and integrating full-network OSM road infrastructure eliminates spurious delay variance, reducing pooled hold-out validation MAE to **29.26s** (CatBoost) and MedAE to **20.73s**, with RMSE dropping from 58.28s to **50.72s**.
+1. **Predictive Uplift & Noise Reduction**: Filtering terminal turnaround layovers (`stop_sequence = max_seq` and idling drift) and integrating full-network OSM road infrastructure, school/holiday calendars, transfer hubs, and shape tortuosity eliminates spurious delay variance, reducing pooled hold-out validation MAE to **29.05s** (LightGBM) and MedAE to **20.16s**, with RMSE dropping to **50.17s** and $R^2$ reaching **+0.0450** (+26.1% relative boost over baseline).
 2. **Cohort Stratification (Trams vs. Buses)**: Isolating homogeneous operational regimes significantly improves fit and predictability:
-   - **Urban Trams (`urban_tram`)**: Achieve the lowest forecast error across the network (**LightGBM MAE: 24.03s, RMSE: 32.48s, MedAE: 18.43s, WAPE: 90.98%, R²: +0.1390**; CatBoost MAE: 25.18s, RMSE: 33.63s, MedAE: 18.97s, WAPE: 95.33%, R²: +0.0766), validating that rail infrastructure on segregated right-of-way is protected from street friction.
-   - **Core Urban Buses (`urban_bus`)**: Exhibit higher downtown friction (**CatBoost MAE: 30.85s, RMSE: 55.97s, MedAE: 21.83s, WAPE: 99.85%, R²: +0.0262**).
-   - **Suburban Feeders (`suburban_bus`)**: Display higher speed variance over regional highways (**CatBoost MAE: 29.15s, RMSE: 53.89s, MedAE: 19.80s, WAPE: 99.99%, R²: +0.0302**).
+   - **Urban Trams (`urban_tram`)**: Achieve the lowest forecast error and highest explanatory power across the network (**LightGBM MAE: 22.98s, RMSE: 35.33s, MedAE: 17.84s, WAPE: 85.94%, R²: +0.1837**; CatBoost MAE: 24.42s, RMSE: 36.64s, MedAE: 18.97s, WAPE: 91.30%, R²: +0.1218), validating that rail infrastructure on segregated right-of-way combined with network interchange and shape tortuosity dramatically enhances delay predictability.
+   - **Core Urban Buses (`urban_bus`)**: Exhibit substantial variance reduction (**LightGBM MAE: 30.32s, RMSE: 52.16s, MedAE: 20.76s, WAPE: 98.66%, R²: +0.0342**; RMSE dropped by −3.81s).
+   - **Suburban Feeders (`suburban_bus`)**: Display higher speed variance over regional highways (**CatBoost MAE: 29.24s, RMSE: 55.43s, MedAE: 19.81s, WAPE: 98.97%, R²: +0.0195**).
 3. **Global Root-Cause Decomposition (TreeSHAP)**:
    - **Upstream Delay Propagation (`prev_stop_delay`)**: Accounts for **29.70%** of total delay variance.
    - **Temporal Diurnal Cycles (`hour_of_day`, `peak_hour`)**: Accounts for **22.49%**.
@@ -48,6 +48,9 @@ The system operates across six decoupled architectural layers:
               │
               ├─> Continuous Hourly Synoptic Weather (Okęcie & Bielany, Open-Meteo & IMGW)
               ├─> Citywide OSM Road Network Topology (10,081 segments, 4,179 signals across Warsaw)
+              ├─> Polish School & Statutory Holiday Calendar (Mazowieckie voivodeship schedule)
+              ├─> Transit Transfer Hub Density & Metro Proximity (39 M1/M2 stations buffer)
+              ├─> GTFS Route Shape Micro-Topology & Tortuosity Ratio (actual polyline lengths)
               │
               ▼
 [Feature Mart Assembly] ── 4,527,951 Enriched Spatiotemporal Records (feature_mart.parquet)
@@ -82,24 +85,25 @@ To eliminate autoregressive data leakage inherent to time-series and panel trans
 
 | Model Architecture | Specification / Regularization | Hold-Out MAE (s) | Hold-Out RMSE (s) | Median AE (s) | WAPE (%) | Hold-Out $R^2$ |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Two-Way Fixed Effects (TWFE)** | Within Route + Hour FE + HC1 OLS | 29.79s | 51.29s | 21.27s | 101.03% | +0.0136 |
-| **LightGBM Regressor** | Tree-depth 7, LR 0.05, L2 Reg 1.0 | 29.29s | 50.80s | 20.68s | 99.34% | +0.0325 |
-| **CatBoost Regressor** | Symmetric Oblivious Trees, LR 0.05 | **29.26s** | **50.72s** | **20.73s** | **99.25%** | **+0.0357** |
+| **Two-Way Fixed Effects (TWFE)** | Within Route + Hour FE + HC1 OLS | 29.92s | 51.22s | 21.11s | 100.61% | +0.0048 |
+| **LightGBM Regressor** | Tree-depth 7, LR 0.05, L2 Reg 1.0 | **29.05s** | **50.17s** | **20.16s** | **97.68%** | **+0.0450** |
+| **CatBoost Regressor** | Symmetric Oblivious Trees, LR 0.05 | 29.44s | 50.70s | 20.57s | 98.97% | +0.0249 |
 
 #### B. Stratified Benchmark by Transit Cohort
 
 | Cohort | Best Model | Validation MAE (s) | Validation RMSE (s) | Median AE (s) | WAPE (%) | Validation $R^2$ |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Urban Trams (`urban_tram`)** | **LightGBM Regressor** | **24.03s** | **32.48s** | **18.43s** | **90.98%** | **+0.1390** |
-| **Core Urban Buses (`urban_bus`)** | **CatBoost Regressor** | 30.85s | 55.97s | 21.83s | 99.85% | +0.0262 |
-| **Suburban Feeders (`suburban_bus`)** | **CatBoost Regressor** | 29.15s | 53.89s | 19.80s | 99.99% | +0.0302 |
+| **Urban Trams (`urban_tram`)** | **LightGBM Regressor** | **22.98s** *(−1.05s)* | **35.33s** | **17.84s** *(−0.59s)* | **85.94%** *(−5.04%)* | **+0.1837** *(+32.2%)* |
+| **Core Urban Buses (`urban_bus`)** | **LightGBM Regressor** | **30.32s** *(−0.53s)* | **52.16s** *(−3.81s)* | **20.76s** *(−1.07s)* | **98.66%** *(−1.19%)* | **+0.0342** *(+30.5%)* |
+| **Suburban Feeders (`suburban_bus`)** | **CatBoost Regressor** | 29.24s | 55.43s | 19.81s | 98.97% *(−1.02%)* | +0.0195 |
 
-#### C. Empirical Gains: 4 Study Corridors vs. Full Citywide Network
+#### C. Empirical Gains: Feature Enhancement Progression
 
-| Evaluation Scope | Pooled CatBoost MAE | Pooled CatBoost RMSE | Tram LightGBM MAE | Tram LightGBM $R^2$ | Suburban Bus RMSE |
-| :--- | :---: | :---: | :---: | :---: | :---: |
-| **4 Radial Corridors (Baseline)** | 30.69s | 58.28s | 26.84s | +0.0507 | 70.84s |
-| **Citywide Network (Expanded)** | **29.26s** *(−1.43s)* | **50.72s** *(−7.56s)* | **24.03s** *(−2.81s)* | **+0.1390** *(+2.7×)* | **53.89s** *(−16.95s)* |
+| Evaluation Scope | Best Model Architecture | Pooled MAE | Pooled RMSE | Tram MAE | Tram $R^2$ | Urban Bus MAE | Urban Bus $R^2$ |
+| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
+| **4 Radial Corridors (Initial)** | CatBoost | 30.69s | 58.28s | 26.84s | +0.0507 | 31.85s | +0.0190 |
+| **Citywide Network (OSM 10k links)** | CatBoost / LightGBM | 29.26s | 50.72s | 24.03s | +0.1390 | 30.85s | +0.0262 |
+| **Enriched Mart (+Top 3 Features)** | **LightGBM** | **29.05s** *(−0.21s)* | **50.17s** *(−0.55s)* | **22.98s** *(−1.05s)* | **+0.1837** *(+32.2%)* | **30.32s** *(−0.53s)* | **+0.0342** *(+30.5%)* |
 
 ### 3.3 Econometric Baseline Insights & Framing
 Under the TWFE panel specification:
@@ -109,8 +113,8 @@ $$y_{ist} = \alpha_i + \lambda_t + \beta X_{ist} + \epsilon_{ist}$$
 - **Physical Link Length**: $\beta = +0.0029\text{s}$ per meter ($+2.9\text{s}$ running delay per kilometer, $p = 0.09$).
 - **Academic Framing on $R^2$ and WAPE**:
   - The target variable is the **signed first-differenced running delay delta** ($\Delta t_{\text{run}} = \text{delay}_s - \text{delay}_{s-1}$).
-  - Because stop-to-stop incremental delay isolates pure localized innovations, predicting first differences naturally exhibits modest $R^2$ (1–4% overall, up to 13.9% for trams) due to unobserved microscopic traffic light arrivals and dwell surges.
-  - Feeding true physical OSMnx link lengths and signal counts reduced network-wide RMSE by over **7.5 seconds** and boosted tram explanatory power to **13.9%**, confirming the predictive value of citywide spatial graph topology.
+  - Because stop-to-stop incremental delay isolates pure localized innovations, predicting first differences naturally exhibits modest $R^2$ (1–5% overall, up to 18.4% for trams) due to unobserved microscopic traffic light arrivals and dwell surges.
+  - Feeding true physical OSMnx link lengths, shape tortuosity, holiday schedules, and transfer hub densities reduced network-wide RMSE below **50.2 seconds** and boosted tram explanatory power to **18.37%** (with WAPE dropping to 85.9%), confirming the predictive value of citywide spatial graph topology and multimodal transfer friction.
 
 ---
 

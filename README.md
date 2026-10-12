@@ -5,7 +5,7 @@
 [![Engine-DuckDB](https://img.shields.io/badge/analytics-DuckDB-yellow.svg)](https://duckdb.org/)
 [![Models-LightGBM%20%7C%20CatBoost](https://img.shields.io/badge/models-LightGBM%20%7C%20CatBoost-brightgreen.svg)](https://lightgbm.readthedocs.io/)
 [![xAI-SHAP%20%7C%20ALE%20%7C%20DiCE](https://img.shields.io/badge/xAI-SHAP%20%7C%20ALE%20%7C%20DiCE-purple.svg)](https://github.com/shap/shap)
-[![Tests-Passing](https://img.shields.io/badge/tests-65%2F65%20passing-success.svg)](tests/)
+[![Tests-Passing](https://img.shields.io/badge/tests-72%2F72%20passing-success.svg)](tests/)
 [![Docker](https://img.shields.io/badge/deployment-Docker%20Compose-2496ED.svg)](https://www.docker.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
@@ -102,12 +102,18 @@ Raw vehicle telemetry is enriched with exogenous environmental and infrastructur
 1. **Meteorological Telemetry (`src/exogenous/imgw.py`)**:
    - Harvested from official IMGW-PIB Polish synoptic weather archives.
    - Metrics: Precipitation intensity (`mm/h`), surface temperature (°C), relative humidity (%), wind speed (`m/s`), and freezing rain flags.
-2. **Road Corridor Topology (`src/exogenous/osm.py`)**:
+2. **Road Corridor Topology & Micro-Geometry (`src/exogenous/osm.py`)**:
    - Extracted from OpenStreetMap across the entire Warsaw network (**10,081 directed stop-to-stop links**, **4,179 mapped traffic signals**, covering 9,070 km of transit routes).
-   - Metrics: `is_dedicated_right_of_way` (segregated tram tracks or dedicated bus lanes), `signalized_intersection_count`, `segment_length_meters`, and `lane_capacity`.
-3. **Autoregressive Trajectory Lags (`src/fusion/trajectory.py`)**:
+   - Metrics: `is_dedicated_right_of_way`, `signalized_intersection_count`, `segment_length_meters`, `actual_path_length_meters` (true GTFS shape polyline distance), `tortuosity_ratio` ($\ge 1.0$, capturing chicanes and bends), and `lane_capacity`.
+3. **Multimodal Transfer Hubs & Metro Buffers (`src/exogenous/interchange.py`)**:
+   - `interchange_line_count`: Multimodal stop post route degree capturing passenger transfer volume (7,241 stops mapped).
+   - `is_metro_proximity`: 300m geodesic buffer to 39 Warsaw Metro (M1 & M2) stations.
+4. **School & Statutory Holiday Calendar (`src/core/polish_calendar.py`)**:
+   - `is_school_day`: Mazowieckie voivodeship academic schedule (accounting for winter breaks, summer breaks, and seasonal holidays).
+   - `is_public_holiday`: Polish statutory holidays computed via Anonymous Gregorian Easter algorithm.
+5. **Autoregressive Trajectory Lags (`src/fusion/trajectory.py`)**:
    - Windowed reconstruction of preceding stop delay (`prev_stop_delay`), second-order lag (`prev2_stop_delay`), dispatch regularity (`headway_deviation`), and relative `trip_progress` ($0.0 \to 1.0$).
-4. **Fused Feature Store**: Persisted to `data/processed/feature_mart.parquet` (**4,527,951 rows**).
+6. **Fused Feature Store**: Persisted to `data/processed/feature_mart.parquet` (**4,527,951 rows**).
 
 ---
 
@@ -130,24 +136,24 @@ We benchmarked classical econometrics against state-of-the-art gradient boosted 
 
 | Model Architecture | Specification / Regularization | Hold-Out MAE | Hold-Out RMSE | Median AE | WAPE (%) | Validation $R^2$ |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Econometric TWFE Baseline** | Within Route + Hour FE + HC1 Robust OLS | 29.79s | 51.29s | 21.27s | 101.03% | +0.0136 |
-| **LightGBM Regressor** | Tree-depth 7, LR 0.05, L2 Reg 1.0 | 29.29s | 50.80s | 20.68s | 99.34% | +0.0325 |
-| **CatBoost Regressor** | Symmetric Oblivious Trees, LR 0.05 | **29.26s** | **50.72s** | **20.73s** | **99.25%** | **+0.0357** |
+| **Econometric TWFE Baseline** | Within Route + Hour FE + HC1 Robust OLS | 29.92s | 51.22s | 21.11s | 100.61% | +0.0048 |
+| **LightGBM Regressor** | Tree-depth 7, LR 0.05, L2 Reg 1.0 | **29.05s** | **50.17s** | **20.16s** | **97.68%** | **+0.0450** |
+| **CatBoost Regressor** | Symmetric Oblivious Trees, LR 0.05 | 29.44s | 50.70s | 20.57s | 98.97% | +0.0249 |
 
 ### 5.2 Stratified Evaluation Across Transit Cohorts
 
 | Transit Cohort | Best Model | Hold-Out MAE | Hold-Out RMSE | Median AE | WAPE (%) | Validation $R^2$ |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Urban Trams (`urban_tram`)** | **LightGBM Regressor** | **24.03s** | **32.48s** | **18.43s** | **90.98%** | **+0.1390** |
-| **Core Urban Buses (`urban_bus`)** | **CatBoost Regressor** | 30.85s | 55.97s | 21.83s | 99.85% | +0.0262 |
-| **Suburban Feeders (`suburban_bus`)** | **CatBoost Regressor** | 29.15s | 53.89s | 19.80s | 99.99% | +0.0302 |
+| **Urban Trams (`urban_tram`)** | **LightGBM Regressor** | **22.98s** | **35.33s** | **17.84s** | **85.94%** | **+0.1837** |
+| **Core Urban Buses (`urban_bus`)** | **LightGBM Regressor** | **30.32s** | **52.16s** | **20.76s** | **98.66%** | **+0.0342** |
+| **Suburban Feeders (`suburban_bus`)** | **CatBoost Regressor** | **29.24s** | 55.43s | **19.81s** | **98.97%** | **+0.0195** |
 
 ### 5.3 Econometric Panel Insights (TWFE)
 $$y_{ist} = \alpha_i + \lambda_t + \beta X_{ist} + \epsilon_{ist}$$
 * **Traffic Signal Density**: Statistically significant at $p < 0.0001$ ($\beta = +0.5753\text{s}/\text{signal}, t = 5.00$). The estimated point elasticity is $\varepsilon = +0.2146$, indicating that a 10% increase in traffic signals induces a 2.15% increase in segment arrival delay.
 * **Lane Capacity**: Statistically significant at $p < 0.0001$ ($\beta = -6.0846\text{s}$ per additional lane, $t = -5.93$, elasticity $\varepsilon = -2.28$).
 * **Physical Link Length**: $\beta = +0.0029\text{s}$ per meter ($+2.9\text{s}$ running delay per kilometer, $p = 0.09$).
-* **Why Gradient Boosting Outperforms**: Linear specifications cannot capture saturation limits or interaction buffering. LightGBM and CatBoost capture threshold dynamics and achieve superior error reduction across all cohorts, driving tram MAE down to **24.03s** and WAPE to **90.98%**.
+* **Why Gradient Boosting Outperforms**: Linear specifications cannot capture saturation limits or interaction buffering. LightGBM and CatBoost capture threshold dynamics and achieve superior error reduction across all cohorts, driving tram MAE down to **22.98s** and WAPE to **85.94%** ($R^2 = +0.1837$).
 
 ---
 
@@ -296,7 +302,7 @@ python3 run_pipeline.py --stage xai
 The repository maintains an automated unit and end-to-end integration test suite covering all modules:
 
 ```bash
-# Run the complete test suite (65 tests in ~17 seconds)
+# Run the complete test suite (72 tests in ~21 seconds)
 .venv/bin/python3 -m unittest discover tests
 
 # Run specific E2E pipeline integration test suite
@@ -304,7 +310,7 @@ The repository maintains an automated unit and end-to-end integration test suite
 ```
 
 ```text
-Ran 65 tests in 16.717s
+Ran 72 tests in 21.46s
 OK (100% pass rate)
 ```
 

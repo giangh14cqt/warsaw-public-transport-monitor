@@ -32,6 +32,8 @@ class FeatureMartAssembler:
         raw_pattern: str,
         weather_parquet_path: str,
         osm_parquet_path: str,
+        calendar_parquet_path: Optional[str] = None,
+        interchange_parquet_path: Optional[str] = None,
         max_delay_seconds: int = 7200,
         max_records: Optional[int] = None,
         exclude_terminals: bool = True,
@@ -42,6 +44,31 @@ class FeatureMartAssembler:
         limit_clause = f"LIMIT {max_records}" if max_records else ""
         has_weather = os.path.exists(weather_parquet_path)
         has_osm = os.path.exists(osm_parquet_path)
+
+        cal_path = calendar_parquet_path or os.path.join(
+            self.processed_dir, "calendar_lookup.parquet"
+        )
+        if not os.path.exists(cal_path):
+            try:
+                from src.core.polish_calendar import generate_calendar_parquet
+
+                generate_calendar_parquet(cal_path)
+            except Exception as e:
+                logger.warning(f"Could not auto-generate calendar lookup: {e}")
+        has_cal = os.path.exists(cal_path)
+
+        hub_path = interchange_parquet_path or os.path.join(
+            self.processed_dir, "transit_stop_interchanges.parquet"
+        )
+        if not os.path.exists(hub_path):
+            try:
+                from src.exogenous.interchange import extract_default_interchanges
+
+                extract_default_interchanges(output_path=hub_path)
+            except Exception as e:
+                logger.warning(f"Could not auto-generate stop interchanges: {e}")
+        has_hub = os.path.exists(hub_path)
+
         terminal_filter_clause = (
             "AND (t.is_terminal_stop = false OR t.max_seq <= t.min_seq + 1)"
             if exclude_terminals
@@ -76,18 +103,65 @@ class FeatureMartAssembler:
             """
         )
 
-        osm_subquery = (
-            f"SELECT * FROM read_parquet('{osm_parquet_path}')"
-            if has_osm
-            else """
+        if has_osm:
+            con = duckdb.connect()
+            try:
+                osm_cols = [
+                    c[0]
+                    for c in con.execute(
+                        f"DESCRIBE SELECT * FROM read_parquet('{osm_parquet_path}') LIMIT 1"
+                    ).fetchall()
+                ]
+                has_osm_act_path = "actual_path_length_meters" in osm_cols
+                has_osm_tort = "tortuosity_ratio" in osm_cols
+            except Exception:
+                has_osm_act_path = False
+                has_osm_tort = False
+            finally:
+                con.close()
+
+            extra_cols = []
+            if not has_osm_act_path:
+                extra_cols.append("segment_length_meters AS actual_path_length_meters")
+            if not has_osm_tort:
+                extra_cols.append("1.0::DOUBLE AS tortuosity_ratio")
+            extra_sql = (", " + ", ".join(extra_cols)) if extra_cols else ""
+            osm_subquery = f"SELECT * {extra_sql} FROM read_parquet('{osm_parquet_path}')"
+        else:
+            osm_subquery = """
                 SELECT
                     ''::VARCHAR AS stop_id_prev,
                     ''::VARCHAR AS stop_id_curr,
                     ''::VARCHAR AS corridor_name,
                     500.0::DOUBLE AS segment_length_meters,
+                    500.0::DOUBLE AS actual_path_length_meters,
+                    1.0::DOUBLE AS tortuosity_ratio,
                     2::BIGINT AS signalized_intersection_count,
                     true::BOOLEAN AS is_dedicated_right_of_way,
                     3::BIGINT AS lane_capacity
+                WHERE 1=0
+            """
+
+        calendar_subquery = (
+            f"SELECT calendar_date, is_school_day, is_public_holiday FROM read_parquet('{cal_path}')"
+            if has_cal
+            else """
+                SELECT
+                    '2026-10-01'::VARCHAR AS calendar_date,
+                    1::BIGINT AS is_school_day,
+                    0::BIGINT AS is_public_holiday
+                WHERE 1=0
+            """
+        )
+
+        interchange_subquery = (
+            f"SELECT stop_id, interchange_line_count, is_metro_proximity FROM read_parquet('{hub_path}')"
+            if has_hub
+            else """
+                SELECT
+                    ''::VARCHAR AS stop_id,
+                    1::BIGINT AS interchange_line_count,
+                    0::BIGINT AS is_metro_proximity
                 WHERE 1=0
             """
         )
@@ -220,7 +294,9 @@ class FeatureMartAssembler:
                 FROM trajectories
             ),
             v_weather AS ({weather_subquery}),
-            v_osm AS ({osm_subquery})
+            v_osm AS ({osm_subquery}),
+            v_calendar AS ({calendar_subquery}),
+            v_interchange AS ({interchange_subquery})
             SELECT
                 t.trip_id,
                 t.route_id,
@@ -248,12 +324,17 @@ class FeatureMartAssembler:
                 t.is_peak_hour,
                 t.is_morning_peak,
                 t.is_evening_peak,
+                COALESCE(cal.is_school_day, CASE WHEN t.is_weekend = 1 THEN 0 ELSE 1 END) AS is_school_day,
+                COALESCE(cal.is_public_holiday, 0) AS is_public_holiday,
                 t.headway_actual_s,
                 CASE
                     WHEN t.headway_actual_s >= 10 AND t.headway_actual_s <= 7200
                     THEN t.headway_actual_s - MEDIAN(t.headway_actual_s) OVER (PARTITION BY t.route_id, t.stop_id)
                     ELSE NULL
                 END AS headway_deviation,
+                -- Transfer Hub Interchange Exogenous Features
+                COALESCE(hub.interchange_line_count, 1) AS interchange_line_count,
+                COALESCE(hub.is_metro_proximity, 0) AS is_metro_proximity,
                 -- IMGW Weather Exogenous Features
                 COALESCE(w.temperature_c, 11.3) AS temperature_c,
                 COALESCE(w.precipitation_mm, 0.0) AS precipitation_mm,
@@ -263,6 +344,8 @@ class FeatureMartAssembler:
                 -- OSMnx Road Topology Exogenous Features
                 osm.corridor_name,
                 COALESCE(osm.segment_length_meters, 500.0) AS segment_length_meters,
+                COALESCE(osm.actual_path_length_meters, osm.segment_length_meters, 500.0) AS actual_path_length_meters,
+                COALESCE(osm.tortuosity_ratio, 1.0) AS tortuosity_ratio,
                 COALESCE(osm.signalized_intersection_count, 2) AS signalized_intersection_count,
                 COALESCE(osm.is_dedicated_right_of_way, CASE WHEN t.is_tram = 1 THEN true ELSE false END) AS is_dedicated_right_of_way,
                 COALESCE(osm.lane_capacity, 3) AS lane_capacity,
@@ -270,6 +353,8 @@ class FeatureMartAssembler:
             FROM with_headway t
             LEFT JOIN v_weather w ON t.timestamp_bucket = w.timestamp::TIMESTAMP
             LEFT JOIN v_osm osm ON (t.prev_stop_id = osm.stop_id_prev AND t.stop_id = osm.stop_id_curr)
+            LEFT JOIN v_calendar cal ON CAST(t.arrival_ts AS DATE)::VARCHAR = cal.calendar_date
+            LEFT JOIN v_interchange hub ON t.stop_id = hub.stop_id
             WHERE t.prev_stop_id IS NOT NULL  -- Retain stop-to-stop running segments
               {terminal_filter_clause}
               AND ABS(t.delta_t_run) <= 1800   -- Filter extreme segment anomalies (>30 min)
@@ -281,6 +366,8 @@ class FeatureMartAssembler:
         raw_pattern: Optional[str] = None,
         weather_parquet_path: Optional[str] = None,
         osm_parquet_path: Optional[str] = None,
+        calendar_parquet_path: Optional[str] = None,
+        interchange_parquet_path: Optional[str] = None,
         output_parquet: Optional[str] = None,
         max_records: Optional[int] = None,
         exclude_terminals: bool = True,
@@ -295,6 +382,12 @@ class FeatureMartAssembler:
         in_osm = osm_parquet_path or os.path.join(
             self.processed_dir, "osm_corridor_segments.parquet"
         )
+        in_calendar = calendar_parquet_path or os.path.join(
+            self.processed_dir, "calendar_lookup.parquet"
+        )
+        in_interchange = interchange_parquet_path or os.path.join(
+            self.processed_dir, "transit_stop_interchanges.parquet"
+        )
         out_path = output_parquet or self.output_parquet
 
         con = duckdb.connect(":memory:")
@@ -302,6 +395,8 @@ class FeatureMartAssembler:
             raw_pattern=in_raw,
             weather_parquet_path=in_weather,
             osm_parquet_path=in_osm,
+            calendar_parquet_path=in_calendar,
+            interchange_parquet_path=in_interchange,
             max_records=max_records,
             exclude_terminals=exclude_terminals,
             start_date=start_date,

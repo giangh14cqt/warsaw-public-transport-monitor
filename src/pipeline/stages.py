@@ -141,16 +141,56 @@ def run_stage_exogenous(args: argparse.Namespace) -> Dict[str, Any]:
             end_date=end_date,
         )
 
-    # OSM corridors check
-    if os.path.exists(osm_path) and not force_rebuild:
+    # OSM corridors check (rebuild if missing, forced, or lacking tortuosity_ratio)
+    need_osm_rebuild = not os.path.exists(osm_path) or force_rebuild
+    if not need_osm_rebuild:
+        import duckdb
+
+        con = duckdb.connect(":memory:")
+        try:
+            cols = [
+                c[0]
+                for c in con.execute(f"DESCRIBE SELECT * FROM read_parquet('{osm_path}')").fetchall()
+            ]
+            if "tortuosity_ratio" not in cols:
+                logger.info(
+                    "Existing OSM corridor topology lacks tortuosity_ratio; triggering rebuild..."
+                )
+                need_osm_rebuild = True
+        except Exception:
+            need_osm_rebuild = True
+        finally:
+            con.close()
+
+    if not need_osm_rebuild:
         logger.info(
             f"Found active OSMnx road corridor topology at {osm_path} ({os.path.getsize(osm_path):,} bytes)."
         )
     else:
-        logger.info("Extracting OSMnx corridor infrastructure attributes...")
+        logger.info("Extracting OSMnx corridor infrastructure & tortuosity attributes...")
         from src.exogenous.osm import extract_default_corridors
 
         extract_default_corridors(output_path=osm_path)
+
+    # Calendar lookup check
+    calendar_path = str(paths.calendar_lookup)
+    if not os.path.exists(calendar_path) or force_rebuild:
+        logger.info("Generating Polish public holiday and school calendar lookup...")
+        from src.core.polish_calendar import generate_calendar_parquet
+
+        generate_calendar_parquet(output_path=calendar_path)
+    else:
+        logger.info(f"Found active calendar lookup at {calendar_path}.")
+
+    # Stop interchanges and Metro proximity check
+    interchange_path = str(paths.stop_interchanges)
+    if not os.path.exists(interchange_path) or force_rebuild:
+        logger.info("Extracting transit stop interchanges and Metro proximity...")
+        from src.exogenous.interchange import extract_default_interchanges
+
+        extract_default_interchanges(output_path=interchange_path)
+    else:
+        logger.info(f"Found active transit stop interchanges at {interchange_path}.")
 
     duration = time.time() - t0
     return {
@@ -158,6 +198,8 @@ def run_stage_exogenous(args: argparse.Namespace) -> Dict[str, Any]:
         "duration_seconds": duration,
         "weather_path": weather_path,
         "osm_path": osm_path,
+        "calendar_path": calendar_path,
+        "interchange_path": interchange_path,
     }
 
 
@@ -180,8 +222,32 @@ def run_stage_fusion(args: argparse.Namespace) -> Dict[str, Any]:
     start_date = getattr(args, "start_date", None)
     end_date = getattr(args, "end_date", None)
 
-    # If start_date or end_date are specified, we must rebuild feature mart to match requested range
+    # If start_date or end_date are specified, or if new features are missing, rebuild feature mart
     need_rebuild = not os.path.exists(mart_path) or force_rebuild or bool(start_date or end_date)
+    if not need_rebuild:
+        import duckdb
+
+        con = duckdb.connect(":memory:")
+        try:
+            cols = [
+                c[0]
+                for c in con.execute(
+                    f"DESCRIBE SELECT * FROM read_parquet('{mart_path}')"
+                ).fetchall()
+            ]
+            if (
+                "tortuosity_ratio" not in cols
+                or "interchange_line_count" not in cols
+                or "is_school_day" not in cols
+            ):
+                logger.info(
+                    "Existing feature mart lacks newly engineered features (tortuosity, interchange, calendar); triggering rebuild..."
+                )
+                need_rebuild = True
+        except Exception:
+            need_rebuild = True
+        finally:
+            con.close()
 
     if not need_rebuild:
         logger.info(
