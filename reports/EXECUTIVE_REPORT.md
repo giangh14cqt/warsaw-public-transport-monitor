@@ -1,4 +1,4 @@
-# Warsaw Transit Telemetry & Delay Attribution: Executive POC Report
+# Warsaw Transit Telemetry & Delay Attribution: Executive Report
 
 **University of Warsaw (UW) — Faculty of Economic Sciences & Data Science**  
 **Master's Thesis Research Project**  
@@ -10,32 +10,44 @@
 
 ## 1. Executive Summary
 
-Urban public transit networks suffer from delay propagation, bunching, and schedule instability driven by interactions between traffic signal density, road corridor geometry, meteorological shocks, and operational dispatch headway variance. This project delivers an end-to-end telemetry ingestion engine, econometric baseline, non-linear machine learning benchmarks, and explainable AI (xAI) attribution framework deployed on the live public transport network of Warsaw, Poland (ZTM / [zbiorkom.live](https://zbiorkom.live)).
+Urban public transit networks often suffer from cascading delays, vehicle bunching, and irregular schedules. These problems arise from complex interactions between traffic signal density, road corridor geometry, weather conditions, and vehicle dispatch spacing. This project delivers an end-to-end data pipeline, an econometric baseline, non-linear machine learning benchmarks, and an Explainable AI (xAI) attribution framework built on live telemetry from the public transport network in Warsaw, Poland (ZTM / [zbiorkom.live](https://zbiorkom.live)).
 
 ### Core Empirical Findings
-1. **Predictive Uplift & Noise Reduction**: Filtering terminal turnaround layovers (`stop_sequence = max_seq` and idling drift) and integrating full-network OSM road infrastructure, school/holiday calendars, transfer hubs, and shape tortuosity eliminates spurious delay variance, reducing pooled hold-out validation MAE to **29.05s** (LightGBM) and MedAE to **20.16s**, with RMSE dropping to **50.17s** and $R^2$ reaching **+0.0450** (+26.1% relative boost over baseline).
-2. **Cohort Stratification (Trams vs. Buses)**: Isolating homogeneous operational regimes significantly improves fit and predictability:
-   - **Urban Trams (`urban_tram`)**: Achieve the lowest forecast error and highest explanatory power across the network (**LightGBM MAE: 22.98s, RMSE: 35.33s, MedAE: 17.84s, WAPE: 85.94%, R²: +0.1837**; CatBoost MAE: 24.42s, RMSE: 36.64s, MedAE: 18.97s, WAPE: 91.30%, R²: +0.1218), validating that rail infrastructure on segregated right-of-way combined with network interchange and shape tortuosity dramatically enhances delay predictability.
-   - **Core Urban Buses (`urban_bus`)**: Exhibit substantial variance reduction (**LightGBM MAE: 30.32s, RMSE: 52.16s, MedAE: 20.76s, WAPE: 98.66%, R²: +0.0342**; RMSE dropped by −3.81s).
-   - **Suburban Feeders (`suburban_bus`)**: Display higher speed variance over regional highways (**CatBoost MAE: 29.24s, RMSE: 55.43s, MedAE: 19.81s, WAPE: 98.97%, R²: +0.0195**).
-3. **Global Root-Cause Decomposition (TreeSHAP)**:
-   - **Upstream Delay Propagation (`prev_stop_delay`)**: Accounts for **29.70%** of total delay variance.
-   - **Temporal Diurnal Cycles (`hour_of_day`, `peak_hour`)**: Accounts for **22.49%**.
-   - **Dispatch Headway Regularity (`headway_deviation`)**: Accounts for **20.70%**.
-   - **Fleet Dynamics (`is_tram` vs bus)**: Accounts for **7.86%**.
-   - **Corridor Infrastructure & Signal Density**: Accounts for **4.93%**.
-4. **Non-Linear Tipping Points (Accumulated Local Effects - ALE)**:
-   - Delays exhibit acute non-linear saturation once upstream delays exceed $+300$ seconds, plateauing at an additional $+13.0$ seconds segment delay.
-   - Transit lines experience non-linear congestion cliffs at **74%** and **94%** of route completion, identifying critical terminal choke points.
-   - Dedicated Right-of-Way (ROW) acts as a discontinuous structural insulator, lowering segment delay escalation across all operating regimes.
-5. **Infrastructure Buffering Under Shocks**: Dedicated transit rights-of-way mitigate headway deviation shocks by **28.7% to 39.0% reduction in delay escalation** relative to mixed-traffic operations.
-6. **Counterfactual Remedies (DiCE)**: Dispatch headway regularization and dedicated ROW attenuate segment delay escalation by **+1.44s to +4.15s per stop**, while upstream schedule recovery holding successfully restores severe delay incidents back to on-time arrival ($\Delta t \le 120$s).
+
+1. **Better Predictions by Removing Terminal Layovers & Adding Key Features**:
+   Vehicles resting at terminal turnaround loops accumulate idle time that reflects driver rest breaks rather than street congestion. By filtering out these terminal layovers (`stop_sequence = max_seq` and idling periods) and adding citywide OpenStreetMap road topology, school/holiday calendars, transfer hub densities, and route shape tortuosity, we eliminated artificial noise. This reduced the pooled hold-out validation Mean Absolute Error (MAE) to **29.05 seconds** (LightGBM) and Median Absolute Error (MedAE) to **20.16 seconds**, lowered Root Mean Squared Error (RMSE) to **50.17 seconds**, and raised $R^2$ to **+0.0450** (+26.1% relative gain over baseline).
+
+2. **Clearer Patterns by Separating Trams and Buses (Transit Cohorts)**:
+   Evaluating different transit modes separately reveals distinct operating patterns:
+   - **Urban Trams (`urban_tram`)**: Achieved the highest predictability and lowest forecast error across the entire network (**LightGBM MAE: 22.98s, RMSE: 35.33s, MedAE: 17.84s, WAPE: 85.94%, $R^2$: +0.1837**; CatBoost MAE: 24.42s, RMSE: 36.64s, MedAE: 18.97s, WAPE: 91.30%, $R^2$: +0.1218). Operating on segregated tracks with dedicated right-of-way, combined with transfer hub and route tortuosity features, makes tram delays far more predictable than bus delays.
+   - **Core Urban Buses (`urban_bus`)**: Showed substantial error reduction with enriched spatial features (**LightGBM MAE: 30.32s, RMSE: 52.16s, MedAE: 20.76s, WAPE: 98.66%, $R^2$: +0.0342**; RMSE improved by −3.81s).
+   - **Suburban Feeders (`suburban_bus`)**: Operate on longer regional corridors with higher speed variation (**CatBoost MAE: 29.24s, RMSE: 55.43s, MedAE: 19.81s, WAPE: 98.97%, $R^2$: +0.0195**).
+
+3. **Main Drivers of Transit Delays (TreeSHAP Attribution)**:
+   - **Delays at Preceding Stops (`prev_stop_delay`)**: Explains **29.70%** of total delay variance, confirming that upstream delays strongly carry forward into subsequent stops.
+   - **Time of Day & Rush Hour Cycles (`hour_of_day`, `is_peak_hour`)**: Explains **22.49%** of delay variance.
+   - **Dispatch Headway Regularity (`headway_deviation`)**: Explains **20.70%** of delay variance, showing that uneven vehicle spacing and bunching create major delay cascades.
+   - **Fleet Dynamics (`is_tram` vs. bus)**: Explains **7.86%** of delay variance.
+   - **Corridor Infrastructure & Signal Bottlenecks**: Explains **4.93%** of delay variance.
+
+4. **Non-Linear Delays & Tipping Points (Accumulated Local Effects - ALE)**:
+   - **Upstream Delay Saturation**: Incremental running delay increases linearly up to $+300$ seconds of prior delay. Beyond 5 minutes of upstream delay, incremental delay plateaus at around $+13.0$ seconds.
+   - **Route Completion Bottlenecks**: Delays rise sharply when trips reach **74%** and **94%** of their scheduled route, highlighting severe congestion near central business districts and terminal approach loops.
+   - **Dedicated Right-of-Way (ROW) Protection**: Dedicated tram tracks and bus lanes reduce segment delay by an average of **-1.78 seconds** per stop under all conditions, acting as a reliable structural barrier against congestion.
+
+5. **How Dedicated Infrastructure Buffers Against Shocks**:
+   Dedicated transit rights-of-way cushion the impact of dispatch irregularities. When dispatch intervals fluctuate, downstream delay increases by $+0.042$s per second of headway deviation in mixed traffic, but only $+0.026$s on dedicated right-of-way. This represents a **39.0% reduction in delay escalation (+3.59 seconds saved per unit of shock)**.
+
+6. **Actionable Counterfactual Remedies (DiCE)**:
+   Diverse Counterfactual Explanations (DiCE) evaluated practical interventions on severely delayed trips:
+   - Pacing dispatch headways saves **+0.51s to +4.15s per stop** on bunched lines, and converting mixed traffic to dedicated right-of-way saves **+1.44s per stop** for buses.
+   - For heavily delayed vehicles ($\Delta t > 300\text{s}$), physical lane improvements prevent further delay accumulation, but cannot wipe out several minutes of backlog in a single stop. Fully restoring on-time arrival ($\Delta t \le 120\text{s}$) requires upstream schedule recovery holding or dispatch interval resets, which achieve a **100% on-time recovery rate**.
 
 ---
 
 ## 2. Pipeline Architecture & Telemetry Engineering
 
-The system operates across six decoupled architectural layers:
+The system operates across six modular layers:
 
 ```
 [Live Warsaw GTFS-RT Protobuf] (30s Polling)
@@ -46,9 +58,9 @@ The system operates across six decoupled architectural layers:
               ▼
 [DuckDB Analytical Engine] ── Zero-Lock Analytical Queries
               │
-              ├─> Continuous Hourly Synoptic Weather (Okęcie & Bielany, Open-Meteo & IMGW)
-              ├─> Citywide OSM Road Network Topology (10,081 segments, 4,179 signals across Warsaw)
-              ├─> Polish School & Statutory Holiday Calendar (Mazowieckie voivodeship schedule)
+              ├─> Hourly Synoptic Weather (Okęcie & Bielany, Open-Meteo & IMGW-PIB)
+              ├─> Citywide OSM Road Network (10,081 segments, 4,179 signals across Warsaw)
+              ├─> Polish School & Public Holiday Calendar (Mazowieckie voivodeship schedule)
               ├─> Transit Transfer Hub Density & Metro Proximity (39 M1/M2 stations buffer)
               ├─> GTFS Route Shape Micro-Topology & Tortuosity Ratio (actual polyline lengths)
               │
@@ -65,16 +77,16 @@ The system operates across six decoupled architectural layers:
 [xAI Diagnostics Suite] ── TreeSHAP, ALE Curves, Interaction Buffering & DiCE Counterfactuals
 ```
 
-### Telemetry Scale, Ingestion Reliability & Longitudinal Parity
-- **Ingestion Daemon**: Continuously active with automated exponential backoff ($3\text{s}, 6\text{s}, 12\text{s}, 24\text{s}$), HTTP 429 rate-limit backoff, and [Healthchecks.io](https://healthchecks.io) heartbeat monitoring.
-- **Assembled Feature Matrix**: Exactly **4,527,951 records** integrating vehicle movement, autoregressive stop-delay lags, weather metrics, citywide road network geometries, and cohort labels (`urban_tram`, `urban_bus`, `suburban_bus`).
+### Telemetry Scale, Ingestion Reliability & Data Parity
+- **Ingestion Daemon**: Continuously active with automated exponential retries ($3\text{s}, 6\text{s}, 12\text{s}, 24\text{s}$), HTTP 429 rate-limit backoff, and [Healthchecks.io](https://healthchecks.io) heartbeat monitoring.
+- **Assembled Feature Matrix**: Exactly **4,527,951 records** integrating vehicle movement, autoregressive stop-delay lags, weather observations, citywide road network geometries, and cohort labels (`urban_tram`, `urban_bus`, `suburban_bus`).
 
 ---
 
 ## 3. Modeling & Benchmark Evaluation
 
 ### 3.1 Validation Strategy: Zero-Leakage Purged Temporal Block Splitting
-To eliminate autoregressive data leakage inherent to time-series and panel transit data, we implemented a `PurgedTemporalBlockSplitter`:
+To eliminate autoregressive data leakage inherent to transit panel time-series data, we implemented `PurgedTemporalBlockSplitter`:
 - **Trip Boundary Purging**: Vehicle trips spanning split boundaries are purged to avoid cross-split trajectory leakage.
 - **Embargo Buffering**: A 30-minute blackout window is enforced between training, validation, and testing blocks to eliminate residual correlation from lingering congestion shockwaves.
 - **Terminal Layover Filtering**: Vehicles resting at terminal turnaround loops are purged to ensure the target variable measures active running transit friction rather than driver statutory rest breaks.
@@ -105,16 +117,16 @@ To eliminate autoregressive data leakage inherent to time-series and panel trans
 | **Citywide Network (OSM 10k links)** | CatBoost / LightGBM | 29.26s | 50.72s | 24.03s | +0.1390 | 30.85s | +0.0262 |
 | **Enriched Mart (+Top 3 Features)** | **LightGBM** | **29.05s** *(−0.21s)* | **50.17s** *(−0.55s)* | **22.98s** *(−1.05s)* | **+0.1837** *(+32.2%)* | **30.32s** *(−0.53s)* | **+0.0342** *(+30.5%)* |
 
-### 3.3 Econometric Baseline Insights & Framing
+### 3.3 Econometric Baseline Insights & Academic Framing
 Under the TWFE panel specification:
 $$y_{ist} = \alpha_i + \lambda_t + \beta X_{ist} + \epsilon_{ist}$$
-- **Traffic Signal Density**: $\beta = +0.5753\text{s}$ per signal ($p < 0.0001, t = 5.00$). The estimated linear elasticity is $\varepsilon = +0.2146$, indicating that a 10% increase in signal density induces a 2.15% increase in segment arrival delay.
+- **Traffic Signal Density**: $\beta = +0.5753\text{s}$ per signal ($p < 0.0001, t = 5.00$). The estimated point elasticity is $\varepsilon = +0.2146$, meaning a 10% increase in signal density induces a 2.15% increase in segment arrival delay.
 - **Lane Capacity**: $\beta = -6.0846\text{s}$ per additional lane ($p < 0.0001, t = -5.93$, elasticity $\varepsilon = -2.28$).
 - **Physical Link Length**: $\beta = +0.0029\text{s}$ per meter ($+2.9\text{s}$ running delay per kilometer, $p = 0.09$).
 - **Academic Framing on $R^2$ and WAPE**:
   - The target variable is the **signed first-differenced running delay delta** ($\Delta t_{\text{run}} = \text{delay}_s - \text{delay}_{s-1}$).
-  - Because stop-to-stop incremental delay isolates pure localized innovations, predicting first differences naturally exhibits modest $R^2$ (1–5% overall, up to 18.4% for trams) due to unobserved microscopic traffic light arrivals and dwell surges.
-  - Feeding true physical OSMnx link lengths, shape tortuosity, holiday schedules, and transfer hub densities reduced network-wide RMSE below **50.2 seconds** and boosted tram explanatory power to **18.37%** (with WAPE dropping to 85.9%), confirming the predictive value of citywide spatial graph topology and multimodal transfer friction.
+  - Because predicting stop-to-stop incremental delay isolates pure localized innovations, predicting first differences naturally exhibits modest $R^2$ (1–5% overall, up to 18.4% for trams) due to unobserved microscopic traffic light arrivals and dwell surges.
+  - Adding true physical OSMnx link lengths, shape tortuosity, holiday schedules, and transfer hub densities reduced network-wide RMSE below **50.2 seconds** and boosted tram explanatory power to **18.37%** (with WAPE dropping to 85.94%), confirming the predictive value of citywide spatial graph topology and multimodal transfer friction.
 
 ---
 
@@ -142,7 +154,7 @@ Accumulated Local Effects (ALE) isolate the pure marginal effect of individual f
 ### 4.3 Infrastructure Buffering & 2D Interactions
 Pairwise SHAP interaction values $\Phi_{i,j}(x)$ confirm that dedicated infrastructure acts as a physical shock absorber:
 - In mixed traffic, each second of headway deviation increases downstream delay by $+0.042$s.
-- On dedicated bus lanes / segregated tramways, this escalation is reduced to $+0.026$s, providing a **39.0% buffering benefit**.
+- On dedicated bus lanes and segregated tramways, this escalation is reduced to $+0.026$s, providing a **39.0% buffering benefit**.
 
 ![Interaction Headway vs ROW](figures/xai/interaction_headway_deviation_vs_dedicated_row.png)
 
@@ -159,7 +171,7 @@ To translate model attributions into concrete operational interventions, Diverse
 ## 5. Strategic Recommendations for Warsaw Transit (ZTM)
 
 1. **Deploy Dynamic Headway Control (Holding Strategies)**:
-   - Rather than strictly adhering to static departure timetables, dispatchers should pace high-frequency lines (e.g. Routes 190, 523, Tram 9, 24) to maintain uniform headway intervals, eliminating the 20.7% variance attributed to vehicle bunching.
+   - Rather than strictly adhering to static departure timetables, dispatchers should pace high-frequency lines (e.g., Routes 190, 523, Tram 9, 24) to maintain uniform headway intervals, eliminating the 20.7% variance attributed to vehicle bunching.
 2. **Prioritize Dedicated ROW on High-Congestion Corridors**:
    - Expanding segregated busways on Puławska and Al. Jerozolimskie will eliminate the 39% delay penalty caused by mixed-traffic friction during peak hours.
 3. **Targeted Transit Signal Priority (TSP) at Key Inflection Nodes**:
@@ -170,5 +182,5 @@ To translate model attributions into concrete operational interventions, Diverse
 ## 6. Software & Test Suite Audit
 
 The codebase includes full continuous integration test coverage across all pipeline layers:
-- **Test Suite Results**: **65 passing unit & integration tests** in 17.91 seconds.
+- **Test Suite Results**: **72 passing unit & integration tests** in 19.17 seconds (100% pass rate).
 - **Coverage**: Ingestion storage, OSM topology (citywide & arterial corridors), IMGW weather, trajectory reconstruction, feature mart fusion, temporal validation, TWFE, LightGBM, CatBoost, TreeSHAP, ALE curves, interaction buffering, DiCE counterfactuals, and E2E CLI pipeline runner.
