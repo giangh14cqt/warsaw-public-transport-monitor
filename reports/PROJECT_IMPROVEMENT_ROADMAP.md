@@ -132,7 +132,7 @@ To make the research findings clear and interactive for defenses and presentatio
 
 ## 8. Completed Phase: Top 3 High-Impact Feature Enhancements (October 2026)
 
-Based on feasibility and econometric impact, the top 3 candidate features were engineered, validated, and fused into the production feature mart (`4,527,951` records):
+Based on feasibility and econometric impact, the top 3 candidate features were engineered, validated, and fused into the production feature mart (**8,828,803 records**, expanded from the initial 4.53M dataset):
 
 ### 8.1 Implemented Feature Sets
 1. **Polish School & Public Holiday Calendar** ([`src/core/polish_calendar.py`](src/core/polish_calendar.py)):

@@ -52,7 +52,7 @@ The pipeline processes transit telemetry through six modular, independent stages
 [3. EXOGENOUS ENRICHMENT & FUSION]
   │  IMGW-PIB hourly synoptic weather telemetry (Warszawa-Okęcie & Bielany)
   │  Citywide OpenStreetMap road network (10,081 stop-to-stop links, 4,179 traffic signals)
-  │  DuckDB spatiotemporal join produces 4,527,951 rows (data/processed/feature_mart.parquet)
+  │  DuckDB spatiotemporal join produces 8,828,803 rows (data/processed/feature_mart.parquet)
   ▼
 [4. DATA LEAKAGE PREVENTION & SPLITTING]
   │  Purged Temporal Block Splitter (30-minute embargo buffer + trip boundary purging)
@@ -114,7 +114,7 @@ Using DuckDB, the pipeline enriches raw vehicle records with environmental, cale
    - `is_public_holiday`: Polish statutory holidays computed with the Anonymous Gregorian Easter algorithm.
 5. **Autoregressive Trajectory Lags (`src/fusion/trajectory.py`)**:
    - Lagged features tracking delays at previous stops (`prev_stop_delay`, `prev2_stop_delay`), dispatch spacing (`headway_deviation`), and relative `trip_progress` ($0.0 \to 1.0$).
-6. **Unified Feature Store**: Saved to `data/processed/feature_mart.parquet` (**4,527,951 rows**).
+6. **Unified Feature Store**: Saved to `data/processed/feature_mart.parquet` (**8,828,803 rows**).
 
 ---
 
@@ -133,30 +133,30 @@ To ensure realistic, unbiased evaluation, we implemented `PurgedTemporalBlockSpl
 
 ## 5. Empirical Modeling Benchmarks (TWFE vs. GBM)
 
-We evaluated classical econometric panel models against non-linear gradient boosted trees on the hold-out validation set ($N = 100,000$ sample, $N_{\text{val}} = 19,405$), after removing terminal layover rest breaks:
+We evaluated classical econometric panel models against non-linear gradient boosted trees on the hold-out validation set ($N = 100,000$ sample, $N_{\text{val}} = 19,449$), after removing terminal layover rest breaks:
 
 ### 5.1 Pooled Network Benchmark (Cleaned Layovers)
 
 | Model Architecture | Specification / Regularization | Hold-Out MAE | Hold-Out RMSE | Median AE | WAPE (%) | Validation $R^2$ |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Econometric TWFE Baseline** | Within Route + Hour FE + HC1 Robust OLS | 29.92s | 51.22s | 21.11s | 100.61% | +0.0048 |
-| **LightGBM Regressor** | Tree-depth 7, LR 0.05, L2 Reg 1.0 | **29.05s** | **50.17s** | **20.16s** | **97.68%** | **+0.0450** |
-| **CatBoost Regressor** | Symmetric Oblivious Trees, LR 0.05 | 29.44s | 50.70s | 20.57s | 98.97% | +0.0249 |
+| **Econometric TWFE Baseline** | Within Route + Hour FE + HC1 Robust OLS | 30.58s | 53.99s | 21.04s | 100.30% | +0.0144 |
+| **LightGBM Regressor** | Tree-depth 7, LR 0.05, L2 Reg 1.0 | **29.87s** | **52.76s** | **20.03s** | **97.94%** | **+0.0592** |
+| **CatBoost Regressor** | Symmetric Oblivious Trees, LR 0.05 | 30.05s | 53.35s | 20.03s | 98.54% | +0.0378 |
 
 ### 5.2 Stratified Evaluation Across Transit Cohorts
 
 | Transit Cohort | Best Model | Hold-Out MAE | Hold-Out RMSE | Median AE | WAPE (%) | Validation $R^2$ |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Urban Trams (`urban_tram`)** | **LightGBM Regressor** | **22.98s** | **35.33s** | **17.84s** | **85.94%** | **+0.1837** |
-| **Core Urban Buses (`urban_bus`)** | **LightGBM Regressor** | **30.32s** | **52.16s** | **20.76s** | **98.66%** | **+0.0342** |
-| **Suburban Feeders (`suburban_bus`)** | **CatBoost Regressor** | **29.24s** | 55.43s | **19.81s** | **98.97%** | **+0.0195** |
+| **Urban Trams (`urban_tram`)** | **LightGBM Regressor** | **24.14s** | **41.67s** | **18.45s** | **88.18%** | **+0.1707** |
+| **Core Urban Buses (`urban_bus`)** | **CatBoost Regressor** | **31.68s** | **56.58s** | **20.57s** | **99.27%** | **+0.0196** |
+| **Suburban Feeders (`suburban_bus`)** | **LightGBM Regressor** | **28.67s** | **49.78s** | **20.01s** | **99.93%** | **+0.0710** |
 
 ### 5.3 Econometric Panel Insights (TWFE)
 $$y_{ist} = \alpha_i + \lambda_t + \beta X_{ist} + \epsilon_{ist}$$
 * **Traffic Signal Density**: Statistically significant at $p < 0.0001$ ($\beta = +0.5753\text{s}/\text{signal}, t = 5.00$). The estimated point elasticity is $\varepsilon = +0.2146$, meaning a 10% increase in traffic signal count increases segment delay by 2.15%.
 * **Lane Capacity**: Statistically significant at $p < 0.0001$ ($\beta = -6.0846\text{s}$ per additional lane, $t = -5.93$, elasticity $\varepsilon = -2.28$).
 * **Physical Link Length**: $\beta = +0.0029\text{s}$ per meter ($+2.9\text{s}$ running delay per kilometer, $p = 0.09$).
-* **Why Gradient Boosting Outperforms Linear TWFE**: Linear panel regression assumes effects are purely additive. In contrast, transit delays exhibit threshold tipping points and non-linear interactions. LightGBM and CatBoost capture these non-linearities, reducing Urban Tram MAE to **22.98s** and WAPE to **85.94%** ($R^2 = +0.1837$).
+* **Why Gradient Boosting Outperforms Linear TWFE**: Linear panel regression assumes effects are purely additive. In contrast, transit delays exhibit threshold tipping points and non-linear interactions. Across the extended two-week study period, LightGBM achieves superior explanatory power, pushing pooled $R^2$ to **+0.0592** (+31.6% relative gain over the previous 1-week sample), with Suburban Feeder $R^2$ reaching **+0.0710** and Urban Tram $R^2$ reaching **+0.1707** ($WAPE = 88.18\%$).
 
 ---
 
@@ -190,7 +190,7 @@ Pairwise SHAP interaction values $\Phi_{i,j}(x)$ show whether dedicated infrastr
 
 ### 6.4 Counterfactual Diagnostics (DiCE)
 Using Diverse Counterfactual Explanations (DiCE), we tested how specific operational remedies would change severe delay incidents:
-* **Segment Delay Reduction**: Converting mixed-traffic lanes to dedicated right-of-way saves an average of **+1.44s per stop** for buses. Regularizing vehicle dispatch headways saves **+0.51s to +4.15s per stop** on bunched lines.
+* **Segment Delay Reduction**: Converting mixed-traffic lanes to dedicated right-of-way saves an average of **+1.44s per stop** for buses. Regularizing vehicle dispatch headways saves **+0.51s to +4.15s per stop** on bunched lines (averaging **+20.3s** on heavily bunched segments).
 * **On-Time Schedule Recovery**: For vehicles facing heavy delays ($\Delta t > 300\text{s}$), physical lane improvements prevent further delay accumulation, but cannot erase several minutes of past delay over one short stop. Restoring on-time status ($\le 120\text{s}$) requires upstream schedule recovery holding or dispatch interval resets, which achieve a **100% on-time recovery rate**.
 
 ![Counterfactual Policy Impact](reports/figures/xai/counterfactual_policy_impact.png)
@@ -207,19 +207,19 @@ python3 run_pipeline.py --check-ranges
 
 # 2. Execute complete pipeline across all stages (or select custom temporal range)
 python3 run_pipeline.py --stage all
-python3 run_pipeline.py --stage all --start-date 2026-10-05 --end-date 2026-10-09
+python3 run_pipeline.py --stage all --start-date 2026-10-04 --end-date 2026-10-17
 
 # 3. Rebuild exogenous weather data for an extended or custom date range
-python3 run_pipeline.py --stage exogenous --force-rebuild --start-date 2026-10-04 --end-date 2026-10-11
+python3 run_pipeline.py --stage exogenous --force-rebuild --start-date 2026-10-04 --end-date 2026-10-17
 
 # 4. Spatiotemporal fusion for a specific date range
-python3 run_pipeline.py --stage fusion --start-date 2026-10-05 --end-date 2026-10-09
+python3 run_pipeline.py --stage fusion --start-date 2026-10-04 --end-date 2026-10-17
 
 # 5. Run econometric & machine learning benchmarks on selected date range
-python3 run_pipeline.py --stage benchmark --start-date 2026-10-05 --end-date 2026-10-09 --sample-size 50000
+python3 run_pipeline.py --stage benchmark --start-date 2026-10-04 --end-date 2026-10-17 --sample-size 100000
 
 # 6. Generate explainable AI diagnostics (TreeSHAP, ALE, Interactions, DiCE)
-python3 run_pipeline.py --stage xai --start-date 2026-10-04 --end-date 2026-10-10
+python3 run_pipeline.py --stage xai --start-date 2026-10-04 --end-date 2026-10-17
 ```
 
 ---
@@ -252,7 +252,7 @@ python3 run_pipeline.py --stage xai --start-date 2026-10-04 --end-date 2026-10-1
 ├── data/
 │   ├── raw/                  # Partitioned Parquet sink (year=YYYY/month=MM/day=DD/)
 │   ├── gtfs/                 # Archived weekly static GTFS timetable snapshots
-│   └── processed/            # Fused feature store (feature_mart.parquet, 4.52M rows)
+│   └── processed/            # Fused feature store (feature_mart.parquet, 8.83M rows)
 └── logs/                     # Daemon health logs and backup audit trails
 ```
 

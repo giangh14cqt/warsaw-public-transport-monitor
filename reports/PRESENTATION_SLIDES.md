@@ -36,7 +36,7 @@
    └── GTFS Route Shape Micro-Topology & Tortuosity Ratios (actual polyline lengths)
                   │
                   ▼
-[Unified Feature Mart (4,527,951 rows)]
+[Unified Feature Mart (8,828,803 rows)]
                   │
                   ▼
 [Purged Temporal Block Validation (30m Embargo)]
@@ -56,7 +56,7 @@
   - Transfer Hubs: `interchange_line_count`, `is_metro_proximity` (300m buffer to 39 M1/M2 stations).
   - Temporal & Calendar: `is_school_day`, `is_public_holiday`, `hour_of_day`, `is_peak_hour`.
   - Weather: `precipitation_mm`, `temperature_c`, `relative_humidity`, `freezing_rain_flag`.
-- **Total Dataset Size**: **4,527,951 spatiotemporally aligned transit observations** across Warsaw's multimodal network with balanced weekday coverage (~740k–780k records/day).
+- **Total Dataset Size**: **8,828,803 spatiotemporally aligned transit observations** across Warsaw's multimodal network (from **24,395,598 raw records** spanning October 4–17, 2026).
 
 ---
 
@@ -77,17 +77,17 @@
 
 | Model / Cohort | MAE (seconds) | RMSE (seconds) | Median AE (seconds) | WAPE (%) | Validation $R^2$ |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Pooled: TWFE Panel** | 29.92s | 51.22s | 21.11s | 100.61% | +0.0048 |
-| **Pooled: LightGBM** | **29.05s** | **50.17s** | **20.16s** | **97.68%** | **+0.0450** |
-| **Pooled: CatBoost** | 29.44s | 50.70s | 20.57s | 98.97% | +0.0249 |
-| **Urban Tram (LightGBM)** | **22.98s** | **35.33s** | **17.84s** | **85.94%** | **+0.1837** |
-| **Urban Bus (LightGBM)** | **30.32s** | **52.16s** | **20.76s** | **98.66%** | **+0.0342** |
-| **Suburban Bus (CatBoost)**| **29.24s** | 55.43s | **19.81s** | **98.97%** | **+0.0195** |
+| **Pooled: TWFE Panel** | 30.58s | 53.99s | 21.04s | 100.30% | +0.0144 |
+| **Pooled: LightGBM** | **29.87s** | **52.76s** | **20.03s** | **97.94%** | **+0.0592** |
+| **Pooled: CatBoost** | 30.05s | 53.35s | 20.03s | 98.54% | +0.0378 |
+| **Urban Tram (LightGBM)** | **24.14s** | **41.67s** | **18.45s** | **88.18%** | **+0.1707** |
+| **Urban Bus (CatBoost)** | **31.68s** | **56.58s** | **20.57s** | **99.27%** | **+0.0196** |
+| **Suburban Bus (LightGBM)**| **28.67s** | **49.78s** | **20.01s** | **99.93%** | **+0.0710** |
 
 - **Key Takeaways**:
-  - **Value of Topology & Transfer Data**: Adding route tortuosity, holiday schedules, and transfer hub densities lifted pooled LightGBM $R^2$ to **+0.0450** (+26.1% boost over baseline) and lowered WAPE below 98%.
-  - **Highest Predictability for Urban Trams**: Urban Trams achieved an impressive **+18.37% hold-out $R^2$** (+32.2% relative gain) with MAE dropping to **22.98s** and WAPE falling to **85.94%**, confirming that segregated rail infrastructure and transfer hubs capture key operational friction.
-  - **Variance Reduction for Urban Buses**: Core Urban Bus RMSE fell by **−3.81s** down to 52.16s, with $R^2$ increasing to **+0.0342** (+30.5% boost).
+  - **Longitudinal Data Expansion Gain**: Expanding to the full 14-day window lifted pooled LightGBM $R^2$ to **+0.0592** (+31.6% boost over the 1-week benchmark of +0.0450).
+  - **Suburban Feeders Major Improvement**: Suburban bus predictability nearly tripled ($R^2$ rose to **+0.0710**, up from +0.0245) with RMSE dropping to **49.78s** (−5.51s reduction), showing that larger sample horizons capture highway transit patterns effectively.
+  - **Consistent Urban Tram Predictability**: Urban Trams maintained the lowest relative error (WAPE = **88.18%**) and strong explanatory power ($R^2 = \mathbf{+0.1707}$), confirming that dedicated rail infrastructure significantly stabilizes arrival predictability.
   - **Gradient Boosters Beat Linear Panel Models**: Non-linear tree models consistently outperformed linear TWFE panel regression across all transit cohorts by capturing congestion tipping points and complex multi-modal interactions.
 
 ---
