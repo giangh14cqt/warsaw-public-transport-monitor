@@ -116,6 +116,9 @@ Using DuckDB, the pipeline enriches raw vehicle records with environmental, cale
    - Lagged features tracking delays at previous stops (`prev_stop_delay`, `prev2_stop_delay`), dispatch spacing (`headway_deviation`), and relative `trip_progress` ($0.0 \to 1.0$).
 6. **Unified Feature Store**: Saved to `data/processed/feature_mart.parquet` (**8,828,803 rows**).
 
+> [!NOTE]
+> For the complete data dictionary, column types, and analysis mappings across all 45 feature mart attributes and ingestion feeds, see the comprehensive [Data Schema Reference (`DATA_SCHEMA.md`)](DATA_SCHEMA.md).
+
 ---
 
 ## 4. Zero-Leakage Validation Strategy

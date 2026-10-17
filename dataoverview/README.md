@@ -34,7 +34,9 @@ This directory contains Jupyter notebooks for exploratory data analysis (EDA), v
 3. Run the notebook cells interactively.
 
 ### Tips for Querying Large Datasets
-The raw telemetry contains over **11 million records** (~225 MB Parquet). All notebook queries use **DuckDB** for maximum performance:
+The raw telemetry contains over **24 million records** (~225 MB Parquet), and the processed feature mart contains **8.83 million records** (~286 MB Parquet). All notebook queries use **DuckDB** for maximum performance:
 - **Fast Sampling**: Use `USING SAMPLE 100000` to preview distributions instantly.
 - **Filter Outliers**: Use `WHERE ABS(arrival_delay_seconds) <= 1800` to focus on normal transit operations and remove vehicle depot movements.
-- **Partition Filtering**: Filter by partition columns (such as `WHERE day = 5` or `WHERE route_id = '17'`) so DuckDB reads only the needed files in milliseconds.
+- **Partition Filtering**: Filter by partition columns (such as `WHERE day = '05'` or `WHERE route_id = '17'`) so DuckDB reads only the needed files in milliseconds.
+- **Data Schemas & Reference**: For full data dictionary and column-level definitions across all tables, see [DATA_SCHEMA.md](../DATA_SCHEMA.md).
+- **SQL Workbench**: For ready-to-run DuckDB queries, see [`query.sql`](query.sql).
