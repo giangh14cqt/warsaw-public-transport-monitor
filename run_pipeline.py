@@ -111,8 +111,8 @@ def main():
     parser.add_argument(
         "--raw-pattern",
         type=str,
-        default="data/raw/**/*.parquet",
-        help="Hive-partitioned raw Parquet glob pattern.",
+        default=None,
+        help="Optional Parquet glob pattern (defaults to datasource pattern).",
     )
     parser.add_argument(
         "--output-dir",
@@ -136,6 +136,13 @@ def main():
         "--include-terminals",
         action="store_true",
         help="Include terminal layover stops (default is to exclude for noise reduction).",
+    )
+    parser.add_argument(
+        "--datasource",
+        type=str,
+        default="legacy",
+        choices=["legacy", "historian"],
+        help="Telemetry datasource to fuse and model: 'legacy' (30s GTFS-RT) or 'historian' (10s observed ground truth).",
     )
     parser.add_argument(
         "--dry-run",

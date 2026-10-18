@@ -263,5 +263,121 @@ class TestFeatureMartAssembler(unittest.TestCase):
         self.assertEqual(t4_df.iloc[0]["transit_cohort"], "suburban_bus")
 
 
+    def test_assemble_historian_observed_mart(self):
+        # Create mock Gold stop events
+        gold_dir = os.path.join(self.test_dir.name, "historian", "gold", "stop_events", "date=2026-10-18")
+        os.makedirs(gold_dir, exist_ok=True)
+        gold_parquet = os.path.join(gold_dir, "stop_events.parquet")
+
+        gold_df = pd.DataFrame(
+            [
+                {
+                    "service_date": "2026-10-18",
+                    "trip_id": "T_OBS_1",
+                    "route_id": "190",
+                    "brigade": "1",
+                    "vehicle_number": "1001",
+                    "vehicle_type": "bus",
+                    "stop_sequence": 1,
+                    "stop_id": "1001",
+                    "stop_name": "Stop 1",
+                    "scheduled_arrival_utc": 1792330000,
+                    "scheduled_departure_utc": 1792330020,
+                    "actual_arrival_utc": 1792330010,
+                    "actual_departure_utc": 1792330035,
+                    "arrival_delay_seconds": 10,
+                    "departure_delay_seconds": 15,
+                    "dwell_seconds": 25,
+                    "zbk_forecast_delay_s": 12,
+                    "forecast_error_s": -2,
+                    "event_type": "STOPPED",
+                    "confidence": "HIGH",
+                    "min_distance_to_stop_m": 5.0,
+                },
+                {
+                    "service_date": "2026-10-18",
+                    "trip_id": "T_OBS_1",
+                    "route_id": "190",
+                    "brigade": "1",
+                    "vehicle_number": "1001",
+                    "vehicle_type": "bus",
+                    "stop_sequence": 2,
+                    "stop_id": "1002",
+                    "stop_name": "Stop 2",
+                    "scheduled_arrival_utc": 1792330150,
+                    "scheduled_departure_utc": 1792330170,
+                    "actual_arrival_utc": 1792330180,
+                    "actual_departure_utc": 1792330200,
+                    "arrival_delay_seconds": 30,
+                    "departure_delay_seconds": 30,
+                    "dwell_seconds": 20,
+                    "zbk_forecast_delay_s": 40,
+                    "forecast_error_s": -10,
+                    "event_type": "STOPPED",
+                    "confidence": "HIGH",
+                    "min_distance_to_stop_m": 8.0,
+                },
+                {
+                    "service_date": "2026-10-18",
+                    "trip_id": "T_OBS_1",
+                    "route_id": "190",
+                    "brigade": "1",
+                    "vehicle_number": "1001",
+                    "vehicle_type": "bus",
+                    "stop_sequence": 3,
+                    "stop_id": "1003",
+                    "stop_name": "Stop 3",
+                    "scheduled_arrival_utc": 1792330300,
+                    "scheduled_departure_utc": 1792330320,
+                    "actual_arrival_utc": 1792330340,
+                    "actual_departure_utc": 1792330360,
+                    "arrival_delay_seconds": 40,
+                    "departure_delay_seconds": 40,
+                    "dwell_seconds": 20,
+                    "zbk_forecast_delay_s": 45,
+                    "forecast_error_s": -5,
+                    "event_type": "STOPPED",
+                    "confidence": "HIGH",
+                    "min_distance_to_stop_m": 4.0,
+                },
+            ]
+        )
+        gold_df.to_parquet(gold_parquet)
+
+        out_observed_parquet = os.path.join(self.test_dir.name, "observed_fused.parquet")
+        res_path = self.assembler.assemble_mart(
+            raw_pattern=gold_parquet,
+            weather_parquet_path=self.mock_weather_parquet,
+            osm_parquet_path=self.mock_osm_parquet,
+            output_parquet=out_observed_parquet,
+            exclude_terminals=False,
+            datasource="historian",
+        )
+
+        self.assertTrue(os.path.exists(res_path))
+        con = duckdb.connect(":memory:")
+        fused = con.execute(f"SELECT * FROM read_parquet('{res_path}')").df()
+        con.close()
+
+        # Stop 1 is origin (prev_stop is NULL) so stops 2 and 3 remain
+        self.assertEqual(len(fused), 2)
+        row = fused.iloc[0]
+        self.assertEqual(row["trip_id"], "T_OBS_1")
+        self.assertEqual(row["stop_sequence"], 2)
+        self.assertEqual(row["prev_stop_id"], "1001")
+        self.assertEqual(row["prev_stop_delay"], 10)
+        self.assertEqual(row["arrival_delay_seconds"], 30)
+        self.assertEqual(row["delta_t_run"], 20.0)
+        self.assertEqual(row["dwell_seconds"], 20)
+        self.assertEqual(row["zbk_forecast_delay_s"], 40)
+        self.assertEqual(row["forecast_error_s"], -10)
+        self.assertEqual(row["transit_cohort"], "urban_bus")
+
+        # Verify summary handles dwell_seconds
+        summary = self.assembler.get_summary(res_path)
+        self.assertEqual(summary["total_observations"], 2)
+        self.assertEqual(summary["avg_dwell_seconds"], 20.0)
+
+
 if __name__ == "__main__":
     unittest.main()

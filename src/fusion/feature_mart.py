@@ -10,7 +10,7 @@ Performs:
 
 import logging
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 import duckdb
 
@@ -24,24 +24,26 @@ class FeatureMartAssembler:
         self.data_dir = data_dir
         self.raw_dir = os.path.join(data_dir, "raw")
         self.processed_dir = os.path.join(data_dir, "processed")
+        self.historian_dir = os.path.join(data_dir, "historian")
+        self.historian_gold_pattern = os.path.join(
+            self.historian_dir, "gold", "stop_events", "date=*", "stop_events.parquet"
+        )
+        self.historian_processed_dir = os.path.join(self.historian_dir, "processed")
         os.makedirs(self.processed_dir, exist_ok=True)
+        os.makedirs(self.historian_processed_dir, exist_ok=True)
         self.output_parquet = os.path.join(self.processed_dir, "feature_mart.parquet")
+        self.historian_output_parquet = os.path.join(
+            self.historian_processed_dir, "feature_mart_observed.parquet"
+        )
 
-    def build_fusion_sql(
+    def _build_exogenous_subqueries(
         self,
-        raw_pattern: str,
         weather_parquet_path: str,
         osm_parquet_path: str,
         calendar_parquet_path: Optional[str] = None,
         interchange_parquet_path: Optional[str] = None,
-        max_delay_seconds: int = 7200,
-        max_records: Optional[int] = None,
-        exclude_terminals: bool = True,
-        start_date: Optional[str] = None,
-        end_date: Optional[str] = None,
-    ) -> str:
-        """Construct the optimized DuckDB SQL query for multi-source spatiotemporal fusion."""
-        limit_clause = f"LIMIT {max_records}" if max_records else ""
+    ) -> Tuple[str, str, str, str]:
+        """Constructs reusable exogenous subqueries for weather, OSM corridors, calendar, and hubs."""
         has_weather = os.path.exists(weather_parquet_path)
         has_osm = os.path.exists(osm_parquet_path)
 
@@ -68,25 +70,6 @@ class FeatureMartAssembler:
             except Exception as e:
                 logger.warning(f"Could not auto-generate stop interchanges: {e}")
         has_hub = os.path.exists(hub_path)
-
-        terminal_filter_clause = (
-            "AND (t.is_terminal_stop = false OR t.max_seq <= t.min_seq + 1)"
-            if exclude_terminals
-            else ""
-        )
-
-        date_filter_clause = ""
-        if start_date or end_date:
-            from src.pipeline.ranges import build_date_filter_clause
-
-            filter_expr = build_date_filter_clause(
-                "feed_timestamp",
-                start_date=start_date,
-                end_date=end_date,
-                is_epoch_seconds=True,
-            )
-            if filter_expr and filter_expr != "1=1":
-                date_filter_clause = f"AND {filter_expr}"
 
         weather_subquery = (
             f"SELECT * FROM read_parquet('{weather_parquet_path}')"
@@ -165,6 +148,276 @@ class FeatureMartAssembler:
                 WHERE 1=0
             """
         )
+
+        return weather_subquery, osm_subquery, calendar_subquery, interchange_subquery
+
+    def build_historian_fusion_sql(
+        self,
+        gold_pattern: str,
+        weather_parquet_path: str,
+        osm_parquet_path: str,
+        calendar_parquet_path: Optional[str] = None,
+        interchange_parquet_path: Optional[str] = None,
+        max_delay_seconds: int = 7200,
+        max_records: Optional[int] = None,
+        exclude_terminals: bool = True,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+    ) -> str:
+        """Construct the optimized DuckDB SQL query for Track B observed stop event fusion."""
+        limit_clause = f"LIMIT {max_records}" if max_records else ""
+        (
+            weather_subquery,
+            osm_subquery,
+            calendar_subquery,
+            interchange_subquery,
+        ) = self._build_exogenous_subqueries(
+            weather_parquet_path, osm_parquet_path, calendar_parquet_path, interchange_parquet_path
+        )
+
+        terminal_filter_clause = (
+            "AND (t.is_terminal_stop = false OR t.max_seq <= t.min_seq + 1)"
+            if exclude_terminals
+            else ""
+        )
+
+        date_filter_clause = ""
+        if start_date or end_date:
+            conditions = []
+            if start_date:
+                conditions.append(f"service_date >= '{start_date[:10]}'")
+            if end_date:
+                conditions.append(f"service_date <= '{end_date[:10]}'")
+            date_filter_clause = "AND " + " AND ".join(conditions)
+
+        return f"""
+            WITH raw_stops AS (
+                SELECT
+                    service_date,
+                    trip_id,
+                    trip_id || '_' || service_date AS trip_instance_key,
+                    route_id,
+                    vehicle_number AS vehicle_id,
+                    vehicle_type,
+                    stop_sequence,
+                    stop_id,
+                    stop_name,
+                    scheduled_arrival_utc,
+                    scheduled_departure_utc,
+                    actual_arrival_utc,
+                    actual_departure_utc,
+                    arrival_delay_seconds,
+                    departure_delay_seconds,
+                    dwell_seconds,
+                    zbk_forecast_delay_s,
+                    forecast_error_s,
+                    confidence
+                FROM read_parquet('{gold_pattern}')
+                WHERE event_type = 'STOPPED'
+                  AND actual_arrival_utc IS NOT NULL
+                  AND ABS(arrival_delay_seconds) <= {max_delay_seconds}
+                  {date_filter_clause}
+                {limit_clause}
+            ),
+            ordered AS (
+                SELECT
+                    *,
+                    LAG(stop_id) OVER (PARTITION BY trip_instance_key ORDER BY stop_sequence) AS prev_stop_id,
+                    LAG(arrival_delay_seconds) OVER (PARTITION BY trip_instance_key ORDER BY stop_sequence) AS prev_stop_delay,
+                    LAG(arrival_delay_seconds, 2) OVER (PARTITION BY trip_instance_key ORDER BY stop_sequence) AS prev2_stop_delay,
+                    LAG(actual_departure_utc) OVER (PARTITION BY trip_instance_key ORDER BY stop_sequence) AS prev_actual_dep,
+                    LAG(scheduled_departure_utc) OVER (PARTITION BY trip_instance_key ORDER BY stop_sequence) AS prev_sched_dep,
+                    MAX(stop_sequence) OVER (PARTITION BY trip_instance_key) AS max_seq,
+                    MIN(stop_sequence) OVER (PARTITION BY trip_instance_key) AS min_seq
+                FROM raw_stops
+            ),
+            trajectories AS (
+                SELECT
+                    trip_id,
+                    trip_instance_key,
+                    service_date AS start_date,
+                    route_id,
+                    vehicle_id,
+                    stop_sequence,
+                    stop_id,
+                    stop_name,
+                    prev_stop_id,
+                    arrival_delay_seconds,
+                    departure_delay_seconds,
+                    dwell_seconds,
+                    zbk_forecast_delay_s,
+                    forecast_error_s,
+                    confidence,
+                    prev_stop_delay,
+                    prev2_stop_delay,
+                    actual_arrival_utc AS rt_arrival_time,
+                    actual_departure_utc AS rt_departure_time,
+                    to_timestamp(actual_arrival_utc) AS arrival_ts,
+                    date_trunc('hour', to_timestamp(actual_arrival_utc)) AS timestamp_bucket,
+                    EXTRACT(hour FROM to_timestamp(actual_arrival_utc)) AS hour_of_day,
+                    EXTRACT(dayofweek FROM to_timestamp(actual_arrival_utc)) AS day_of_week,
+                    CASE WHEN EXTRACT(dayofweek FROM to_timestamp(actual_arrival_utc)) IN (0, 6) THEN 1 ELSE 0 END AS is_weekend,
+                    CASE WHEN EXTRACT(hour FROM to_timestamp(actual_arrival_utc)) IN (7, 8, 9, 16, 17, 18) THEN 1 ELSE 0 END AS is_peak_hour,
+                    CASE WHEN EXTRACT(hour FROM to_timestamp(actual_arrival_utc)) IN (7, 8, 9) THEN 1 ELSE 0 END AS is_morning_peak,
+                    CASE WHEN EXTRACT(hour FROM to_timestamp(actual_arrival_utc)) IN (16, 17, 18) THEN 1 ELSE 0 END AS is_evening_peak,
+                    CASE WHEN prev_stop_delay IS NOT NULL THEN (arrival_delay_seconds - prev_stop_delay) ELSE 0.0 END AS delta_t_run,
+                    (departure_delay_seconds - arrival_delay_seconds) AS delta_t_dwell,
+                    CASE
+                        WHEN prev_actual_dep IS NOT NULL AND actual_arrival_utc > prev_actual_dep
+                        THEN (actual_arrival_utc - prev_actual_dep)
+                        ELSE NULL
+                    END AS observed_run_time_s,
+                    CASE WHEN max_seq > min_seq THEN ROUND(CAST(stop_sequence - min_seq AS DOUBLE) / (max_seq - min_seq), 3) ELSE 0.0 END AS trip_progress,
+                    CASE WHEN stop_sequence = min_seq THEN true ELSE false END AS is_origin_stop,
+                    CASE WHEN stop_sequence = max_seq AND max_seq > min_seq THEN true ELSE false END AS is_terminal_stop,
+                    max_seq,
+                    min_seq,
+                    CASE WHEN vehicle_type = 'tram' OR (TRY_CAST(route_id AS INTEGER) IS NOT NULL AND TRY_CAST(route_id AS INTEGER) < 100) THEN 1 ELSE 0 END AS is_tram,
+                    CASE
+                        WHEN vehicle_type = 'tram' OR (TRY_CAST(route_id AS INTEGER) BETWEEN 1 AND 79) THEN 'urban_tram'
+                        WHEN TRY_CAST(route_id AS INTEGER) BETWEEN 100 AND 599 THEN 'urban_bus'
+                        WHEN TRY_CAST(route_id AS INTEGER) BETWEEN 700 AND 899 OR UPPER(route_id) LIKE 'L%' THEN 'suburban_bus'
+                        WHEN UPPER(route_id) LIKE 'N%' THEN 'night_bus'
+                        ELSE 'other'
+                    END AS transit_cohort
+                FROM ordered
+            ),
+            with_headway AS (
+                SELECT
+                    *,
+                    (rt_arrival_time - LAG(rt_arrival_time) OVER (
+                        PARTITION BY route_id, stop_id
+                        ORDER BY rt_arrival_time
+                    )) AS headway_actual_s
+                FROM trajectories
+            ),
+            v_weather AS ({weather_subquery}),
+            v_osm AS ({osm_subquery}),
+            v_calendar AS ({calendar_subquery}),
+            v_interchange AS ({interchange_subquery})
+            SELECT
+                t.trip_id,
+                t.route_id,
+                t.vehicle_id,
+                t.stop_sequence,
+                t.stop_id,
+                t.stop_name,
+                t.prev_stop_id,
+                t.arrival_delay_seconds,
+                t.departure_delay_seconds,
+                t.dwell_seconds,
+                t.zbk_forecast_delay_s,
+                t.forecast_error_s,
+                t.confidence,
+                t.prev_stop_delay,
+                t.prev2_stop_delay,
+                t.delta_t_run,
+                t.delta_t_dwell,
+                t.observed_run_time_s,
+                t.trip_progress,
+                t.is_origin_stop,
+                t.is_terminal_stop,
+                t.is_tram,
+                t.transit_cohort,
+                t.arrival_ts,
+                t.timestamp_bucket,
+                t.hour_of_day,
+                t.day_of_week,
+                t.is_weekend,
+                t.is_peak_hour,
+                t.is_morning_peak,
+                t.is_evening_peak,
+                COALESCE(cal.is_school_day, CASE WHEN t.is_weekend = 1 THEN 0 ELSE 1 END) AS is_school_day,
+                COALESCE(cal.is_public_holiday, 0) AS is_public_holiday,
+                t.headway_actual_s,
+                CASE
+                    WHEN t.headway_actual_s >= 10 AND t.headway_actual_s <= 7200
+                    THEN t.headway_actual_s - MEDIAN(t.headway_actual_s) OVER (PARTITION BY t.route_id, t.stop_id)
+                    ELSE NULL
+                END AS headway_deviation,
+                COALESCE(hub.interchange_line_count, 1) AS interchange_line_count,
+                COALESCE(hub.is_metro_proximity, 0) AS is_metro_proximity,
+                COALESCE(w.temperature_c, 11.3) AS temperature_c,
+                COALESCE(w.precipitation_mm, 0.0) AS precipitation_mm,
+                COALESCE(w.wind_speed_ms, 3.0) AS wind_speed_ms,
+                COALESCE(w.relative_humidity, 75.0) AS relative_humidity,
+                COALESCE(w.freezing_rain_flag, false) AS freezing_rain_flag,
+                osm.corridor_name,
+                COALESCE(osm.segment_length_meters, 500.0) AS segment_length_meters,
+                COALESCE(osm.actual_path_length_meters, osm.segment_length_meters, 500.0) AS actual_path_length_meters,
+                COALESCE(osm.tortuosity_ratio, 1.0) AS tortuosity_ratio,
+                COALESCE(osm.signalized_intersection_count, 2) AS signalized_intersection_count,
+                COALESCE(osm.is_dedicated_right_of_way, CASE WHEN t.is_tram = 1 THEN true ELSE false END) AS is_dedicated_right_of_way,
+                COALESCE(osm.lane_capacity, 3) AS lane_capacity,
+                CASE WHEN osm.corridor_name IS NOT NULL THEN 1 ELSE 0 END AS is_study_corridor
+            FROM with_headway t
+            LEFT JOIN v_weather w ON t.timestamp_bucket = w.timestamp::TIMESTAMP
+            LEFT JOIN v_osm osm ON (t.prev_stop_id = osm.stop_id_prev AND t.stop_id = osm.stop_id_curr)
+            LEFT JOIN v_calendar cal ON CAST(t.arrival_ts AS DATE)::VARCHAR = cal.calendar_date
+            LEFT JOIN v_interchange hub ON t.stop_id = hub.stop_id
+            WHERE t.prev_stop_id IS NOT NULL
+              {terminal_filter_clause}
+              AND ABS(t.delta_t_run) <= 1800
+            ORDER BY t.arrival_ts
+        """
+
+    def build_fusion_sql(
+        self,
+        raw_pattern: str,
+        weather_parquet_path: str,
+        osm_parquet_path: str,
+        calendar_parquet_path: Optional[str] = None,
+        interchange_parquet_path: Optional[str] = None,
+        max_delay_seconds: int = 7200,
+        max_records: Optional[int] = None,
+        exclude_terminals: bool = True,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        datasource: str = "legacy",
+    ) -> str:
+        """Construct the optimized DuckDB SQL query for multi-source spatiotemporal fusion."""
+        if datasource == "historian" or "historian" in raw_pattern or "stop_events" in raw_pattern:
+            return self.build_historian_fusion_sql(
+                gold_pattern=raw_pattern,
+                weather_parquet_path=weather_parquet_path,
+                osm_parquet_path=osm_parquet_path,
+                calendar_parquet_path=calendar_parquet_path,
+                interchange_parquet_path=interchange_parquet_path,
+                max_delay_seconds=max_delay_seconds,
+                max_records=max_records,
+                exclude_terminals=exclude_terminals,
+                start_date=start_date,
+                end_date=end_date,
+            )
+
+        limit_clause = f"LIMIT {max_records}" if max_records else ""
+        (
+            weather_subquery,
+            osm_subquery,
+            calendar_subquery,
+            interchange_subquery,
+        ) = self._build_exogenous_subqueries(
+            weather_parquet_path, osm_parquet_path, calendar_parquet_path, interchange_parquet_path
+        )
+
+        terminal_filter_clause = (
+            "AND (t.is_terminal_stop = false OR t.max_seq <= t.min_seq + 1)"
+            if exclude_terminals
+            else ""
+        )
+
+        date_filter_clause = ""
+        if start_date or end_date:
+            from src.pipeline.ranges import build_date_filter_clause
+
+            filter_expr = build_date_filter_clause(
+                "feed_timestamp",
+                start_date=start_date,
+                end_date=end_date,
+                is_epoch_seconds=True,
+            )
+            if filter_expr and filter_expr != "1=1":
+                date_filter_clause = f"AND {filter_expr}"
 
         # Inspect raw schema to check if start_date exists
         con = duckdb.connect()
@@ -373,9 +626,20 @@ class FeatureMartAssembler:
         exclude_terminals: bool = True,
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
+        datasource: str = "legacy",
     ) -> str:
         """Execute full spatial-temporal join and anomaly filtering in DuckDB."""
-        in_raw = raw_pattern or os.path.join(self.raw_dir, "**/*.parquet")
+        if datasource == "historian" or (
+            raw_pattern and ("historian" in raw_pattern or "stop_events" in raw_pattern)
+        ):
+            in_raw = raw_pattern or self.historian_gold_pattern
+            out_path = output_parquet or self.historian_output_parquet
+            ds = "historian"
+        else:
+            in_raw = raw_pattern or os.path.join(self.raw_dir, "**/*.parquet")
+            out_path = output_parquet or self.output_parquet
+            ds = "legacy"
+
         in_weather = weather_parquet_path or os.path.join(
             self.processed_dir, "imgw_weather_hourly.parquet"
         )
@@ -388,7 +652,8 @@ class FeatureMartAssembler:
         in_interchange = interchange_parquet_path or os.path.join(
             self.processed_dir, "transit_stop_interchanges.parquet"
         )
-        out_path = output_parquet or self.output_parquet
+
+        os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
 
         con = duckdb.connect(":memory:")
         sql = self.build_fusion_sql(
@@ -401,10 +666,11 @@ class FeatureMartAssembler:
             exclude_terminals=exclude_terminals,
             start_date=start_date,
             end_date=end_date,
+            datasource=ds,
         )
 
         copy_query = f"COPY ({sql}) TO '{out_path}' (FORMAT PARQUET, COMPRESSION SNAPPY)"
-        logger.info(f"Fusing multi-source feature mart from {in_raw}...")
+        logger.info(f"Fusing multi-source feature mart [{ds}] from {in_raw}...")
         con.execute(copy_query)
         con.close()
 
@@ -421,6 +687,21 @@ class FeatureMartAssembler:
             return {"status": "empty", "records": 0}
 
         con = duckdb.connect(":memory:")
+        try:
+            cols = [
+                c[0]
+                for c in con.execute(f"DESCRIBE SELECT * FROM read_parquet('{path}')").fetchall()
+            ]
+        except Exception:
+            cols = []
+
+        has_dwell = "dwell_seconds" in cols
+        dwell_select = (
+            "ROUND(AVG(dwell_seconds), 2) AS avg_dwell_s,"
+            if has_dwell
+            else "0.0::DOUBLE AS avg_dwell_s,"
+        )
+
         res = con.execute(f"""
             SELECT
                 COUNT(*) AS total_observations,
@@ -434,7 +715,8 @@ class FeatureMartAssembler:
                 ROUND(AVG(signalized_intersection_count), 2) AS avg_signals,
                 ROUND(AVG(temperature_c), 1) AS avg_temperature_c,
                 ROUND(SUM(CASE WHEN is_peak_hour = 1 THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 1) AS peak_hour_pct,
-                ROUND(SUM(CASE WHEN is_tram = 1 THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 1) AS tram_share_pct
+                ROUND(SUM(CASE WHEN is_tram = 1 THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 1) AS tram_share_pct,
+                {dwell_select}
             FROM read_parquet('{path}')
         """).fetchone()
 
@@ -469,6 +751,7 @@ class FeatureMartAssembler:
                 "avg_temperature_c": 0.0,
                 "peak_hour_pct": 0.0,
                 "tram_share_pct": 0.0,
+                "avg_dwell_seconds": 0.0,
                 "corridors": by_corr,
             }
 
@@ -485,6 +768,7 @@ class FeatureMartAssembler:
             "avg_temperature_c": float(res[9]) if res[9] is not None else 0.0,
             "peak_hour_pct": float(res[10]) if res[10] is not None else 0.0,
             "tram_share_pct": float(res[11]) if res[11] is not None else 0.0,
+            "avg_dwell_seconds": float(res[12]) if (len(res) > 12 and res[12] is not None) else 0.0,
             "corridors": by_corr,
         }
 

@@ -94,12 +94,13 @@ class GoldStopEventReconstructor:
         except Exception:
             return 0
 
-    def load_zbk_forecast_delays(self, date_str: str) -> Dict[tuple, int]:
+    def load_zbk_forecast_delays(self, date_str: str) -> Dict[tuple, Any]:
         """
         Parses Bronze zbk_rt protobuf files for the given date to extract the latest
-        forecasted arrival delay for each (trip_id, stop_sequence).
+        forecasted arrival delay or timestamp for each (trip_id, stop_sequence).
+        Returns mapping: (trip_id, seq) -> ("delay"|"time", value)
         """
-        forecasts: Dict[tuple, int] = {}
+        forecasts: Dict[tuple, Any] = {}
         zbk_pattern = str(self.bronze_dir / "source=zbk_rt" / f"date={date_str}" / "hour=*" / "*.pb.gz")
         pb_files = sorted(glob.glob(zbk_pattern))
 
@@ -118,8 +119,16 @@ class GoldStopEventReconstructor:
                             continue
                         for stu in tu.stop_time_update:
                             seq = stu.stop_sequence
-                            if stu.HasField("arrival") and stu.arrival.HasField("delay"):
-                                forecasts[(trip_id, seq)] = stu.arrival.delay
+                            if stu.HasField("arrival"):
+                                if stu.arrival.HasField("delay"):
+                                    forecasts[(trip_id, seq)] = ("delay", stu.arrival.delay)
+                                elif stu.arrival.HasField("time"):
+                                    forecasts[(trip_id, seq)] = ("time", stu.arrival.time)
+                            elif stu.HasField("departure"):
+                                if stu.departure.HasField("delay"):
+                                    forecasts[(trip_id, seq)] = ("delay", stu.departure.delay)
+                                elif stu.departure.HasField("time"):
+                                    forecasts[(trip_id, seq)] = ("time", stu.departure.time)
             except Exception:
                 continue
 
@@ -268,8 +277,20 @@ class GoldStopEventReconstructor:
                         arr_delay_s = actual_arr_utc - sched_arr_utc
 
                 # Forecast comparison
-                zbk_forecast = zbk_forecasts.get((trip_id, seq))
-                forecast_error = (arr_delay_s - zbk_forecast) if (arr_delay_s is not None and zbk_forecast is not None) else None
+                zbk_val = zbk_forecasts.get((trip_id, seq))
+                zbk_forecast = None
+                if zbk_val is not None:
+                    val_type, val = zbk_val
+                    if val_type == "delay":
+                        zbk_forecast = int(val)
+                    elif val_type == "time" and sched_arr_utc > 0:
+                        zbk_forecast = int(val - sched_arr_utc)
+
+                forecast_error = (
+                    (arr_delay_s - zbk_forecast)
+                    if (arr_delay_s is not None and zbk_forecast is not None)
+                    else None
+                )
 
                 gold_rows.append(
                     {

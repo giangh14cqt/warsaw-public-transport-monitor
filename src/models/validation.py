@@ -77,6 +77,7 @@ class PurgedTemporalBlockSplitter:
         self.purge_trips = purge_trips
         self.purge_mode = purge_mode
         self.strict_zero_trip_id_overlap = strict_zero_trip_id_overlap
+        self.last_effective_embargo_minutes = self.embargo_minutes
 
     def _resolve_time_col(self, df: pd.DataFrame) -> str:
         """Resolve the active timestamp column."""
@@ -163,13 +164,19 @@ class PurgedTemporalBlockSplitter:
             return df.copy(), df.copy(), df.copy()
 
         time_col = self._resolve_time_col(df)
-        embargo_mins = self.embargo_minutes if embargo_minutes is None else float(embargo_minutes)
-        embargo_delta = pd.Timedelta(minutes=embargo_mins)
-
         # Sort chronologically
         df_sorted = df.sort_values(by=time_col).copy()
         if not pd.api.types.is_datetime64_any_dtype(df_sorted[time_col]):
             df_sorted[time_col] = pd.to_datetime(df_sorted[time_col])
+
+        # Auto-scale embargo for short temporal spans (< 4 hours) to prevent partition starvation
+        embargo_mins = self.embargo_minutes if embargo_minutes is None else float(embargo_minutes)
+        if len(df_sorted) > 1:
+            total_span_mins = (df_sorted[time_col].max() - df_sorted[time_col].min()).total_seconds() / 60.0
+            if 0 < total_span_mins < 240.0:
+                embargo_mins = min(embargo_mins, max(1.0, total_span_mins * 0.05))
+        self.last_effective_embargo_minutes = embargo_mins
+        embargo_delta = pd.Timedelta(minutes=embargo_mins)
 
         # Determine cutoff timestamps
         n = len(df_sorted)
@@ -197,7 +204,11 @@ class PurgedTemporalBlockSplitter:
                 f"Calculated val_cutoff ({t_val_cutoff}) is before val_start ({t_val_start}). "
                 f"Advancing val_cutoff."
             )
-            t_val_cutoff = t_val_start + pd.Timedelta(hours=1)
+            t_max = df_sorted[time_col].max()
+            if t_max > t_val_start:
+                t_val_cutoff = t_val_start + (t_max - t_val_start) * 0.5
+            else:
+                t_val_cutoff = t_val_start + pd.Timedelta(minutes=5)
 
         t_test_start = t_val_cutoff + embargo_delta
 
@@ -390,7 +401,9 @@ class PurgedTemporalBlockSplitter:
 
         time_col = self._resolve_time_col(train_df)
         expected_embargo = (
-            self.embargo_minutes if embargo_minutes is None else float(embargo_minutes)
+            self.last_effective_embargo_minutes
+            if embargo_minutes is None and hasattr(self, "last_effective_embargo_minutes")
+            else (self.embargo_minutes if embargo_minutes is None else float(embargo_minutes))
         )
         min_embargo_seconds = expected_embargo * 60.0
 

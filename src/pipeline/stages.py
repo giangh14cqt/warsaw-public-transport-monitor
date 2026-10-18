@@ -14,6 +14,8 @@ import os
 import time
 from typing import Any, Dict
 
+import pandas as pd
+
 from src.core.config import paths
 
 logger = logging.getLogger(__name__)
@@ -209,8 +211,9 @@ def run_stage_fusion(args: argparse.Namespace) -> Dict[str, Any]:
     from src.fusion.feature_mart import FeatureMartAssembler
 
     t0 = time.time()
+    datasource = getattr(args, "datasource", "legacy")
     assembler = FeatureMartAssembler(data_dir=str(paths.data_dir))
-    mart_path = assembler.output_parquet
+    mart_path = paths.get_feature_mart_str(datasource)
 
     # Subsample only if explicitly requested for fusion or in dry-run mode
     max_records = getattr(args, "fusion_sample_size", None)
@@ -218,7 +221,8 @@ def run_stage_fusion(args: argparse.Namespace) -> Dict[str, Any]:
         max_records = 5000
 
     force_rebuild = getattr(args, "force_rebuild", False)
-    raw_pat = getattr(args, "raw_pattern", None)
+    default_pat = paths.historian_gold_pattern if datasource == "historian" else paths.get_raw_pattern()
+    raw_pat = getattr(args, "raw_pattern", None) or default_pat
     start_date = getattr(args, "start_date", None)
     end_date = getattr(args, "end_date", None)
 
@@ -251,19 +255,20 @@ def run_stage_fusion(args: argparse.Namespace) -> Dict[str, Any]:
 
     if not need_rebuild:
         logger.info(
-            f"Existing feature mart verified at {mart_path} ({os.path.getsize(mart_path):,} bytes)."
+            f"Existing feature mart [{datasource}] verified at {mart_path} ({os.path.getsize(mart_path):,} bytes)."
         )
         total_rows = get_parquet_row_count(mart_path)
         logger.info(f"Feature mart contains {total_rows:,} rows.")
     else:
         range_desc = f"{start_date or 'earliest'} to {end_date or 'latest'}"
-        logger.info(f"Assembling unified feature mart into {mart_path} (range: {range_desc})...")
+        logger.info(f"Assembling unified feature mart [{datasource}] into {mart_path} (range: {range_desc})...")
         assembler.assemble_mart(
             raw_pattern=raw_pat,
             output_parquet=mart_path,
             max_records=max_records,
             start_date=start_date,
             end_date=end_date,
+            datasource=datasource,
         )
         total_rows = get_parquet_row_count(mart_path)
         logger.info(f"Successfully assembled {total_rows:,} feature records.")
@@ -276,6 +281,7 @@ def run_stage_fusion(args: argparse.Namespace) -> Dict[str, Any]:
         "total_rows": total_rows,
         "start_date": start_date,
         "end_date": end_date,
+        "datasource": datasource,
     }
 
 
@@ -287,9 +293,10 @@ def run_stage_benchmark(args: argparse.Namespace) -> Dict[str, Any]:
     from src.models.benchmark import run_benchmark, run_stratified_benchmark
 
     t0 = time.time()
-    mart_path = paths.get_feature_mart_str()
+    datasource = getattr(args, "datasource", "legacy")
+    mart_path = paths.get_feature_mart_str(datasource)
     if not os.path.exists(mart_path):
-        raise FileNotFoundError(f"Feature mart not found at {mart_path}. Run --stage fusion first.")
+        raise FileNotFoundError(f"Feature mart [{datasource}] not found at {mart_path}. Run --stage fusion --datasource {datasource} first.")
 
     sample_size = getattr(args, "sample_size", 100000)
     if sample_size is None or sample_size <= 0:
@@ -349,18 +356,22 @@ def run_stage_benchmark(args: argparse.Namespace) -> Dict[str, Any]:
         logger.info(f"Stratified cohort benchmark table exported to {cohort_csv}")
 
         # Also extract pooled benchmark as primary comparison table
-        pooled_df = (
-            cohort_df[cohort_df["cohort"] == "pooled"]
-            .drop(columns=["cohort"])
-            .reset_index(drop=True)
-        )
+        if not cohort_df.empty and "cohort" in cohort_df.columns:
+            pooled_df = (
+                cohort_df[cohort_df["cohort"] == "pooled"]
+                .drop(columns=["cohort"])
+                .reset_index(drop=True)
+            )
+        else:
+            pooled_df = pd.DataFrame()
+
         if pooled_df.empty:
             pooled_df = run_benchmark(
                 df_sample, sample_size=sample_size, exclude_terminals=exclude_terminals
             )
         pooled_df.to_csv(summary_csv, index=False)
         logger.info(f"Pooled benchmark comparison table exported to {summary_csv}")
-        summary_df = cohort_df
+        summary_df = cohort_df if not cohort_df.empty else pooled_df
     else:
         target_cohort = None if cohort_arg == "all" else cohort_arg
         logger.info(
@@ -401,7 +412,8 @@ def run_stage_xai(args: argparse.Namespace) -> Dict[str, Any]:
     os.makedirs(figures_dir, exist_ok=True)
     os.makedirs(tables_dir, exist_ok=True)
 
-    mart_path = paths.get_feature_mart_str()
+    datasource = getattr(args, "datasource", "legacy")
+    mart_path = paths.get_feature_mart_str(datasource)
     start_date = getattr(args, "start_date", None)
     end_date = getattr(args, "end_date", None)
 

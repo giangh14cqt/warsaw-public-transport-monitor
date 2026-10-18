@@ -23,6 +23,11 @@ class DataPaths:
     gtfs_dir: Path = data_dir / "gtfs"
     processed_dir: Path = data_dir / "processed"
 
+    # Historian Storage & Processed Datasets
+    historian_dir: Path = data_dir / "historian"
+    historian_gold_pattern: str = "data/historian/gold/stop_events/date=*/stop_events.parquet"
+    feature_mart_observed: Path = data_dir / "historian" / "processed" / "feature_mart_observed.parquet"
+
     # Processed Datasets
     feature_mart: Path = processed_dir / "feature_mart.parquet"
     weather_hourly: Path = processed_dir / "imgw_weather_hourly.parquet"
@@ -36,7 +41,9 @@ class DataPaths:
     tables_dir: Path = reports_dir / "tables"
     logs_dir: Path = root / "logs"
 
-    def get_feature_mart_str(self) -> str:
+    def get_feature_mart_str(self, datasource: str = "legacy") -> str:
+        if datasource == "historian":
+            return str(self.feature_mart_observed)
         return str(self.feature_mart)
 
     def get_raw_pattern(self) -> str:
