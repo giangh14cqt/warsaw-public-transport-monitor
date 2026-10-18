@@ -33,8 +33,8 @@ def main():
     logger.info(f"Active static GTFS archive location: {unpack_dir}")
 
     # 2. Fetch Single GTFS-RT Protobuf Snapshot
-    logger.info("Connecting to live feed: https://cdn.zbiorkom.live/gtfs-rt/warsaw.pb...")
     fetcher = GTFSRTFetcher()
+    logger.info(f"Connecting to live feed: {fetcher.feed_url}...")
     feed_bytes = fetcher.fetch_feed()
     logger.info(f"Successfully received {len(feed_bytes):,} bytes from live feed.")
 

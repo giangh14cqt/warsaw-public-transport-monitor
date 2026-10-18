@@ -41,7 +41,7 @@ The pipeline processes transit telemetry through six modular, independent stages
 
 ```
 [1. LIVE TELEMETRY INGESTION]
-  │  Polls Warsaw GTFS-RT Protobuf (cdn.zbiorkom.live/gtfs-rt/warsaw.pb) every 30s
+  │  Polls Warsaw GTFS-RT Protobuf (api.zbiorkom.live API v6) every 30s
   │  Synchronizes with weekly static GTFS timetable schedules in memory
   ▼
 [2. STORAGE & PERSISTENCE]

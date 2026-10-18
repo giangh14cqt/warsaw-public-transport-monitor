@@ -8,7 +8,7 @@
 ### 1. Remote Self-Host Server
 - **Host Environment**: Remote Linux server running Docker Compose or native Python daemon. (Specific server paths and credentials are documented in git-ignored `LOCAL_DEPLOYMENT.md`).
 - **Daemon Process**: Continuous ingestion daemon running via Docker Compose (`container_name: warsaw_telemetry_daemon`) or `python3 collector_daemon.py`.
-- **Ingestion Target**: GTFS-RT Warsaw endpoint (`https://cdn.zbiorkom.live/gtfs-rt/warsaw.pb`) polled every 30 seconds.
+- **Ingestion Target**: GTFS-RT Warsaw endpoint (`https://api.zbiorkom.live/api6-open/warsaw/gtfsRealtime/default/vehiclePositions,tripUpdates,serviceAlerts`) polled every 30 seconds.
 - **Dead Man's Switch**: Sends 15-minute periodic heartbeats and failure alerts to [Healthchecks.io](https://healthchecks.io) (`HEARTBEAT_URL` in `.env`).
 - **Code Stability Constraint**: Any refactoring or code pushed to `main` must maintain 100% backward compatibility with `collector_daemon.py`, `run_preflight.py`, `Dockerfile`, `docker-compose.yml`, and `src/` root module proxies (`src/fetcher.py`, `src/gtfs_manager.py`, `src/storage.py`) so remote `git pull` operations never disrupt the running daemon.
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Step 2: Continuous Production Daemon for Warsaw Transit Delay Ingestion.
-Polls https://cdn.zbiorkom.live/gtfs-rt/warsaw.pb at 30-second intervals.
+Polls GTFS-RT Warsaw endpoint (api.zbiorkom.live API v6) at 30-second intervals.
 Deduplicates on (trip_id, stop_sequence, rt_arrival_time).
 Appends to partitioned Parquet files under data/raw/year=YYYY/month=MM/day=DD/.
 Buffers in-memory and flushes every 5 minutes or 5,000 records.

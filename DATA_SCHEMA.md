@@ -13,7 +13,7 @@ The telemetry pipeline processes transit observations through progressive refine
 ```mermaid
 flowchart TD
     subgraph INGESTION["Stage 1-2 · Ingestion & Storage"]
-        GTFSRT["🛰️ GTFS-RT Protobuf Feed\ncdn.zbiorkom.live · every 30s"]
+        GTFSRT["🛰️ GTFS-RT Protobuf Feed\napi.zbiorkom.live (v6) · every 30s"]
         GTFS["📅 Static GTFS Timetable\ndata/gtfs_static/ + data/gtfs/"]
         RAW["🗄️ Raw Partitioned Telemetry\ndata/raw/year=YYYY/month=MM/day=DD/*.parquet\n24.4M records · 5,101 Parquet files"]
         GTFSRT -->|"decode protobuf\n+ schedule join"| RAW

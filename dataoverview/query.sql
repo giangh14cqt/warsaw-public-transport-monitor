@@ -51,3 +51,18 @@ SELECT
     ROUND(SUM(precipitation_mm), 1) AS total_rainfall_mm
 FROM read_parquet('data/processed/imgw_weather_hourly.parquet')
 GROUP BY station_name;
+
+-- 5. Trips
+SELECT
+    *
+FROM read_csv('data/gtfs_static/stop_times.txt')
+WHERE
+    trip_id = '5358531-656271';
+
+-- 5. Trips sequences
+SELECT
+    *
+FROM read_parquet('data/raw/*/*/day=05/*.parquet')
+WHERE
+    -- route_id = '221';
+    trip_id = '6504310-814736';

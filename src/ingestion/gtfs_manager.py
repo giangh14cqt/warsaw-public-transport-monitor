@@ -17,7 +17,13 @@ import requests
 
 logger = logging.getLogger(__name__)
 
-STATIC_GTFS_URL = "https://cdn.zbiorkom.live/gtfs/warsaw.zip"
+STATIC_GTFS_URL = os.getenv(
+    "WARSAW_STATIC_GTFS_URL",
+    os.getenv(
+        "STATIC_GTFS_URL",
+        "https://api.zbiorkom.live/api6-open/warsaw/gtfs/default",
+    ),
+)
 
 
 class GTFSManager:

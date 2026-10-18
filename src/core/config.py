@@ -3,6 +3,7 @@ Warsaw Transit Telemetry & Attribution System: Centralized Configuration.
 Provides immutable dataclasses for project paths, ingestion parameters, and feature registries.
 """
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List
@@ -46,8 +47,20 @@ class DataPaths:
 class IngestionConfig:
     """Runtime thresholds and remote endpoints for telemetry collection."""
 
-    feed_url: str = "https://cdn.zbiorkom.live/gtfs-rt/warsaw.pb"
-    static_gtfs_url: str = "https://cdn.zbiorkom.live/gtfs/warsaw.zip"
+    feed_url: str = os.getenv(
+        "WARSAW_GTFS_RT_URL",
+        os.getenv(
+            "FEED_URL",
+            "https://api.zbiorkom.live/api6-open/warsaw/gtfsRealtime/default/vehiclePositions,tripUpdates,serviceAlerts",
+        ),
+    )
+    static_gtfs_url: str = os.getenv(
+        "WARSAW_STATIC_GTFS_URL",
+        os.getenv(
+            "STATIC_GTFS_URL",
+            "https://api.zbiorkom.live/api6-open/warsaw/gtfs/default",
+        ),
+    )
     poll_interval_seconds: int = 30
     flush_interval_seconds: int = 300  # 5 minutes
     flush_record_threshold: int = 5000  # 5,000 records

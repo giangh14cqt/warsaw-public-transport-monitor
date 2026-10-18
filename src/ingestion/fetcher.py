@@ -5,6 +5,7 @@ Implements exponential backoff, circuit-breakers, and schema normalization.
 
 import datetime
 import logging
+import os
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -26,7 +27,13 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-FEED_URL = "https://cdn.zbiorkom.live/gtfs-rt/warsaw.pb"
+FEED_URL = os.getenv(
+    "WARSAW_GTFS_RT_URL",
+    os.getenv(
+        "FEED_URL",
+        "https://api.zbiorkom.live/api6-open/warsaw/gtfsRealtime/default/vehiclePositions,tripUpdates,serviceAlerts",
+    ),
+)
 
 
 def get_warsaw_tz():
