@@ -15,34 +15,29 @@
 ### 2. Daily Google Drive Backup
 - **Tool**: `rclone`
 - **Configured Remote**: `${RCLONE_REMOTE:-gdrive}` (configured in `.env` or `LOCAL_DEPLOYMENT.md`)
-- **Destination**: `${RCLONE_REMOTE}:${DEST_FOLDER}` (default: `gdrive:WarsawDelayTelemetry/data/raw`)
-- **Source**: `data/raw/` (Hive-partitioned Apache Parquet partitions: `year=YYYY/month=MM/day=DD/batch_*.parquet`)
-- **Automated Schedule**: Cron job running daily at 03:00 UTC:
-  ```cron
-  0 3 * * * /path/to/warsaw-public-transport-monitor/backup_to_gdrive.sh > /dev/null 2>&1
-  ```
-- **Backup Script**: [`backup_to_gdrive.sh`](backup_to_gdrive.sh)
-- **Audit Logs**: `logs/backup.log`
+- **Automated Schedules**:
+  - **Legacy Ingestion (`data/raw/`)**: Cron job daily at 03:00 UTC via [`backup_to_gdrive.sh`](backup_to_gdrive.sh) -> `${RCLONE_REMOTE}:${DEST_FOLDER}` (default `gdrive:WarsawDelayTelemetry/data/raw`).
+  - **Observed Historian (`data/historian/`)**: Cron job daily at 03:15 UTC via [`backup_historian_to_gdrive.sh`](backup_historian_to_gdrive.sh) -> `${RCLONE_REMOTE}:${HISTORIAN_DEST_FOLDER}` (default `gdrive:WarsawDelayTelemetry/data/historian`).
+- **Audit Logs**: `logs/backup.log`, `logs/backup_historian.log`
 
 ### 3. Local Analytics & Google Drive Pull Workflow
 - **Purpose**: When performing local analysis, feature mart fusion, or training models on your workstation, pull the latest Parquet partitions down from Google Drive without touching the remote server.
-- **Pull Script**: [`pull_from_gdrive.sh`](pull_from_gdrive.sh)
-- **Usage**:
-  ```bash
-  ./pull_from_gdrive.sh
-  ```
-- **Sync Behavior**: Runs `rclone copy` with `--update`, fetching only new/updated daily partitions into `data/raw/` while preserving existing local files.
-- **Audit Logs**: `logs/pull_gdrive.log`
+- **Pull Scripts**:
+  - Legacy Telemetry: [`pull_from_gdrive.sh`](pull_from_gdrive.sh) (`./pull_from_gdrive.sh` -> syncs into `data/raw/`).
+  - Observed Historian: [`pull_historian_from_gdrive.sh`](pull_historian_from_gdrive.sh) (`./pull_historian_from_gdrive.sh` -> syncs into `data/historian/`).
+- **Sync Behavior**: Runs `rclone copy` with `--update`, fetching only new/updated daily partitions while preserving existing local files.
+- **Audit Logs**: `logs/pull_gdrive.log`, `logs/pull_historian_gdrive.log`
 
 ### 4. Architecture & Data Flow
 0. **Core**: `src/core/` (centralized configuration, project paths, feature registry, and domain constants).
-1. **Ingestion**: `src/ingestion/` (GTFS-RT protobuf poller + weekly static GTFS archiver + partitioned Parquet writer).
-2. **Exogenous**: `src/exogenous/` (IMGW-PIB weather telemetry + OSMnx road corridor topology).
-3. **Fusion**: `src/fusion/` (trajectory delay decomposition + multi-source feature mart assembly).
-4. **Modeling**: `src/models/` (purged temporal block splitting + TWFE panel regression + LightGBM/CatBoost).
-5. **xAI**: `src/xai/` (TreeSHAP global/local attribution + ALE threshold detection + DiCE counterfactuals).
-6. **Visualization**: `src/visualization/` (academic publication styling, beeswarm, waterfall, ALE, interaction, and counterfactual plot generators).
-7. **Pipeline Orchestrator**: `src/pipeline/` (`stages.py` stage runners + `run_pipeline.py` CLI dispatcher).
+1. **Ingestion (Legacy)**: `src/ingestion/` (GTFS-RT protobuf poller + weekly static GTFS archiver + partitioned Parquet writer).
+2. **Historian (Observed Actuals)**: `src/historian/` (10s wall-clock aligned poller of `dane.um.warszawa.pl` + bronze verbatim store + silver deduplicated trajectories + gold stop events).
+3. **Exogenous**: `src/exogenous/` (IMGW-PIB weather telemetry + OSMnx road corridor topology).
+4. **Fusion**: `src/fusion/` (trajectory delay decomposition + multi-source feature mart assembly; dual-datasource support).
+5. **Modeling**: `src/models/` (purged temporal block splitting + TWFE panel regression + LightGBM/CatBoost).
+6. **xAI**: `src/xai/` (TreeSHAP global/local attribution + ALE threshold detection + DiCE counterfactuals).
+7. **Visualization**: `src/visualization/` (academic publication styling, beeswarm, waterfall, ALE, interaction, and counterfactual plot generators).
+8. **Pipeline Orchestrator**: `src/pipeline/` (`stages.py` stage runners + `run_pipeline.py` CLI dispatcher).
 
 ### 5. Project Tracking & GitHub Projects Integration
 - **Active Project Board**: [GitHub Project #1](https://github.com/users/giangh14cqt/projects/1)

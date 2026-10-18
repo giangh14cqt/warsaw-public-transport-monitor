@@ -22,10 +22,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy source code and scripts
 COPY src/ ./src/
 COPY collector_daemon.py .
+COPY historian_daemon.py .
 COPY run_preflight.py .
 
 # Create volume directories
-RUN mkdir -p data/raw data/gtfs logs
+RUN mkdir -p data/raw data/gtfs data/historian logs
 
 VOLUME ["/app/data", "/app/logs"]
 
