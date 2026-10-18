@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# Warsaw Transit Historian - Daily Google Drive Backup Script
+# Warsaw Transit Historian - 6-Hourly Google Drive Backup Script
 # Synchronizes raw Bronze responses, Silver trajectory fixes, and Gold stop events
-# to Google Drive via rclone.
+# to Google Drive via rclone (every 6h at :30).
 # ==============================================================================
 
 set -euo pipefail

@@ -17,7 +17,7 @@
 - **Configured Remote**: `${RCLONE_REMOTE:-gdrive}` (configured in `.env` or `LOCAL_DEPLOYMENT.md`)
 - **Automated Schedules**:
   - **Legacy Ingestion (`data/raw/`)**: Cron job daily at 03:00 UTC via [`backup_to_gdrive.sh`](backup_to_gdrive.sh) -> `${RCLONE_REMOTE}:${DEST_FOLDER}` (default `gdrive:WarsawDelayTelemetry/data/raw`).
-  - **Observed Historian (`data/historian/`)**: Cron job daily at 03:15 UTC via [`backup_historian_to_gdrive.sh`](backup_historian_to_gdrive.sh) -> `${RCLONE_REMOTE}:${HISTORIAN_DEST_FOLDER}` (default `gdrive:WarsawDelayTelemetry/data/historian`).
+  - **Observed Historian (`data/historian/`)**: Cron job every 6 hours at minute 30 (`30 */6 * * *`) via [`backup_historian_to_gdrive.sh`](backup_historian_to_gdrive.sh) -> `${RCLONE_REMOTE}:${HISTORIAN_DEST_FOLDER}` (default `gdrive:WarsawDelayTelemetry/data/historian`).
 - **Audit Logs**: `logs/backup.log`, `logs/backup_historian.log`
 
 ### 3. Local Analytics & Google Drive Pull Workflow
