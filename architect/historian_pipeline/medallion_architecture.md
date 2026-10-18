@@ -114,9 +114,10 @@ stateDiagram-v2
     end note
 
     note right of BUFFER_EXIT
-        If bypassed (never STOPPED):
-        event_type = "BYPASS"
-        confidence = "LOW"
+        If vehicle passed within 60m but outside 25m:
+        event_type = "PASSED" (dwell = 0, confidence = MEDIUM)
+        If vehicle never approached (>60m):
+        Non-event omitted from Gold to avoid null data bloat
     end note
 ```
 
@@ -134,8 +135,8 @@ stateDiagram-v2
 | `brigade` | `STRING` | Shift/brigade number |
 | `lat` | `FLOAT64` | WGS84 Latitude |
 | `lon` | `FLOAT64` | WGS84 Longitude |
-| `speed_kmh` | `FLOAT32` | Calculated velocity between consecutive fixes |
-| `distance_delta_m` | `FLOAT32` | Displacement from preceding fix |
+| `speed_mps` | `FLOAT32` | Calculated velocity between consecutive fixes ($m/s$) |
+| `delta_d_m` | `FLOAT32` | Displacement from preceding fix ($m$) |
 
 ---
 
@@ -150,12 +151,13 @@ stateDiagram-v2
 | `stop_id` | `STRING` | ZTM stop post identifier (`"700201"`) |
 | `stop_name` | `STRING` | Polish stop name (`"Dw. Centralny 01"`) |
 | `scheduled_arrival_utc`| `INT64` | GTFS schedule timetable arrival epoch |
-| `actual_arrival_utc` | `INT64` | **Observed physical arrival epoch** |
-| `actual_departure_utc`| `INT64` | **Observed physical departure epoch** |
-| `arrival_delay_seconds`| `INT32` | Ground truth arrival delay ($s$) |
-| `dwell_seconds` | `INT32` | Measured dwell time at stop ($s$) |
+| `actual_arrival_utc` | `INT64` | **Observed physical arrival epoch** (0% nulls) |
+| `actual_departure_utc`| `INT64` | **Observed physical departure epoch** (0% nulls) |
+| `arrival_delay_seconds`| `INT32` | Ground truth arrival delay ($s$) (0% nulls) |
+| `departure_delay_seconds`| `INT32`| Ground truth departure delay ($s$) (0% nulls) |
+| `dwell_seconds` | `INT32` | Measured dwell time at stop ($s$) (0% nulls) |
 | `zbk_forecast_delay_s`| `INT32` | Operator GTFS-RT forecast delay ($s$) |
 | `forecast_error_s` | `INT32` | **Forecast Error: $\text{Delay}_{\text{forecast}} - \text{Delay}_{\text{observed}}$** |
-| `event_type` | `STRING` | `"STOPPED"` vs `"BYPASS"` |
-| `confidence` | `STRING` | `"HIGH"`, `"MEDIUM"`, `"LOW"` |
+| `event_type` | `STRING` | `"STOPPED"` (served stop) vs `"PASSED"` (bypassed corridor) |
+| `confidence` | `STRING` | `"HIGH"` ($\le 12\text{s}$ bracket), `"MEDIUM"` ($\le 25\text{s}$), `"LOW"` |
 | `min_distance_to_stop_m`| `FLOAT32`| Distance of closest approach to stop pole ($m$) |

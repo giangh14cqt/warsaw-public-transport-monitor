@@ -275,6 +275,11 @@ class GoldStopEventReconstructor:
                     confidence = "MEDIUM"
                     if sched_arr_utc > 0:
                         arr_delay_s = actual_arr_utc - sched_arr_utc
+                    if sched_dep_utc > 0:
+                        dep_delay_s = actual_dep_utc - sched_dep_utc
+                else:
+                    # Vehicle never approached stop (min_dist > 60m); drop unobserved non-event
+                    continue
 
                 # Forecast comparison
                 zbk_val = zbk_forecasts.get((trip_id, seq))
