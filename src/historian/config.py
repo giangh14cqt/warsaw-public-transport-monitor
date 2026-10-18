@@ -77,6 +77,7 @@ class HistorianConfig:
 
     # 2. Ingestion Cadence & Deadlines
     poll_period_seconds: int = int(os.getenv("HISTORIAN_POLL_PERIOD_S", "10"))
+    zbk_poll_period_seconds: int = int(os.getenv("HISTORIAN_ZBK_POLL_PERIOD_S", "30"))  # Native 30s cadence for zbiorkom
     request_deadline_seconds: float = 8.0
     max_start_lag_seconds: float = 1.0
 
@@ -84,7 +85,7 @@ class HistorianConfig:
     heartbeat_url: str = field(
         default_factory=lambda: os.getenv("HISTORIAN_HEARTBEAT_URL", "").strip()
     )
-    health_interval_seconds: int = 900  # 15 minutes
+    health_interval_seconds: int = int(os.getenv("HISTORIAN_HEALTH_INTERVAL_S", "300"))  # 5 minutes
 
     # 4. Physical Reconstruction Tolerances
     stop_zone_entry_meters: float = 25.0

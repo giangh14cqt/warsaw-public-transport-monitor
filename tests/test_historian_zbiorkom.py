@@ -60,7 +60,7 @@ def test_zbiorkom_client_filter_subset(mock_get):
     assert res["n_vehicles"] == 1
     assert res["n_trip_updates"] == 1  # tu2 was filtered out!
 
-    # Verify deserialization of returned raw_bytes
+    # Verify deserialization of returned raw_bytes (Strategy 3: TU1 + Alert, VP dropped)
     filtered_feed = gtfs_realtime_pb2.FeedMessage()
     filtered_feed.ParseFromString(res["raw_bytes"])
-    assert len(filtered_feed.entity) == 3  # VP, TU1, Alert (TU2 excluded)
+    assert len(filtered_feed.entity) == 2  # TU1, Alert (VP omitted, TU2 excluded)

@@ -70,39 +70,38 @@ class ZbiorkomClient:
 
             feed_ts = int(full_feed.header.timestamp) if full_feed.header.HasField("timestamp") else int(receive_ts)
 
-            # Filter to Bronze Subset:
-            # 1. Collect all VehiclePosition entities and their active trip_ids
+            # Filter to Strategy 3 Compact Bronze Subset:
+            # 1. Identify active trip IDs from the feed's vehicle positions
             active_vp_trips = set()
-            active_vp_vehicles = set()
-            vp_entities = []
-
             for entity in full_feed.entity:
                 if entity.HasField("vehicle"):
-                    vp_entities.append(entity)
                     v = entity.vehicle
                     if v.HasField("trip") and v.trip.trip_id:
                         active_vp_trips.add(v.trip.trip_id)
-                    if v.HasField("vehicle") and v.vehicle.id:
-                        active_vp_vehicles.add(v.vehicle.id)
 
-            # 2. Collect current-trip TripUpdates matching active vehicles
+            # 2. Collect active TripUpdates (currently running trips or trips with real delay deviations / alerts)
+            # This filters out ~85% of dummy future trips scheduled hours ahead with delay=0
             tu_entities = []
             for entity in full_feed.entity:
                 if entity.HasField("trip_update"):
                     tu = entity.trip_update
                     trip_id = tu.trip.trip_id if tu.HasField("trip") else ""
-                    vehicle_id = tu.vehicle.id if (tu.HasField("vehicle") and tu.vehicle.HasField("id")) else ""
-                    # Keep if it matches an active vehicle position
-                    if trip_id in active_vp_trips or vehicle_id in active_vp_vehicles:
+                    has_delay = any(
+                        (stu.HasField("arrival") and stu.arrival.delay != 0)
+                        or (stu.HasField("departure") and stu.departure.delay != 0)
+                        for stu in tu.stop_time_update
+                    )
+                    is_modified = tu.trip.schedule_relationship != 0
+                    if trip_id in active_vp_trips or has_delay or is_modified:
                         tu_entities.append(entity)
 
             # 3. Collect all Service Alerts
             alert_entities = [e for e in full_feed.entity if e.HasField("alert")]
 
-            # Construct compact filtered FeedMessage
+            # Construct Strategy 3 compact FeedMessage (TripUpdates + Alerts only;
+            # duplicate VehiclePositions are omitted since higher 10s GPS is captured via um_bus/um_tram)
             compact_feed = gtfs_realtime_pb2.FeedMessage()
             compact_feed.header.CopyFrom(full_feed.header)
-            compact_feed.entity.extend(vp_entities)
             compact_feed.entity.extend(tu_entities)
             compact_feed.entity.extend(alert_entities)
 
@@ -113,8 +112,9 @@ class ZbiorkomClient:
                 "http_status": 200,
                 "raw_bytes": compact_bytes,
                 "latency_ms": latency_ms,
-                "n_vehicles": len(vp_entities),
+                "n_vehicles": len(active_vp_trips),
                 "n_trip_updates": len(tu_entities),
+                "n_alerts": len(alert_entities),
                 "feed_timestamp": feed_ts,
                 "clock_offset_s": clock_offset_s,
                 "server_date": server_date,

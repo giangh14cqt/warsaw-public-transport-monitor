@@ -190,7 +190,7 @@ class WarsawHistorianDaemon:
                 latency_ms=res.get("latency_ms", 0.0),
                 bytes_count=len(raw_bytes),
                 payload_sha256=sha,
-                n_vehicles=res.get("n_vehicles", 0),
+                n_vehicles=res.get("n_trip_updates", res.get("n_vehicles", 0)),
                 server_date=res.get("server_date"),
                 clock_offset_s=res.get("clock_offset_s"),
                 error_message=res.get("error"),
@@ -215,23 +215,25 @@ class WarsawHistorianDaemon:
 
         futures = {}
 
-        # 1. City Buses
+        # 1. City Buses (Every 10s tick)
         if not self.in_flight["um_bus"]:
             futures[self.pool.submit(self._fetch_and_archive_city, "um_bus", 1, tick_int)] = "um_bus"
         else:
             self.writer.record_tick(tick_ts=tick_int, source="um_bus", status="SKIPPED_OVERLAP")
 
-        # 2. City Trams
+        # 2. City Trams (Every 10s tick)
         if not self.in_flight["um_tram"]:
             futures[self.pool.submit(self._fetch_and_archive_city, "um_tram", 2, tick_int)] = "um_tram"
         else:
             self.writer.record_tick(tick_ts=tick_int, source="um_tram", status="SKIPPED_OVERLAP")
 
-        # 3. zbiorkom GTFS-RT
-        if not self.in_flight["zbk_rt"]:
-            futures[self.pool.submit(self._fetch_and_archive_zbk, tick_int)] = "zbk_rt"
-        else:
-            self.writer.record_tick(tick_ts=tick_int, source="zbk_rt", status="SKIPPED_OVERLAP")
+        # 3. zbiorkom GTFS-RT (Polled every zbk_poll_period_seconds, default 30s)
+        should_poll_zbk = (tick_int % config.zbk_poll_period_seconds) == 0
+        if should_poll_zbk:
+            if not self.in_flight["zbk_rt"]:
+                futures[self.pool.submit(self._fetch_and_archive_zbk, tick_int)] = "zbk_rt"
+            else:
+                self.writer.record_tick(tick_ts=tick_int, source="zbk_rt", status="SKIPPED_OVERLAP")
 
         # Wait for all sources to complete within deadline
         results = {}
@@ -249,12 +251,18 @@ class WarsawHistorianDaemon:
         # Log cycle summary
         b_count = len(results.get("um_bus", {}).get("records", [])) if "um_bus" in results and results["um_bus"] else 0
         t_count = len(results.get("um_tram", {}).get("records", [])) if "um_tram" in results and results["um_tram"] else 0
-        z_count = results.get("zbk_rt", {}).get("n_vehicles", 0) if "zbk_rt" in results and results["zbk_rt"] else 0
+        zbk_res = results.get("zbk_rt")
+        if zbk_res and "n_trip_updates" in zbk_res:
+            z_str = f"zbk TU: {zbk_res['n_trip_updates']:,}"
+        elif not should_poll_zbk:
+            z_str = "zbk: -"
+        else:
+            z_str = "zbk: err"
 
         self.successful_ticks += 1
         logger.info(
             f"Tick #{self.total_ticks} ({time.strftime('%H:%M:%S', time.gmtime(tick_int))} UTC): "
-            f"Buses: {b_count:,} | Trams: {t_count:,} | zbiorkom VP: {z_count:,}"
+            f"Buses: {b_count:,} | Trams: {t_count:,} | {z_str}"
         )
 
     def run(self):
