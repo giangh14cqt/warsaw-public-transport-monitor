@@ -104,13 +104,15 @@ class WarsawHistorianDaemon:
 
             url = config.heartbeat_url.rstrip("/")
             if status == "start":
-                requests.get(f"{url}/start", timeout=5)
+                resp = requests.get(f"{url}/start", timeout=5)
+                logger.info(f"Sent 'start' heartbeat ping to {url}/start (HTTP {resp.status_code})")
             elif status == "fail":
                 requests.post(f"{url}/fail", data=message.encode("utf-8"), timeout=5)
+                logger.warning(f"Sent 'fail' alert ping to {url}/fail")
             else:
                 requests.post(url, data=message.encode("utf-8"), timeout=10)
         except Exception as e:
-            logger.debug(f"Heartbeat ping to {config.heartbeat_url} omitted: {e}")
+            logger.warning(f"Heartbeat ping to {config.heartbeat_url} omitted/failed: {e}")
 
     def log_health_metrics(self):
         """Logs periodic health statistics."""
@@ -260,6 +262,9 @@ class WarsawHistorianDaemon:
         logger.info("Initializing Warsaw Observed-Delay Historian (10-Second Native Ingestion)...")
         logger.info(f"City API Target: {config.um_api_url}")
         logger.info(f"Storage Base Directory: {config.paths.base_dir}")
+        logger.info(
+            f"Heartbeat Target: {config.heartbeat_url if config.heartbeat_url else 'Disabled (HISTORIAN_HEARTBEAT_URL not set)'}"
+        )
         self._send_heartbeat("start", "Warsaw Historian daemon started")
 
         # Initial static GTFS sync check
