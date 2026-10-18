@@ -10,6 +10,23 @@ This directory contains comprehensive architectural diagrams and technical speci
 The following diagram illustrates the complete end-to-end data lifecycle: from external municipal and meteorological data feeds, through dual ingestion pipelines, storage and cloud synchronization, DuckDB-powered feature mart fusion, econometric modeling, and explainable AI attribution.
 
 ```mermaid
+%%{init: {
+  'theme': 'dark',
+  'themeVariables': {
+    'darkMode': true,
+    'background': '#0d1117',
+    'mainBkg': '#161b22',
+    'primaryColor': '#1f2937',
+    'primaryTextColor': '#f0f6fc',
+    'primaryBorderColor': '#58a6ff',
+    'lineColor': '#8b949e',
+    'secondaryColor': '#161b22',
+    'tertiaryColor': '#21262d',
+    'clusterBkg': '#161b22',
+    'clusterBorder': '#30363d',
+    'edgeLabelBackground': '#161b22'
+  }
+}}%%
 flowchart TB
     %% External Data Sources
     subgraph Sources ["1. External Ingestion Endpoints"]
@@ -115,14 +132,26 @@ flowchart TB
     Interactions --> PubPlots
     DiCE --> PubPlots
 
-    %% Styling
-    classDef sourceNode fill:#2d3748,stroke:#4a5568,color:#edf2f7,stroke-width:2px;
-    classDef legacyNode fill:#1a365d,stroke:#2b6cb0,color:#bee3f8,stroke-width:2px;
-    classDef histNode fill:#22543d,stroke:#38a169,color:#c6f6d5,stroke-width:2px;
-    classDef storageNode fill:#744210,stroke:#d69e2e,color:#fefcbf,stroke-width:2px;
-    classDef fusionNode fill:#44337a,stroke:#805ad5,color:#e9d8fd,stroke-width:2px;
-    classDef modelNode fill:#702459,stroke:#b83280,color:#fed7e2,stroke-width:2px;
-    classDef xaiNode fill:#742a2a,stroke:#e53e3e,color:#fed7d7,stroke-width:2px;
+    %% Subgraph Styling for GitHub Dark Theme
+    style Sources fill:#161b22,stroke:#30363d,stroke-width:1.5px,color:#f0f6fc
+    style Ingestion fill:#161b22,stroke:#30363d,stroke-width:1.5px,color:#f0f6fc
+    style LegacyPipeline fill:#0d1117,stroke:#1f6feb,stroke-width:1.5px,color:#58a6ff
+    style HistorianPipeline fill:#0d1117,stroke:#238636,stroke-width:1.5px,color:#3fb950
+    style StorageTier fill:#161b22,stroke:#30363d,stroke-width:1.5px,color:#f0f6fc
+    style ProcessingTier fill:#161b22,stroke:#30363d,stroke-width:1.5px,color:#f0f6fc
+    style ModelingTier fill:#161b22,stroke:#30363d,stroke-width:1.5px,color:#f0f6fc
+    style xAITier fill:#161b22,stroke:#30363d,stroke-width:1.5px,color:#f0f6fc
+
+    %% High-Contrast Node Styling
+    classDef sourceNode fill:#21262d,stroke:#8b949e,stroke-width:2px,color:#f0f6fc;
+    classDef legacyNode fill:#16243b,stroke:#58a6ff,stroke-width:2px,color:#f0f6fc;
+    classDef histNode fill:#12281e,stroke:#3fb950,stroke-width:2px,color:#f0f6fc;
+    classDef storageNode fill:#2c2210,stroke:#d29922,stroke-width:2px,color:#f0f6fc;
+    classDef fusionNode fill:#271d3b,stroke:#bc8cff,stroke-width:2px,color:#f0f6fc;
+    classDef modelNode fill:#33172b,stroke:#f472b6,stroke-width:2px,color:#f0f6fc;
+    classDef xaiNode fill:#33171a,stroke:#ff7b72,stroke-width:2px,color:#f0f6fc;
+
+    linkStyle default stroke:#8b949e,stroke-width:1.5px;
 
     class S1,S2,S3,S4,S5 sourceNode;
     class L1,L2,L3 legacyNode;

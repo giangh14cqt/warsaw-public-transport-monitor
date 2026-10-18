@@ -16,6 +16,21 @@ $$t_{\text{next\_target}} = \lceil t_{\text{current}} / 10 \rceil \times 10$$
 $$\text{sleep\_duration} = \max\left(0.01, t_{\text{next\_target}} - t_{\text{current}}\right)$$
 
 ```mermaid
+%%{init: {
+  'theme': 'dark',
+  'themeVariables': {
+    'darkMode': true,
+    'background': '#0d1117',
+    'textColor': '#f0f6fc',
+    'taskTextColor': '#ffffff',
+    'activeTaskBkgColor': '#1f6feb',
+    'doneTaskBkgColor': '#238636',
+    'critBkgColor': '#da3633',
+    'sectionBkgColor': '#161b22',
+    'altSectionBkgColor': '#0d1117',
+    'gridColor': '#30363d'
+  }
+}}%%
 gantt
     title Strict 10-Second Wall Clock Alignment vs. Drifting Sleep
     dateFormat X
@@ -42,6 +57,23 @@ gantt
 The ingestion daemon leverages Python's `asyncio` and `aiohttp` to poll the Warsaw Open Data API (buses and trams) alongside the Zbiorkom GTFS-RT companion concurrently:
 
 ```mermaid
+%%{init: {
+  'theme': 'dark',
+  'themeVariables': {
+    'darkMode': true,
+    'background': '#0d1117',
+    'mainBkg': '#161b22',
+    'primaryColor': '#1f2937',
+    'primaryTextColor': '#f0f6fc',
+    'primaryBorderColor': '#58a6ff',
+    'lineColor': '#8b949e',
+    'secondaryColor': '#161b22',
+    'tertiaryColor': '#21262d',
+    'clusterBkg': '#161b22',
+    'clusterBorder': '#30363d',
+    'edgeLabelBackground': '#161b22'
+  }
+}}%%
 flowchart TD
     Tick["Clock Tick (Epoch Target % 10 == 0)"] --> TaskGroup["asyncio.gather(...)"]
     
@@ -61,6 +93,21 @@ flowchart TD
 
     BatchCollector --> LocalBronze["Write to Bronze JSONL Chunks"]
     ZbkCollector --> LocalBronze
+
+    %% Subgraph & Node Styling
+    style ConcurrentFetch fill:#161b22,stroke:#30363d,stroke-width:1.5px,color:#f0f6fc
+
+    classDef tickNode fill:#271d3b,stroke:#bc8cff,stroke-width:2px,color:#f0f6fc;
+    classDef fetchNode fill:#16243b,stroke:#58a6ff,stroke-width:2px,color:#f0f6fc;
+    classDef respNode fill:#21262d,stroke:#8b949e,stroke-width:2px,color:#f0f6fc;
+    classDef storeNode fill:#2c2210,stroke:#d29922,stroke-width:2px,color:#f0f6fc;
+
+    linkStyle default stroke:#8b949e,stroke-width:1.5px;
+
+    class Tick,TaskGroup tickNode;
+    class BusFetch,TramFetch,ZbkFetch fetchNode;
+    class RespBus,RespTram,RespZbk,BatchCollector,ZbkCollector respNode;
+    class LocalBronze storeNode;
 ```
 
 ---
@@ -70,6 +117,17 @@ flowchart TD
 To ensure zero local disk saturation and complete disaster recovery, telemetry data is backed up to Google Drive every 6 hours using `rclone`:
 
 ```mermaid
+%%{init: {
+  'theme': 'dark',
+  'themeVariables': {
+    'darkMode': true,
+    'background': '#0d1117',
+    'mainBkg': '#161b22',
+    'clusterBkg': '#161b22',
+    'clusterBorder': '#30363d',
+    'primaryTextColor': '#f0f6fc'
+  }
+}}%%
 flowchart LR
     subgraph HostServer ["Remote Self-Hosted Linux Server"]
         Daemon["historian_daemon.py"]
@@ -94,6 +152,21 @@ flowchart LR
     BackupScript -->|Upload new partitions| RemoteData
     RemoteData -.->|Pull for modeling| PullScript
     PullScript --> LocalResearch
+
+    %% Subgraph & Node Styling
+    style HostServer fill:#161b22,stroke:#30363d,stroke-width:1.5px,color:#f0f6fc
+    style GoogleDrive fill:#161b22,stroke:#30363d,stroke-width:1.5px,color:#f0f6fc
+    style Workstation fill:#161b22,stroke:#30363d,stroke-width:1.5px,color:#f0f6fc
+
+    classDef hostNode fill:#16243b,stroke:#58a6ff,stroke-width:2px,color:#f0f6fc;
+    classDef cloudNode fill:#12281e,stroke:#3fb950,stroke-width:2px,color:#f0f6fc;
+    classDef workNode fill:#271d3b,stroke:#bc8cff,stroke-width:2px,color:#f0f6fc;
+
+    linkStyle default stroke:#8b949e,stroke-width:1.5px;
+
+    class Daemon,LocalData,CronJob,BackupScript,LogFile hostNode;
+    class RemoteData cloudNode;
+    class PullScript,LocalResearch workNode;
 ```
 
 ### Backup Script Guarantees:

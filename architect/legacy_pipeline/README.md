@@ -7,6 +7,23 @@ The **Legacy Ingestion Pipeline** is a continuous 24/7 telemetry ingestion engin
 ## 🏛️ Pipeline Overview & Architecture
 
 ```mermaid
+%%{init: {
+  'theme': 'dark',
+  'themeVariables': {
+    'darkMode': true,
+    'background': '#0d1117',
+    'mainBkg': '#161b22',
+    'primaryColor': '#1f2937',
+    'primaryTextColor': '#f0f6fc',
+    'primaryBorderColor': '#58a6ff',
+    'lineColor': '#8b949e',
+    'secondaryColor': '#161b22',
+    'tertiaryColor': '#21262d',
+    'clusterBkg': '#161b22',
+    'clusterBorder': '#30363d',
+    'edgeLabelBackground': '#161b22'
+  }
+}}%%
 flowchart TD
     subgraph External ["External Provider"]
         Endpoint["GTFS-RT Warsaw Endpoint<br/><code>https://api.zbiorkom.live/api6-open/warsaw/gtfsRealtime/default/...</code>"]
@@ -66,11 +83,22 @@ flowchart TD
     RawParquet -.->|Nightly Cron| Rclone
     Rclone -.-> GDrive
 
-    %% Styles
-    classDef extNode fill:#2d3748,stroke:#4a5568,color:#edf2f7;
-    classDef daemonNode fill:#1a365d,stroke:#2b6cb0,color:#bee3f8;
-    classDef storeNode fill:#744210,stroke:#d69e2e,color:#fefcbf;
-    classDef cloudNode fill:#22543d,stroke:#38a169,color:#c6f6d5;
+    %% Subgraph Styling for Dark Theme
+    style External fill:#161b22,stroke:#30363d,stroke-width:1.5px,color:#f0f6fc
+    style DaemonProcess fill:#161b22,stroke:#30363d,stroke-width:1.5px,color:#f0f6fc
+    style FetcherSub fill:#0d1117,stroke:#58a6ff,stroke-width:1.5px,color:#58a6ff
+    style StorageSub fill:#0d1117,stroke:#bc8cff,stroke-width:1.5px,color:#bc8cff
+    style StaticSub fill:#0d1117,stroke:#3fb950,stroke-width:1.5px,color:#3fb950
+    style LocalStorage fill:#161b22,stroke:#30363d,stroke-width:1.5px,color:#f0f6fc
+    style CloudBackup fill:#161b22,stroke:#30363d,stroke-width:1.5px,color:#f0f6fc
+
+    %% High-Contrast Node Styling
+    classDef extNode fill:#21262d,stroke:#8b949e,stroke-width:2px,color:#f0f6fc;
+    classDef daemonNode fill:#16243b,stroke:#58a6ff,stroke-width:2px,color:#f0f6fc;
+    classDef storeNode fill:#2c2210,stroke:#d29922,stroke-width:2px,color:#f0f6fc;
+    classDef cloudNode fill:#12281e,stroke:#3fb950,stroke-width:2px,color:#f0f6fc;
+
+    linkStyle default stroke:#8b949e,stroke-width:1.5px;
 
     class Endpoint,StaticRepo extNode;
     class Timer,HTTPClient,ProtoParser,EntityFilter,MemBuffer,HourDetector,BatchWriter,StaticArchiver,HashCheck,Heartbeat daemonNode;
@@ -85,6 +113,26 @@ flowchart TD
 The interaction between the ingestion daemon, protobuf fetcher, in-memory buffer, and local storage is shown below:
 
 ```mermaid
+%%{init: {
+  'theme': 'dark',
+  'themeVariables': {
+    'actorBkg': '#161b22',
+    'actorBorder': '#58a6ff',
+    'actorTextColor': '#f0f6fc',
+    'actorLineColor': '#8b949e',
+    'signalColor': '#58a6ff',
+    'signalTextColor': '#f0f6fc',
+    'labelBoxBkgColor': '#21262d',
+    'labelBoxBorderColor': '#30363d',
+    'labelTextColor': '#f0f6fc',
+    'loopTextColor': '#f0f6fc',
+    'noteBkgColor': '#21262d',
+    'noteBorderColor': '#30363d',
+    'noteTextColor': '#f0f6fc',
+    'activationBkgColor': '#1f242c',
+    'activationBorderColor': '#58a6ff'
+  }
+}}%%
 sequenceDiagram
     autonumber
     participant D as collector_daemon.py
@@ -147,6 +195,17 @@ data/raw/
 ## 🛡️ Reliability & Operational Protocols
 
 ```mermaid
+%%{init: {
+  'theme': 'dark',
+  'themeVariables': {
+    'darkMode': true,
+    'background': '#0d1117',
+    'mainBkg': '#161b22',
+    'clusterBkg': '#161b22',
+    'clusterBorder': '#30363d',
+    'primaryTextColor': '#f0f6fc'
+  }
+}}%%
 graph LR
     subgraph Monitoring ["Dead Man's Switch (Healthchecks.io)"]
         HC1[" collector_daemon.py "] -->|"Ping every 15m"| HC2["Healthchecks.io"]
@@ -158,7 +217,17 @@ graph LR
         Script -->|"rclone copy --update"| Remote["Google Drive Remote"]
         Remote --> LocalPull["pull_from_gdrive.sh (Workstation Pull)"]
     end
-```
+
+    style Monitoring fill:#161b22,stroke:#30363d,stroke-width:1.5px,color:#f0f6fc
+    style Recovery fill:#161b22,stroke:#30363d,stroke-width:1.5px,color:#f0f6fc
+
+    classDef monNode fill:#33171a,stroke:#ff7b72,stroke-width:2px,color:#f0f6fc;
+    classDef recNode fill:#12281e,stroke:#3fb950,stroke-width:2px,color:#f0f6fc;
+
+    linkStyle default stroke:#8b949e,stroke-width:1.5px;
+
+    class HC1,HC2,HC3 monNode;
+    class Cron,Script,Remote,LocalPull recNode;
 
 ### Key Python Module References
 - [`collector_daemon.py`](file:///Users/truonggiangdo/Data/LearningMaterials/UW/Thesis/DelayTraffic/playground/collector_daemon.py) - Master continuous loop and signal handlers (`SIGTERM`, `SIGINT`).

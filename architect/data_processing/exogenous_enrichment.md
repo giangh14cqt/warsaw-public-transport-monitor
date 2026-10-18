@@ -7,6 +7,23 @@ This document details the ingestion, spatial aggregation, and temporal indexing 
 ## 🌐 Multi-Source Exogenous Ingestion Architecture
 
 ```mermaid
+%%{init: {
+  'theme': 'dark',
+  'themeVariables': {
+    'darkMode': true,
+    'background': '#0d1117',
+    'mainBkg': '#161b22',
+    'primaryColor': '#1f2937',
+    'primaryTextColor': '#f0f6fc',
+    'primaryBorderColor': '#58a6ff',
+    'lineColor': '#8b949e',
+    'secondaryColor': '#161b22',
+    'tertiaryColor': '#21262d',
+    'clusterBkg': '#161b22',
+    'clusterBorder': '#30363d',
+    'edgeLabelBackground': '#161b22'
+  }
+}}%%
 flowchart TD
     subgraph WeatherSub ["1. Meteorological Telemetry (src/exogenous/imgw.py)"]
         direction TB
@@ -46,11 +63,19 @@ flowchart TD
         Cal_Metrics["Derive:<br/>• is_holiday (boolean)<br/>• is_weekend (boolean)<br/>• time_of_day_sin / cos<br/>• is_rush_hour (AM: 07-09, PM: 16-18)"]
     end
 
-    %% Styles
-    classDef wStyle fill:#1a365d,stroke:#2b6cb0,color:#bee3f8;
-    classDef oStyle fill:#22543d,stroke:#38a169,color:#c6f6d5;
-    classDef hStyle fill:#744210,stroke:#d69e2e,color:#fefcbf;
-    classDef cStyle fill:#44337a,stroke:#805ad5,color:#e9d8fd;
+    %% Subgraph Styling
+    style WeatherSub fill:#161b22,stroke:#30363d,stroke-width:1.5px,color:#f0f6fc
+    style OSMSub fill:#161b22,stroke:#30363d,stroke-width:1.5px,color:#f0f6fc
+    style HubSub fill:#161b22,stroke:#30363d,stroke-width:1.5px,color:#f0f6fc
+    style CalendarSub fill:#161b22,stroke:#30363d,stroke-width:1.5px,color:#f0f6fc
+
+    %% High-Contrast Node Styling
+    classDef wStyle fill:#16243b,stroke:#58a6ff,stroke-width:2px,color:#f0f6fc;
+    classDef oStyle fill:#12281e,stroke:#3fb950,stroke-width:2px,color:#f0f6fc;
+    classDef hStyle fill:#2c2210,stroke:#d29922,stroke-width:2px,color:#f0f6fc;
+    classDef cStyle fill:#271d3b,stroke:#bc8cff,stroke-width:2px,color:#f0f6fc;
+
+    linkStyle default stroke:#8b949e,stroke-width:1.5px;
 
     class IMGW_API,Stations,W_Extract,W_Fill,W_Out wStyle;
     class Overpass,OSM_Extract,OSM_Metrics,OSM_Out oStyle;
@@ -65,6 +90,20 @@ flowchart TD
 During feature mart assembly in DuckDB, each transit stop observation is joined against exogenous tables using a hybrid **ASOF temporal join** and **stop-post attribute lookup**:
 
 ```mermaid
+%%{init: {
+  'theme': 'dark',
+  'themeVariables': {
+    'actorBkg': '#161b22',
+    'actorBorder': '#58a6ff',
+    'actorTextColor': '#f0f6fc',
+    'actorLineColor': '#8b949e',
+    'signalColor': '#58a6ff',
+    'signalTextColor': '#f0f6fc',
+    'noteBkgColor': '#21262d',
+    'noteBorderColor': '#30363d',
+    'noteTextColor': '#f0f6fc'
+  }
+}}%%
 sequenceDiagram
     autonumber
     participant FM as Feature Mart Assembler (DuckDB)

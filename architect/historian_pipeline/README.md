@@ -9,6 +9,23 @@ Operating on a strict **10-second wall-clock boundary**, the Historian captures 
 ## 🏛️ Historian Architecture Overview
 
 ```mermaid
+%%{init: {
+  'theme': 'dark',
+  'themeVariables': {
+    'darkMode': true,
+    'background': '#0d1117',
+    'mainBkg': '#161b22',
+    'primaryColor': '#1f2937',
+    'primaryTextColor': '#f0f6fc',
+    'primaryBorderColor': '#58a6ff',
+    'lineColor': '#8b949e',
+    'secondaryColor': '#161b22',
+    'tertiaryColor': '#21262d',
+    'clusterBkg': '#161b22',
+    'clusterBorder': '#30363d',
+    'edgeLabelBackground': '#161b22'
+  }
+}}%%
 flowchart TD
     %% Sources
     subgraph Sources ["Ingestion Sources"]
@@ -71,13 +88,22 @@ flowchart TD
     GoldTier -.->|every 6h| RcloneHist
     RcloneHist -.-> GDriveHist
 
-    %% Styles
-    classDef ext fill:#2d3748,stroke:#4a5568,color:#edf2f7;
-    classDef daemon fill:#1a365d,stroke:#2b6cb0,color:#bee3f8;
-    classDef bronze fill:#744210,stroke:#d69e2e,color:#fefcbf;
-    classDef silver fill:#4a5568,stroke:#cbd5e0,color:#ffffff;
-    classDef gold fill:#744210,stroke:#ecc94b,color:#ffffb0;
-    classDef cloud fill:#22543d,stroke:#38a169,color:#c6f6d5;
+    %% Subgraph Styling
+    style Sources fill:#161b22,stroke:#30363d,stroke-width:1.5px,color:#f0f6fc
+    style Daemon fill:#161b22,stroke:#30363d,stroke-width:1.5px,color:#f0f6fc
+    style MultiPoller fill:#0d1117,stroke:#58a6ff,stroke-width:1.5px,color:#58a6ff
+    style Medallion fill:#161b22,stroke:#30363d,stroke-width:1.5px,color:#f0f6fc
+    style Offsite fill:#161b22,stroke:#30363d,stroke-width:1.5px,color:#f0f6fc
+
+    %% High-Contrast Node Styling
+    classDef ext fill:#21262d,stroke:#8b949e,stroke-width:2px,color:#f0f6fc;
+    classDef daemon fill:#16243b,stroke:#58a6ff,stroke-width:2px,color:#f0f6fc;
+    classDef bronze fill:#2c2210,stroke:#d29922,stroke-width:2px,color:#f0f6fc;
+    classDef silver fill:#1c2128,stroke:#cbd5e0,stroke-width:2px,color:#f0f6fc;
+    classDef gold fill:#382b14,stroke:#ecc94b,stroke-width:2px,color:#f0f6fc;
+    classDef cloud fill:#12281e,stroke:#3fb950,stroke-width:2px,color:#f0f6fc;
+
+    linkStyle default stroke:#8b949e,stroke-width:1.5px;
 
     class UM_API,ZBK_API,GTFS_Static ext;
     class ClockSync,AsyncFetch,UMFetcher,ZBKFetcher,BronzeEngine,Healthcheck,SilverEngine,GoldEngine daemon;
@@ -94,6 +120,20 @@ flowchart TD
 Unlike standard background loops that use naive `time.sleep(10)`, the Historian uses precise **wall-clock interval synchronization** implemented in [`src/historian/clock.py`](file:///Users/truonggiangdo/Data/LearningMaterials/UW/Thesis/DelayTraffic/playground/src/historian/clock.py):
 
 ```mermaid
+%%{init: {
+  'theme': 'dark',
+  'themeVariables': {
+    'actorBkg': '#161b22',
+    'actorBorder': '#58a6ff',
+    'actorTextColor': '#f0f6fc',
+    'actorLineColor': '#8b949e',
+    'signalColor': '#58a6ff',
+    'signalTextColor': '#f0f6fc',
+    'noteBkgColor': '#21262d',
+    'noteBorderColor': '#30363d',
+    'noteTextColor': '#f0f6fc'
+  }
+}}%%
 sequenceDiagram
     autonumber
     participant Clock as src/historian/clock.py
@@ -134,6 +174,17 @@ The Historian pipeline solves the delay attribution problem by explicitly pairin
 $$\text{Forecast Error} = \text{Delay}_{\text{forecast}} - \text{Delay}_{\text{observed}}$$
 
 ```mermaid
+%%{init: {
+  'theme': 'dark',
+  'themeVariables': {
+    'darkMode': true,
+    'background': '#0d1117',
+    'mainBkg': '#161b22',
+    'clusterBkg': '#161b22',
+    'clusterBorder': '#30363d',
+    'primaryTextColor': '#f0f6fc'
+  }
+}}%%
 graph TD
     subgraph ObservedActuals ["Observed Ground-Truth Arrival"]
         O1["GPS Trajectory (Silver)"] --> O2["Enter 30m Stop Buffer"]
@@ -154,9 +205,15 @@ graph TD
         Calc --> Attribution["Decompose error into:<br/>• IMGW Meteorological shock<br/>• OSM Corridor congestion<br/>• Inter-stop headway propagation"]
     end
 
-    classDef obs fill:#1a365d,stroke:#2b6cb0,color:#bee3f8;
-    classDef fc fill:#744210,stroke:#d69e2e,color:#fefcbf;
-    classDef att fill:#22543d,stroke:#38a169,color:#c6f6d5;
+    style ObservedActuals fill:#161b22,stroke:#30363d,stroke-width:1.5px,color:#f0f6fc
+    style OperatorForecast fill:#161b22,stroke:#30363d,stroke-width:1.5px,color:#f0f6fc
+    style MetricAttribution fill:#161b22,stroke:#30363d,stroke-width:1.5px,color:#f0f6fc
+
+    classDef obs fill:#16243b,stroke:#58a6ff,stroke-width:2px,color:#f0f6fc;
+    classDef fc fill:#2c2210,stroke:#d29922,stroke-width:2px,color:#f0f6fc;
+    classDef att fill:#12281e,stroke:#3fb950,stroke-width:2px,color:#f0f6fc;
+
+    linkStyle default stroke:#8b949e,stroke-width:1.5px;
 
     class O1,O2,O3,O4,O5 obs;
     class F1,F2,F3,F4 fc;

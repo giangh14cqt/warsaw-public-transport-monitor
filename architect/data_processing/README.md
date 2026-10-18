@@ -7,6 +7,23 @@ This segment documents the downstream analytical, fusion, econometric, and machi
 ## 🏗️ End-to-End Processing Architecture
 
 ```mermaid
+%%{init: {
+  'theme': 'dark',
+  'themeVariables': {
+    'darkMode': true,
+    'background': '#0d1117',
+    'mainBkg': '#161b22',
+    'primaryColor': '#1f2937',
+    'primaryTextColor': '#f0f6fc',
+    'primaryBorderColor': '#58a6ff',
+    'lineColor': '#8b949e',
+    'secondaryColor': '#161b22',
+    'tertiaryColor': '#21262d',
+    'clusterBkg': '#161b22',
+    'clusterBorder': '#30363d',
+    'edgeLabelBackground': '#161b22'
+  }
+}}%%
 flowchart TD
     %% Stage 1: Exogenous
     subgraph StageExo ["Stage 1: Exogenous Harvesting (src/exogenous/)"]
@@ -84,12 +101,21 @@ flowchart TD
         DiCE --> PubFigures
     end
 
-    %% Styles
-    classDef exoStyle fill:#2d3748,stroke:#4a5568,color:#edf2f7;
-    classDef fusionStyle fill:#1a365d,stroke:#2b6cb0,color:#bee3f8;
-    classDef valStyle fill:#44337a,stroke:#805ad5,color:#e9d8fd;
-    classDef modelStyle fill:#702459,stroke:#b83280,color:#fed7e2;
-    classDef xaiStyle fill:#742a2a,stroke:#e53e3e,color:#fed7d7;
+    %% Subgraph Styling for Dark Theme
+    style StageExo fill:#161b22,stroke:#30363d,stroke-width:1.5px,color:#f0f6fc
+    style StageFusion fill:#161b22,stroke:#30363d,stroke-width:1.5px,color:#f0f6fc
+    style StageVal fill:#161b22,stroke:#30363d,stroke-width:1.5px,color:#f0f6fc
+    style StageModels fill:#161b22,stroke:#30363d,stroke-width:1.5px,color:#f0f6fc
+    style StageXAI fill:#161b22,stroke:#30363d,stroke-width:1.5px,color:#f0f6fc
+
+    %% High-Contrast Node Styling
+    classDef exoStyle fill:#21262d,stroke:#8b949e,stroke-width:2px,color:#f0f6fc;
+    classDef fusionStyle fill:#16243b,stroke:#58a6ff,stroke-width:2px,color:#f0f6fc;
+    classDef valStyle fill:#271d3b,stroke:#bc8cff,stroke-width:2px,color:#f0f6fc;
+    classDef modelStyle fill:#33172b,stroke:#f472b6,stroke-width:2px,color:#f0f6fc;
+    classDef xaiStyle fill:#33171a,stroke:#ff7b72,stroke-width:2px,color:#f0f6fc;
+
+    linkStyle default stroke:#8b949e,stroke-width:1.5px;
 
     class IMGW_Poller,OSM_Poller,Hub_Poller,Cal_Poller,ExoWeather,ExoOSM,ExoHub exoStyle;
     class RawSource,DuckDBEngine,MartParquet fusionStyle;
@@ -105,12 +131,32 @@ flowchart TD
 All stages are executed synchronously or independently via a unified CLI dispatcher:
 
 ```mermaid
+%%{init: {
+  'theme': 'dark',
+  'themeVariables': {
+    'darkMode': true,
+    'background': '#0d1117',
+    'mainBkg': '#161b22',
+    'primaryColor': '#16243b',
+    'primaryTextColor': '#f0f6fc',
+    'primaryBorderColor': '#58a6ff',
+    'lineColor': '#8b949e'
+  }
+}}%%
 graph LR
     CLI["run_pipeline.py"] --> S_Pre["--stage preflight<br/><i>Sanity & Environment Audit</i>"]
     CLI --> S_Exo["--stage weather / osm<br/><i>Exogenous Telemetry Harvest</i>"]
     CLI --> S_Fus["--stage fusion<br/><i>Dual-Datasource Mart Fusion</i>"]
     CLI --> S_Bmk["--stage benchmark<br/><i>TWFE vs. LightGBM vs. CatBoost</i>"]
     CLI --> S_Xai["--stage xai<br/><i>Attributions, ALE, DiCE & Plots</i>"]
+
+    classDef cliNode fill:#271d3b,stroke:#bc8cff,stroke-width:2px,color:#f0f6fc;
+    classDef stageNode fill:#16243b,stroke:#58a6ff,stroke-width:2px,color:#f0f6fc;
+
+    linkStyle default stroke:#8b949e,stroke-width:1.5px;
+
+    class CLI cliNode;
+    class S_Pre,S_Exo,S_Fus,S_Bmk,S_Xai stageNode;
 ```
 
 ### CLI Command Reference

@@ -7,6 +7,23 @@ The **Feature Mart Fusion Engine** ([`src/fusion/feature_mart.py`](file:///Users
 ## ⚙️ Dual-Datasource Fusion Architecture
 
 ```mermaid
+%%{init: {
+  'theme': 'dark',
+  'themeVariables': {
+    'darkMode': true,
+    'background': '#0d1117',
+    'mainBkg': '#161b22',
+    'primaryColor': '#1f2937',
+    'primaryTextColor': '#f0f6fc',
+    'primaryBorderColor': '#58a6ff',
+    'lineColor': '#8b949e',
+    'secondaryColor': '#161b22',
+    'tertiaryColor': '#21262d',
+    'clusterBkg': '#161b22',
+    'clusterBorder': '#30363d',
+    'edgeLabelBackground': '#161b22'
+  }
+}}%%
 flowchart TD
     subgraph DataSources ["Input Datasource Selection (--datasource {legacy,historian})"]
         direction TB
@@ -45,10 +62,17 @@ flowchart TD
     FilterCTE -->|Legacy mode| Out_Leg
     FilterCTE -->|Historian mode| Out_Hist
 
-    %% Styles
-    classDef dsStyle fill:#2d3748,stroke:#4a5568,color:#edf2f7;
-    classDef qStyle fill:#1a365d,stroke:#2b6cb0,color:#bee3f8;
-    classDef oStyle fill:#744210,stroke:#ecc94b,color:#ffffb0;
+    %% Subgraph Styling
+    style DataSources fill:#161b22,stroke:#30363d,stroke-width:1.5px,color:#f0f6fc
+    style DuckDBEngine fill:#161b22,stroke:#30363d,stroke-width:1.5px,color:#f0f6fc
+    style OutputStores fill:#161b22,stroke:#30363d,stroke-width:1.5px,color:#f0f6fc
+
+    %% High-Contrast Node Styling
+    classDef dsStyle fill:#21262d,stroke:#8b949e,stroke-width:2px,color:#f0f6fc;
+    classDef qStyle fill:#16243b,stroke:#58a6ff,stroke-width:2px,color:#f0f6fc;
+    classDef oStyle fill:#2c2210,stroke:#d29922,stroke-width:2px,color:#f0f6fc;
+
+    linkStyle default stroke:#8b949e,stroke-width:1.5px;
 
     class DS_Leg,DS_Hist dsStyle;
     class BaseCTE,WindowCTE,WeatherCTE,OSMCTE,InterchangeCTE,CalendarCTE,CohortCTE,FilterCTE qStyle;
@@ -84,6 +108,17 @@ $$\text{forecast\_error\_s} = \text{delay}_{\text{forecast}, i} - \text{delay}_{
 ## 🗃️ Feature Mart Schema & Column Dictionary
 
 ```mermaid
+%%{init: {
+  'theme': 'dark',
+  'themeVariables': {
+    'darkMode': true,
+    'background': '#0d1117',
+    'classText': '#f0f6fc',
+    'classBorder': '#58a6ff',
+    'classBkg': '#161b22',
+    'lineColor': '#8b949e'
+  }
+}}%%
 classDiagram
     class FeatureMartRecord {
         +String service_date

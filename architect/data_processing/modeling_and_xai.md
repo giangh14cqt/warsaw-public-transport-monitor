@@ -11,6 +11,21 @@ Transit delay data exhibits strong autocorrelation. Standard $K$-fold cross-vali
 To prevent leakage, [`src/models/validation.py`](file:///Users/truonggiangdo/Data/LearningMaterials/UW/Thesis/DelayTraffic/playground/src/models/validation.py) implements **Purged Temporal Block Splitting** with an **Adaptive Embargo Buffer**:
 
 ```mermaid
+%%{init: {
+  'theme': 'dark',
+  'themeVariables': {
+    'darkMode': true,
+    'background': '#0d1117',
+    'textColor': '#f0f6fc',
+    'taskTextColor': '#ffffff',
+    'activeTaskBkgColor': '#1f6feb',
+    'doneTaskBkgColor': '#238636',
+    'critBkgColor': '#da3633',
+    'sectionBkgColor': '#161b22',
+    'altSectionBkgColor': '#0d1117',
+    'gridColor': '#30363d'
+  }
+}}%%
 gantt
     title Purged Temporal Block Cross-Validation with Embargo Buffer
     dateFormat X
@@ -41,6 +56,23 @@ $$\max_{i \in \text{Train}} \left(t_i\right) + \text{Embargo} \le \min_{j \in \t
 ## 📈 Model Architecture & Benchmarking Tier
 
 ```mermaid
+%%{init: {
+  'theme': 'dark',
+  'themeVariables': {
+    'darkMode': true,
+    'background': '#0d1117',
+    'mainBkg': '#161b22',
+    'primaryColor': '#1f2937',
+    'primaryTextColor': '#f0f6fc',
+    'primaryBorderColor': '#58a6ff',
+    'lineColor': '#8b949e',
+    'secondaryColor': '#161b22',
+    'tertiaryColor': '#21262d',
+    'clusterBkg': '#161b22',
+    'clusterBorder': '#30363d',
+    'edgeLabelBackground': '#161b22'
+  }
+}}%%
 flowchart TD
     FeatureMart[("Feature Mart<br/>(Stratified Cohort or Pooled)")] --> Splitter["Purged Temporal Block Splitter"]
     
@@ -76,11 +108,17 @@ flowchart TD
     EvalEngine --> CompTable[("reports/tables/benchmark_comparison.csv")]
     EvalEngine --> CohortTable[("reports/tables/benchmark_by_cohort.csv")]
 
-    %% Styles
-    classDef dataStyle fill:#2d3748,stroke:#4a5568,color:#edf2f7;
-    classDef twfeStyle fill:#1a365d,stroke:#2b6cb0,color:#bee3f8;
-    classDef gbmStyle fill:#702459,stroke:#b83280,color:#fed7e2;
-    classDef repStyle fill:#744210,stroke:#ecc94b,color:#ffffb0;
+    %% Subgraph Styling
+    style EconometricBaseline fill:#161b22,stroke:#30363d,stroke-width:1.5px,color:#f0f6fc
+    style GBDTSuite fill:#161b22,stroke:#30363d,stroke-width:1.5px,color:#f0f6fc
+
+    %% High-Contrast Node Styling
+    classDef dataStyle fill:#21262d,stroke:#8b949e,stroke-width:2px,color:#f0f6fc;
+    classDef twfeStyle fill:#16243b,stroke:#58a6ff,stroke-width:2px,color:#f0f6fc;
+    classDef gbmStyle fill:#271d3b,stroke:#bc8cff,stroke-width:2px,color:#f0f6fc;
+    classDef repStyle fill:#2c2210,stroke:#d29922,stroke-width:2px,color:#f0f6fc;
+
+    linkStyle default stroke:#8b949e,stroke-width:1.5px;
 
     class FeatureMart,Splitter,TrainSet,ValSet dataStyle;
     class TWFE_Model,TWFE_SE,TWFE_Out twfeStyle;
@@ -93,6 +131,17 @@ flowchart TD
 ## 🔍 Explainable AI (xAI) Diagnostic Pipeline
 
 ```mermaid
+%%{init: {
+  'theme': 'dark',
+  'themeVariables': {
+    'darkMode': true,
+    'background': '#0d1117',
+    'mainBkg': '#161b22',
+    'clusterBkg': '#161b22',
+    'clusterBorder': '#30363d',
+    'primaryTextColor': '#f0f6fc'
+  }
+}}%%
 flowchart LR
     subgraph TrainedModels ["Trained GBDT Model"]
         M["LightGBM / CatBoost"]
@@ -118,6 +167,22 @@ flowchart LR
     M --> ALE --> F_Ale
     M --> Inter --> F_Inter
     M --> DiCE --> F_Dice
+
+    %% Subgraph Styling
+    style TrainedModels fill:#161b22,stroke:#30363d,stroke-width:1.5px,color:#f0f6fc
+    style xAIEngines fill:#161b22,stroke:#30363d,stroke-width:1.5px,color:#f0f6fc
+    style Figures fill:#161b22,stroke:#30363d,stroke-width:1.5px,color:#f0f6fc
+
+    %% High-Contrast Node Styling
+    classDef modelNode fill:#271d3b,stroke:#bc8cff,stroke-width:2px,color:#f0f6fc;
+    classDef engineNode fill:#16243b,stroke:#58a6ff,stroke-width:2px,color:#f0f6fc;
+    classDef figNode fill:#12281e,stroke:#3fb950,stroke-width:2px,color:#f0f6fc;
+
+    linkStyle default stroke:#8b949e,stroke-width:1.5px;
+
+    class M modelNode;
+    class SHAP,ALE,Inter,DiCE engineNode;
+    class F_Shap,F_Ale,F_Inter,F_Dice figNode;
 ```
 
 ### Diagnostic Capabilities

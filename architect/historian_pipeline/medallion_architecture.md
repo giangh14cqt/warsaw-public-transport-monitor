@@ -7,6 +7,23 @@ The **Medallion Data Architecture** (Bronze $\to$ Silver $\to$ Gold) progressive
 ## 🥇 Medallion Architecture Overview
 
 ```mermaid
+%%{init: {
+  'theme': 'dark',
+  'themeVariables': {
+    'darkMode': true,
+    'background': '#0d1117',
+    'mainBkg': '#161b22',
+    'primaryColor': '#1f2937',
+    'primaryTextColor': '#f0f6fc',
+    'primaryBorderColor': '#58a6ff',
+    'lineColor': '#8b949e',
+    'secondaryColor': '#161b22',
+    'tertiaryColor': '#21262d',
+    'clusterBkg': '#161b22',
+    'clusterBorder': '#30363d',
+    'edgeLabelBackground': '#161b22'
+  }
+}}%%
 flowchart TD
     subgraph BronzeTier ["1. Bronze Tier (Verbatim Storage)"]
         direction TB
@@ -38,10 +55,17 @@ flowchart TD
     B_Disk --> S_Read
     S_Disk --> G_Read
 
-    %% Styles
-    classDef bStyle fill:#744210,stroke:#d69e2e,color:#fefcbf;
-    classDef sStyle fill:#2d3748,stroke:#cbd5e0,color:#ffffff;
-    classDef gStyle fill:#744210,stroke:#ecc94b,color:#ffffb0;
+    %% Subgraph Styling
+    style BronzeTier fill:#161b22,stroke:#30363d,stroke-width:1.5px,color:#f0f6fc
+    style SilverTier fill:#161b22,stroke:#30363d,stroke-width:1.5px,color:#f0f6fc
+    style GoldTier fill:#161b22,stroke:#30363d,stroke-width:1.5px,color:#f0f6fc
+
+    %% High-Contrast Node Styling
+    classDef bStyle fill:#2c2210,stroke:#d29922,stroke-width:2px,color:#f0f6fc;
+    classDef sStyle fill:#16243b,stroke:#58a6ff,stroke-width:2px,color:#f0f6fc;
+    classDef gStyle fill:#382b14,stroke:#ecc94b,stroke-width:2px,color:#f0f6fc;
+
+    linkStyle default stroke:#8b949e,stroke-width:1.5px;
 
     class B_In,B_Hash,B_Disk,B_Note bStyle;
     class S_Read,S_Dedup,S_Filter,S_Segment,S_Disk,S_Note sStyle;
@@ -55,6 +79,21 @@ flowchart TD
 The Gold layer uses a spatial-temporal state machine to reliably detect vehicle stop events at designated transit posts:
 
 ```mermaid
+%%{init: {
+  'theme': 'dark',
+  'themeVariables': {
+    'darkMode': true,
+    'background': '#0d1117',
+    'lineColor': '#58a6ff',
+    'textColor': '#f0f6fc',
+    'labelColor': '#f0f6fc',
+    'stateBorder': '#58a6ff',
+    'stateBkg': '#161b22',
+    'noteBkgColor': '#21262d',
+    'noteBorderColor': '#30363d',
+    'noteTextColor': '#f0f6fc'
+  }
+}}%%
 stateDiagram-v2
     [*] --> TRANSIT: Vehicle navigating corridor (Distance to stop post > 30m)
     

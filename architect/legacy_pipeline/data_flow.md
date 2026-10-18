@@ -7,6 +7,23 @@ This document details the internal data flow, protobuf message transformation, e
 ## 🔀 End-to-End Data Transformation Flow
 
 ```mermaid
+%%{init: {
+  'theme': 'dark',
+  'themeVariables': {
+    'darkMode': true,
+    'background': '#0d1117',
+    'mainBkg': '#161b22',
+    'primaryColor': '#1f2937',
+    'primaryTextColor': '#f0f6fc',
+    'primaryBorderColor': '#58a6ff',
+    'lineColor': '#8b949e',
+    'secondaryColor': '#161b22',
+    'tertiaryColor': '#21262d',
+    'clusterBkg': '#161b22',
+    'clusterBorder': '#30363d',
+    'edgeLabelBackground': '#161b22'
+  }
+}}%%
 flowchart LR
     subgraph RemoteEndpoints ["Remote GTFS-RT Protobuf Feeds"]
         VP_Feed["VehiclePositions Feed<br/><i>entity.vehicle</i>"]
@@ -45,6 +62,25 @@ flowchart LR
     SA_Rec --> ArrowTable
 
     ArrowTable --> SnappyWriter --> DiskFile
+
+    %% Subgraph Styling
+    style RemoteEndpoints fill:#161b22,stroke:#30363d,stroke-width:1.5px,color:#f0f6fc
+    style Normalization fill:#161b22,stroke:#30363d,stroke-width:1.5px,color:#f0f6fc
+    style EntityTables fill:#161b22,stroke:#30363d,stroke-width:1.5px,color:#f0f6fc
+    style PartitionTier fill:#161b22,stroke:#30363d,stroke-width:1.5px,color:#f0f6fc
+
+    %% Node Styling
+    classDef remoteNode fill:#16243b,stroke:#58a6ff,stroke-width:2px,color:#f0f6fc;
+    classDef parseNode fill:#271d3b,stroke:#bc8cff,stroke-width:2px,color:#f0f6fc;
+    classDef tableNode fill:#21262d,stroke:#8b949e,stroke-width:2px,color:#f0f6fc;
+    classDef storeNode fill:#2c2210,stroke:#d29922,stroke-width:2px,color:#f0f6fc;
+
+    linkStyle default stroke:#8b949e,stroke-width:1.5px;
+
+    class VP_Feed,TU_Feed,SA_Feed remoteNode;
+    class Parser,Flattener parseNode;
+    class VP_Rec,TU_Rec,SA_Rec,ArrowTable,SnappyWriter tableNode;
+    class DiskFile storeNode;
 ```
 
 ---
@@ -100,6 +136,17 @@ Service disruptions, accidents, detours, and track maintenance notices:
 ## 🗄️ Parquet Storage Partitioning & Compression
 
 ```mermaid
+%%{init: {
+  'theme': 'dark',
+  'themeVariables': {
+    'darkMode': true,
+    'background': '#0d1117',
+    'classText': '#f0f6fc',
+    'classBorder': '#58a6ff',
+    'classBkg': '#161b22',
+    'lineColor': '#8b949e'
+  }
+}}%%
 classDiagram
     class ParquetPartition {
         +String year
