@@ -49,13 +49,35 @@ if ! command -v rclone &> /dev/null; then
     exit 1
 fi
 
+# Optional flags processing
+EXTRA_RCLONE_FLAGS=()
+for arg in "$@"; do
+    case "$arg" in
+        --no-bronze)
+            EXTRA_RCLONE_FLAGS+=(--exclude "bronze/**")
+            echo "Option: Excluded Bronze raw telemetry (--no-bronze)." | tee -a "$LOG_FILE"
+            ;;
+        --compacted-only)
+            EXTRA_RCLONE_FLAGS+=(--exclude "bronze/**/hour=*/**")
+            echo "Option: Excluded loose tick files, pulling only hourly bundles (--compacted-only)." | tee -a "$LOG_FILE"
+            ;;
+        *)
+            EXTRA_RCLONE_FLAGS+=("$arg")
+            ;;
+    esac
+done
+
 # Run rclone copy (downloads only new/updated files; preserves local files)
+# Excludes active temporary files and extracted GTFS text/duckdb files
 rclone copy "$FULL_SOURCE" "$TARGET_DIR" \
     --fast-list \
     --transfers=8 \
     --checkers=16 \
     --update \
     --stats=5s \
+    --exclude "*.tmp" \
+    --exclude "gtfs/*/**" \
+    ${EXTRA_RCLONE_FLAGS[@]+"${EXTRA_RCLONE_FLAGS[@]}"} \
     --log-file="$LOG_FILE" \
     --log-level=INFO \
     --stats-log-level=NOTICE \

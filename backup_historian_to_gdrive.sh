@@ -45,11 +45,25 @@ if [ ! -d "$HISTORIAN_SOURCE_DIR" ]; then
     exit 0
 fi
 
-# Run rclone copy (uploads new or modified files; never deletes)
+# 1. Run Bronze hourly compaction for completed past hours
+PYTHON_EXEC="python3"
+if [ -x "$SCRIPT_DIR/.venv/bin/python" ]; then
+    PYTHON_EXEC="$SCRIPT_DIR/.venv/bin/python"
+fi
+
+echo "[$(date -u '+%Y-%m-%d %H:%M:%SZ')] Running hourly bronze compaction for finished hours..." >> "$LOG_FILE"
+"$PYTHON_EXEC" -m src.historian.compact >> "$LOG_FILE" 2>&1 || {
+    echo "[$(date -u '+%Y-%m-%d %H:%M:%SZ')] WARNING: Bronze compaction encountered errors, continuing backup." >> "$LOG_FILE"
+}
+
+# 2. Run rclone copy (uploads new or modified files; never deletes)
+# Excludes active temporary files and extracted GTFS text/duckdb files (zip + parquet are sufficient)
 rclone copy "$HISTORIAN_SOURCE_DIR" "$FULL_TARGET" \
     --fast-list \
-    --transfers=4 \
-    --checkers=8 \
+    --transfers=8 \
+    --checkers=16 \
+    --exclude "*.tmp" \
+    --exclude "gtfs/*/**" \
     --log-file="$LOG_FILE" \
     --log-level=INFO
 

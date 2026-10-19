@@ -8,7 +8,7 @@ import gzip
 import hashlib
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 import pandas as pd
 import pyarrow as pa
@@ -165,3 +165,60 @@ class BronzeStorageWriter:
 
         logger.debug(f"Flushed {len(records_to_flush)} tick audit records to {ticks_file}")
         return str(ticks_file)
+
+
+def iter_bronze_ticks(
+    base_dir: Path,
+    source: str,
+    date_str: str,
+    max_hours: Optional[List[str]] = None,
+) -> Iterator[Tuple[int, bytes, str]]:
+    """
+    Chronologically streams raw payloads (tick_ts, raw_bytes, filename) for a given source and date.
+    Transparently supports both compacted hourly .tar.zst archives and legacy loose tick_*.gz files.
+    """
+    from src.historian.compact import extract_tick_ts, open_tar_zst_reader
+
+    date_dir = base_dir / f"source={source}" / f"date={date_str}"
+    if not date_dir.exists():
+        return
+
+    # Discover all hours present (from either hour=HH.tar.zst archives or hour=HH/ directories)
+    hours_set = set()
+    for item in date_dir.iterdir():
+        name = item.name
+        if name.startswith("hour=") and not name.endswith(".tmp"):
+            # Strip extensions if archive
+            hour_part = name.split(".")[0].split("=")[-1]
+            hours_set.add(hour_part)
+
+    for hour_str in sorted(hours_set):
+        if max_hours and hour_str not in max_hours:
+            continue
+
+        archive_path = date_dir / f"hour={hour_str}.tar.zst"
+        hour_dir = date_dir / f"hour={hour_str}"
+
+        # 1. Prefer compacted archive if present
+        if archive_path.exists():
+            try:
+                for tick_ts, raw_bytes, member_name in open_tar_zst_reader(archive_path):
+                    yield tick_ts, raw_bytes, member_name
+                continue
+            except Exception as e:
+                logger.warning(f"Failed reading archive {archive_path}, checking for loose files: {e}")
+
+        # 2. Fall back to loose tick_*.gz files in directory
+        if hour_dir.is_dir():
+            for gz_file in sorted(hour_dir.glob("tick_*.gz")):
+                if gz_file.name.endswith(".tmp") or gz_file.name.startswith("."):
+                    continue
+                try:
+                    tick_ts = extract_tick_ts(gz_file.name)
+                    with gzip.open(gz_file, "rb") as gf:
+                        raw_bytes = gf.read()
+                    yield tick_ts, raw_bytes, gz_file.name
+                except Exception as e:
+                    logger.warning(f"Could not read {gz_file}: {e}")
+                    continue
+

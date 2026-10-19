@@ -22,7 +22,7 @@ logging.basicConfig(
 logger = logging.getLogger("historian_reconstruct")
 
 
-def run_reconstruction(date_str: str) -> bool:
+def run_reconstruction(date_str: str, require_complete_trips: bool = True) -> bool:
     """Runs Silver trajectory parsing and Gold stop event reconstruction for a single date."""
     if date_str == "today":
         date_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
@@ -37,7 +37,7 @@ def run_reconstruction(date_str: str) -> bool:
         return False
 
     # 2. Silver -> Gold (Stop arrival events, sub-10s interpolation, delays)
-    gold_proc = GoldStopEventReconstructor()
+    gold_proc = GoldStopEventReconstructor(require_complete_trips=require_complete_trips)
     gold_file = gold_proc.process_date(date_str)
     if not gold_file:
         logger.error(f"Gold stop event reconstruction failed or produced no records for {date_str}.")
@@ -57,7 +57,13 @@ if __name__ == "__main__":
         default="today",
         help="Date to reconstruct in YYYY-MM-DD format, or 'today' (default: today)",
     )
+    parser.add_argument(
+        "--include-incomplete-trips",
+        action="store_true",
+        default=False,
+        help="Include partial trips that do not span from starting stop to terminal stop (default: False)",
+    )
     args = parser.parse_args()
 
-    success = run_reconstruction(args.date)
+    success = run_reconstruction(args.date, require_complete_trips=not args.include_incomplete_trips)
     sys.exit(0 if success else 1)

@@ -77,32 +77,23 @@ class SilverTrajectoryProcessor:
         """
         fixes: List[Dict[str, Any]] = []
 
-        for v_type, source_name in [("bus", "um_bus"), ("tram", "um_tram")]:
-            date_dir = self.bronze_dir / f"source={source_name}" / f"date={date_str}"
-            if not date_dir.exists():
-                continue
+        from src.historian.bronze import iter_bronze_ticks
 
-            hour_dirs = sorted(date_dir.glob("hour=*"))
-            for h_dir in hour_dirs:
-                if max_hours and h_dir.name.split("=")[-1] not in max_hours:
+        for v_type, source_name in [("bus", "um_bus"), ("tram", "um_tram")]:
+            for tick_ts, raw_bytes, filename in iter_bronze_ticks(
+                base_dir=self.bronze_dir,
+                source=source_name,
+                date_str=date_str,
+                max_hours=max_hours,
+            ):
+                try:
+                    records = json.loads(raw_bytes.decode("utf-8"))
+                except Exception as e:
+                    logger.warning(f"Could not parse JSON from {filename}: {e}")
                     continue
 
-                for gz_file in sorted(h_dir.glob("tick_*.json.gz")):
-                    try:
-                        tick_str = gz_file.name.replace("tick_", "").replace(".json.gz", "")
-                        tick_ts = int(tick_str)
-                    except ValueError:
-                        tick_ts = 0
-
-                    try:
-                        with gzip.open(gz_file, "rt", encoding="utf-8") as f:
-                            records = json.load(f)
-                    except Exception as e:
-                        logger.warning(f"Could not read {gz_file}: {e}")
-                        continue
-
-                    if not isinstance(records, list):
-                        continue
+                if not isinstance(records, list):
+                    continue
 
                     for r in records:
                         time_str = r.get("Time")

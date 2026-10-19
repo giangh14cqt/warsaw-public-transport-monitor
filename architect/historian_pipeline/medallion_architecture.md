@@ -28,13 +28,13 @@ flowchart TD
     subgraph BronzeTier ["1. Bronze Tier (Verbatim Storage)"]
         direction TB
         B_In["Raw HTTP Responses (UM & ZBK)"] --> B_Hash["SHA256 Payload Hash & Timestamp"]
-        B_Hash --> B_Disk[("data/historian/bronze/<br/>date=YYYY-MM-DD/<br/>hour=HH.jsonl.gz")]
-        B_Note["Characteristics:<br/>• 100% loss-free verbatim payload<br/>• Append-only chunking<br/>• Preserves raw municipal quirks"]
+        B_Hash --> B_Disk[("data/historian/bronze/<br/>source={src}/date={date}/<br/>hour=HH.tar.zst")]
+        B_Note["Characteristics:<br/>• 100% loss-free verbatim payload<br/>• Hourly tar.zst bundles (3-5x smaller, 99.6% fewer files)<br/>• In-memory stream decompression (zero disk unpacking)<br/>• Preserves raw municipal quirks & SHA256 audit"]
     end
 
     subgraph SilverTier ["2. Silver Tier (Clean Trajectories)"]
         direction TB
-        S_Read["Read Bronze JSONL Chunks"] --> S_Dedup["Deduplicate fixes by (vehicle, timestamp)"]
+        S_Read["Stream Bronze Payload from tar.zst"] --> S_Dedup["Deduplicate fixes by (vehicle, timestamp)"]
         S_Dedup --> S_Filter["Velocity Sanity Check (0 <= v <= 120 km/h)"]
         S_Filter --> S_Segment["Trajectory Segmentation (time gap > 5 min -> new trip)"]
         S_Segment --> S_Disk[("data/historian/silver/<br/>date=YYYY-MM-DD/<br/>fixes.parquet")]
@@ -49,7 +49,7 @@ flowchart TD
         G_State --> G_Sched["Match to Static GTFS Scheduled Arrival"]
         G_State --> G_Error["Match Live ZBK Forecast -> Compute Error Δ"]
         G_Error --> G_Disk[("data/historian/gold/stop_events/<br/>date=YYYY-MM-DD/<br/>stop_events.parquet")]
-        G_Note["Characteristics:<br/>• Physical ground truth<br/>• High confidence stopped events<br/>• Ready for Feature Mart fusion"]
+        G_Note["Characteristics:<br/>• Physical ground truth<br/>• Complete trips only (starting stop to terminal stop)<br/>• High confidence stopped events<br/>• Ready for Feature Mart fusion"]
     end
 
     B_Disk --> S_Read
@@ -120,6 +120,13 @@ stateDiagram-v2
         Non-event omitted from Gold to avoid null data bloat
     end note
 ```
+
+### 🎯 Trip Completeness Invariant (Start-to-Terminal Filtering)
+
+To guarantee statistically unbiased dwell times and valid autoregressive lag features for downstream modeling:
+- **Starting Stop Requirement**: The trip's scheduled initial stop ($s_{\min} = \min(\text{stop\_sequence})$ in GTFS) must be observed (`STOPPED` or `PASSED`).
+- **Terminal Stop Requirement**: The trip's scheduled final destination ($s_{\max} = \max(\text{stop\_sequence})$ in GTFS) must be observed (`STOPPED` or `PASSED`).
+- **Incomplete Trip Exclusion**: Partial or truncated trips (e.g., trips clipped mid-route by ingestion startup or shutdown) are dropped from Gold storage. This guarantees downstream Feature Mart fusion operates exclusively on end-to-end trips with authentic origin-to-destination progression.
 
 ---
 

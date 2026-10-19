@@ -63,11 +63,13 @@ class GoldStopEventReconstructor:
         gold_dir: Optional[Path] = None,
         bronze_dir: Optional[Path] = None,
         stop_radius_meters: float = 25.0,
+        require_complete_trips: bool = True,
     ):
         self.silver_dir = silver_dir or paths.silver_dir
         self.gold_dir = gold_dir or paths.gold_dir
         self.bronze_dir = bronze_dir or paths.bronze_dir
         self.stop_radius = stop_radius_meters
+        self.require_complete_trips = require_complete_trips
         (self.gold_dir / "stop_events").mkdir(parents=True, exist_ok=True)
 
     def _get_active_duckdb(self) -> str:
@@ -101,13 +103,14 @@ class GoldStopEventReconstructor:
         Returns mapping: (trip_id, seq) -> ("delay"|"time", value)
         """
         forecasts: Dict[tuple, Any] = {}
-        zbk_pattern = str(self.bronze_dir / "source=zbk_rt" / f"date={date_str}" / "hour=*" / "*.pb.gz")
-        pb_files = sorted(glob.glob(zbk_pattern))
+        from src.historian.bronze import iter_bronze_ticks
 
-        for pb_file in pb_files:
+        for tick_ts, content, filename in iter_bronze_ticks(
+            base_dir=self.bronze_dir,
+            source="zbk_rt",
+            date_str=date_str,
+        ):
             try:
-                with gzip.open(pb_file, "rb") as f:
-                    content = f.read()
                 feed = gtfs_realtime_pb2.FeedMessage()
                 feed.ParseFromString(content)
 
@@ -182,6 +185,8 @@ class GoldStopEventReconstructor:
         fixes_by_trip = {tid: grp.sort_values("gps_timestamp_utc") for tid, grp in matched_df.groupby("matched_trip_id")}
 
         gold_rows: List[Dict[str, Any]] = []
+        retained_trips_cnt = 0
+        dropped_incomplete_cnt = 0
 
         # Process each trip's scheduled stops
         for trip_id, stop_group in trip_stops_df.groupby("trip_id"):
@@ -197,6 +202,11 @@ class GoldStopEventReconstructor:
             fix_lats = trip_fixes["lat"].values
             fix_lons = trip_fixes["lon"].values
             fix_times = trip_fixes["gps_timestamp_utc"].values
+
+            sched_min_seq = int(stop_group["stop_sequence"].min())
+            sched_max_seq = int(stop_group["stop_sequence"].max())
+
+            trip_rows: List[Dict[str, Any]] = []
 
             for _, stop_row in stop_group.iterrows():
                 seq = int(stop_row["stop_sequence"])
@@ -297,7 +307,7 @@ class GoldStopEventReconstructor:
                     else None
                 )
 
-                gold_rows.append(
+                trip_rows.append(
                     {
                         "service_date": date_str,
                         "trip_id": trip_id,
@@ -323,6 +333,21 @@ class GoldStopEventReconstructor:
                     }
                 )
 
+            if not trip_rows:
+                continue
+
+            # Ensure only complete trips from starting stop to terminal stop are kept
+            if self.require_complete_trips:
+                obs_seqs = {r["stop_sequence"] for r in trip_rows}
+                has_start = sched_min_seq in obs_seqs
+                has_terminal = sched_max_seq in obs_seqs
+                if not (has_start and has_terminal):
+                    dropped_incomplete_cnt += 1
+                    continue
+
+            retained_trips_cnt += 1
+            gold_rows.extend(trip_rows)
+
         if not gold_rows:
             logger.warning(f"No stop events generated for {date_str}.")
             return None
@@ -339,6 +364,6 @@ class GoldStopEventReconstructor:
 
         stopped_cnt = len(gold_df[gold_df["event_type"] == "STOPPED"])
         logger.info(
-            f"Gold stop events complete for {date_str}: {len(gold_df):,} events ({stopped_cnt:,} STOPPED) written to {out_file}"
+            f"Gold stop events complete for {date_str}: {len(gold_df):,} events ({stopped_cnt:,} STOPPED) across {retained_trips_cnt:,} complete trips ({dropped_incomplete_cnt:,} incomplete trips dropped) written to {out_file}"
         )
         return out_file
