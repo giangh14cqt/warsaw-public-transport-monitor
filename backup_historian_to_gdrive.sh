@@ -28,6 +28,12 @@ LOG_FILE="$LOG_DIR/backup_historian.log"
 
 mkdir -p "$LOG_DIR"
 
+# Pause check (touch .pause_backup or set PAUSE_HISTORIAN_BACKUP=1 to hold backup)
+if [ -f "$SCRIPT_DIR/.pause_backup" ] || [ -f "$SCRIPT_DIR/.pause_historian_backup" ] || [ "${PAUSE_HISTORIAN_BACKUP:-0}" = "1" ]; then
+    echo "[$(date -u '+%Y-%m-%d %H:%M:%SZ')] Backup is paused via .pause_backup flag. Exiting cleanly." >> "$LOG_FILE"
+    exit 0
+fi
+
 # Determine full rclone target
 if [[ "$HISTORIAN_DEST_FOLDER" == *":"* ]]; then
     FULL_TARGET="$HISTORIAN_DEST_FOLDER"
