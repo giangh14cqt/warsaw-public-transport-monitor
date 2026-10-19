@@ -8,15 +8,18 @@ Supports both legacy root imports and modern domain packages:
 - src.xai
 """
 
-from src.ingestion.fetcher import (
-    CriticalSchemaMismatchError,
-    GTFSRTFetcher,
-    NetworkOutageError,
-    RateLimitCircuitBreakerError,
-    TransientHttpError,
-)
-from src.ingestion.gtfs_manager import GTFSManager
-from src.ingestion.storage import DuckDBCatalog, ParquetPartitionStorage
+try:
+    from src.ingestion.fetcher import (
+        CriticalSchemaMismatchError,
+        GTFSRTFetcher,
+        NetworkOutageError,
+        RateLimitCircuitBreakerError,
+        TransientHttpError,
+    )
+    from src.ingestion.gtfs_manager import GTFSManager
+    from src.ingestion.storage import DuckDBCatalog, ParquetPartitionStorage
+except ImportError:
+    pass
 
 __all__ = [
     "GTFSRTFetcher",
