@@ -57,13 +57,14 @@ echo "[$(date -u '+%Y-%m-%d %H:%M:%SZ')] Running hourly bronze compaction for fi
 }
 
 # 2. Run rclone copy (uploads new or modified files; never deletes)
-# Excludes active temporary files and extracted GTFS text/duckdb files (zip + parquet are sufficient)
+# Excludes active temporary files, loose tick files (only bundles are uploaded), and extracted GTFS
 rclone copy "$HISTORIAN_SOURCE_DIR" "$FULL_TARGET" \
     --fast-list \
     --transfers=8 \
     --checkers=16 \
     --exclude "*.tmp" \
     --exclude "gtfs/*/**" \
+    --exclude "**/tick_*.gz" \
     --log-file="$LOG_FILE" \
     --log-level=INFO
 
