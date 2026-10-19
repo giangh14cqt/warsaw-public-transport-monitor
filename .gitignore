@@ -33,6 +33,8 @@ data/
 *.parquet
 *.zip
 *.tar.gz
+*.tar.zst
+*.tmp
 
 # Logs
 logs/
