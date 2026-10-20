@@ -9,8 +9,10 @@ import datetime
 import gzip
 import json
 import logging
+import os
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
 import duckdb
@@ -49,6 +51,62 @@ SILVER_SCHEMA = pa.schema(
 )
 
 
+def _parse_warsaw_time_to_utc(time_str: str, tick_ts: int) -> int:
+    """Parses Warsaw local datetime string 'YYYY-MM-DD HH:MM:SS' into UTC epoch seconds."""
+    try:
+        naive_dt = datetime.datetime.strptime(time_str.strip(), "%Y-%m-%d %H:%M:%S")
+        local_dt = naive_dt.replace(tzinfo=WARSAW_TZ)
+        return int(local_dt.astimezone(UTC_TZ).timestamp())
+    except Exception:
+        return tick_ts
+
+
+def _extract_single_hour_fixes(task_args: Tuple[str, str, str, str, str]) -> List[Dict[str, Any]]:
+    """Worker function: extracts and normalizes raw GPS fixes from a single hour archive/partition."""
+    base_dir_str, source_name, v_type, date_str, hour_str = task_args
+    base_dir = Path(base_dir_str)
+    from src.historian.bronze import iter_bronze_ticks
+
+    hour_fixes: List[Dict[str, Any]] = []
+    for tick_ts, raw_bytes, filename in iter_bronze_ticks(
+        base_dir=base_dir,
+        source=source_name,
+        date_str=date_str,
+        max_hours=[hour_str],
+    ):
+        try:
+            records = json.loads(raw_bytes.decode("utf-8"))
+        except Exception:
+            continue
+
+        if not isinstance(records, list):
+            continue
+
+        for r in records:
+            time_str = r.get("Time")
+            lat = r.get("Lat")
+            lon = r.get("Lon")
+            if not time_str or not lat or not lon:
+                continue
+
+            gps_ts = _parse_warsaw_time_to_utc(time_str, tick_ts)
+            hour_fixes.append(
+                {
+                    "service_date": date_str,
+                    "vehicle_type": v_type,
+                    "vehicle_number": str(r.get("VehicleNumber", "")).strip(),
+                    "route_id": str(r.get("Lines", "")).strip(),
+                    "brigade": str(r.get("Brigade", "")).strip(),
+                    "lat": float(lat),
+                    "lon": float(lon),
+                    "gps_timestamp_utc": gps_ts,
+                    "gps_time_str": str(time_str).strip(),
+                    "tick_ts": tick_ts,
+                }
+            )
+    return hour_fixes
+
+
 class SilverTrajectoryProcessor:
     """Transforms raw Bronze vehicle telemetry into deduplicated, trajectory-linked Silver Parquet tables."""
 
@@ -59,63 +117,62 @@ class SilverTrajectoryProcessor:
         self.gtfs_versioner = HistorianGTFSVersioner()
 
     def parse_warsaw_time_to_utc(self, time_str: str, tick_ts: int) -> int:
-        """
-        Parses Warsaw local datetime string 'YYYY-MM-DD HH:MM:SS' into UTC epoch seconds.
-        Handles ambiguous DST fallback hours using tick receive timestamp.
-        """
-        try:
-            naive_dt = datetime.datetime.strptime(time_str.strip(), "%Y-%m-%d %H:%M:%S")
-            # First try standard localizing
-            local_dt = naive_dt.replace(tzinfo=WARSAW_TZ)
-            return int(local_dt.astimezone(UTC_TZ).timestamp())
-        except Exception:
-            return tick_ts
+        """Parses Warsaw local datetime string 'YYYY-MM-DD HH:MM:SS' into UTC epoch seconds."""
+        return _parse_warsaw_time_to_utc(time_str, tick_ts)
 
-    def extract_raw_fixes(self, date_str: str, max_hours: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+    def extract_raw_fixes(
+        self,
+        date_str: str,
+        max_hours: Optional[List[str]] = None,
+        max_workers: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
         """
-        Extracts and normalizes raw GPS fixes from all Bronze json.gz files for a given date.
+        Extracts and normalizes raw GPS fixes from all Bronze json.gz/tar.zst files for a given date.
+        Uses ProcessPoolExecutor to decompress and parse hourly archives in parallel across CPU cores.
         """
-        fixes: List[Dict[str, Any]] = []
-
-        from src.historian.bronze import iter_bronze_ticks
+        tasks: List[Tuple[str, str, str, str, str]] = []
 
         for v_type, source_name in [("bus", "um_bus"), ("tram", "um_tram")]:
-            for tick_ts, raw_bytes, filename in iter_bronze_ticks(
-                base_dir=self.bronze_dir,
-                source=source_name,
-                date_str=date_str,
-                max_hours=max_hours,
-            ):
-                try:
-                    records = json.loads(raw_bytes.decode("utf-8"))
-                except Exception as e:
-                    logger.warning(f"Could not parse JSON from {filename}: {e}")
+            date_dir = self.bronze_dir / f"source={source_name}" / f"date={date_str}"
+            if not date_dir.exists():
+                continue
+
+            # Discover all hours present
+            hours_set = set()
+            for item in date_dir.iterdir():
+                name = item.name
+                if name.startswith("hour=") and not name.endswith(".tmp"):
+                    hour_part = name.split(".")[0].split("=")[-1]
+                    hours_set.add(hour_part)
+
+            for hour_str in sorted(hours_set):
+                if max_hours and hour_str not in max_hours:
                     continue
+                tasks.append((str(self.bronze_dir), source_name, v_type, date_str, hour_str))
 
-                if not isinstance(records, list):
-                    continue
+        if not tasks:
+            logger.warning(f"No Bronze fixes found for date {date_str}.")
+            return []
 
-                    for r in records:
-                        time_str = r.get("Time")
-                        if not time_str or not r.get("Lat") or not r.get("Lon"):
-                            continue
+        num_cores = os.cpu_count() or 4
+        workers = min(len(tasks), max_workers or num_cores)
 
-                        gps_ts = self.parse_warsaw_time_to_utc(time_str, tick_ts)
-                        fixes.append(
-                            {
-                                "service_date": date_str,
-                                "vehicle_type": v_type,
-                                "vehicle_number": str(r.get("VehicleNumber", "")).strip(),
-                                "route_id": str(r.get("Lines", "")).strip(),
-                                "brigade": str(r.get("Brigade", "")).strip(),
-                                "lat": float(r.get("Lat")),
-                                "lon": float(r.get("Lon")),
-                                "gps_timestamp_utc": gps_ts,
-                                "gps_time_str": str(time_str).strip(),
-                                "tick_ts": tick_ts,
-                            }
-                        )
+        if workers <= 1:
+            logger.info(f"Extracting raw fixes sequentially across {len(tasks)} hour partitions...")
+            fixes: List[Dict[str, Any]] = []
+            for t in tasks:
+                fixes.extend(_extract_single_hour_fixes(t))
+            return fixes
 
+        logger.info(
+            f"Extracting raw fixes in parallel across {len(tasks)} hour partitions using {workers} worker processes..."
+        )
+        fixes = []
+        with ProcessPoolExecutor(max_workers=workers) as executor:
+            for hour_fixes in executor.map(_extract_single_hour_fixes, tasks):
+                fixes.extend(hour_fixes)
+
+        logger.info(f"Parallel Bronze extraction complete for {date_str}: {len(fixes):,} raw fixes gathered.")
         return fixes
 
     def deduplicate_and_compute_kinematics(self, raw_fixes: List[Dict[str, Any]]) -> pd.DataFrame:
@@ -144,11 +201,11 @@ class SilverTrajectoryProcessor:
             prev_ts: Optional[int] = None
             prev_time_str: Optional[str] = None
 
-            for _, row in group.iterrows():
-                lat = row["lat"]
-                lon = row["lon"]
-                ts = row["gps_timestamp_utc"]
-                time_str = row["gps_time_str"]
+            for row in group.itertuples(index=False):
+                lat = row.lat
+                lon = row.lon
+                ts = row.gps_timestamp_utc
+                time_str = row.gps_time_str
 
                 # If exact same GPS timestamp or coordinates, collapse into previous row
                 if prev_time_str == time_str and prev_lat == lat and prev_lon == lon:
@@ -169,16 +226,16 @@ class SilverTrajectoryProcessor:
 
                 processed_rows.append(
                     {
-                        "service_date": row["service_date"],
+                        "service_date": row.service_date,
                         "vehicle_type": v_type,
                         "vehicle_number": v_num,
-                        "route_id": row["route_id"],
-                        "brigade": row["brigade"],
+                        "route_id": row.route_id,
+                        "brigade": row.brigade,
                         "lat": lat,
                         "lon": lon,
                         "gps_timestamp_utc": ts,
                         "gps_time_str": time_str,
-                        "tick_ts": row["tick_ts"],
+                        "tick_ts": row.tick_ts,
                         "delta_t_s": round(dt, 2),
                         "delta_d_m": round(dd, 2),
                         "speed_mps": round(speed, 2),
@@ -255,17 +312,17 @@ class SilverTrajectoryProcessor:
 
             # Build in-memory lookup map: (route_id, brigade) -> list of (trip_id, start_sec, end_sec)
             trip_map: Dict[tuple, list] = {}
-            for _, r in trip_spans.iterrows():
-                key = (str(r["route_id"]), str(r["brigade"]))
+            for r in trip_spans[["route_id", "brigade", "trip_id", "start_sec", "end_sec"]].itertuples(index=False):
+                key = (str(r.route_id), str(r.brigade))
                 if key not in trip_map:
                     trip_map[key] = []
-                trip_map[key].append((r["trip_id"], r["start_sec"], r["end_sec"]))
+                trip_map[key].append((r.trip_id, r.start_sec, r.end_sec))
 
             # Match each fix to active trip with a 15-minute buffer
             matched_trips = []
-            for _, r in df.iterrows():
-                key = (str(r["route_id"]), str(r["brigade"]))
-                sec = r["sec_of_day"]
+            for r in df[["route_id", "brigade", "sec_of_day"]].itertuples(index=False):
+                key = (str(r.route_id), str(r.brigade))
+                sec = r.sec_of_day
                 candidate_id = None
                 if key in trip_map:
                     for tid, s_start, s_end in trip_map[key]:
@@ -283,11 +340,20 @@ class SilverTrajectoryProcessor:
 
         return df
 
-    def process_date(self, date_str: str) -> Optional[Path]:
+    def process_date(self, date_str: str, force: bool = False) -> Optional[Path]:
         """
         Executes end-to-end Silver trajectory generation for a given date.
         Saves output to data/historian/silver/date=YYYY-MM-DD/trajectories.parquet.
         """
+        out_partition_dir = self.silver_dir / f"date={date_str}"
+        out_file = out_partition_dir / "trajectories.parquet"
+
+        if not force and out_file.exists() and out_file.stat().st_size > 0:
+            logger.info(
+                f"Reusing existing Silver trajectories ({out_file.stat().st_size / (1024 * 1024):.1f} MB) for {date_str} at {out_file}"
+            )
+            return out_file
+
         logger.info(f"Processing Silver trajectories for {date_str}...")
         raw_fixes = self.extract_raw_fixes(date_str)
         if not raw_fixes:
@@ -297,9 +363,7 @@ class SilverTrajectoryProcessor:
         clean_df = self.deduplicate_and_compute_kinematics(raw_fixes)
         matched_df = self.match_trips_using_gtfs(clean_df, date_str)
 
-        out_partition_dir = self.silver_dir / f"date={date_str}"
         out_partition_dir.mkdir(parents=True, exist_ok=True)
-        out_file = out_partition_dir / "trajectories.parquet"
 
         table = pa.Table.from_pandas(matched_df, schema=SILVER_SCHEMA, preserve_index=False)
         tmp_file = out_file.with_suffix(".parquet.tmp")

@@ -7,7 +7,7 @@ active VehiclePositions, current-trip TripUpdates, and Service Alerts.
 import email.utils
 import logging
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple, Union
 
 import requests
 from google.protobuf.message import DecodeError
@@ -21,9 +21,18 @@ logger = logging.getLogger(__name__)
 class ZbiorkomClient:
     """Connects to zbiorkom GTFS-RT and produces compact bronze subsets for cross-validation."""
 
-    def __init__(self, feed_url: Optional[str] = None, timeout_seconds: float = 7.0):
+    def __init__(
+        self,
+        feed_url: Optional[str] = None,
+        timeout_seconds: Union[float, Tuple[float, float]] = (2.5, 4.5),
+    ):
         self.feed_url = feed_url or config.zbk_feed_url
-        self.timeout = timeout_seconds
+        if isinstance(timeout_seconds, (int, float)):
+            connect_t = min(2.5, float(timeout_seconds) / 2.0)
+            read_t = max(1.0, float(timeout_seconds) - connect_t)
+            self.timeout: Tuple[float, float] = (connect_t, read_t)
+        else:
+            self.timeout = timeout_seconds
         self.session = requests.Session()
         self.session.headers.update({"User-Agent": "WarsawDelayTelemetry/2.0"})
 

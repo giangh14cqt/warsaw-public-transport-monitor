@@ -235,14 +235,33 @@ class WarsawHistorianDaemon:
             else:
                 self.writer.record_tick(tick_ts=tick_int, source="zbk_rt", status="SKIPPED_OVERLAP")
 
-        # Wait for all sources to complete within deadline
+        # Wait for all sources to complete within deadline without raising TimeoutError
         results = {}
-        for future in concurrent.futures.as_completed(futures, timeout=config.request_deadline_seconds):
+        done, not_done = concurrent.futures.wait(
+            futures.keys(),
+            timeout=config.request_deadline_seconds,
+            return_when=concurrent.futures.ALL_COMPLETED,
+        )
+
+        for future in done:
             source = futures[future]
             try:
                 results[source] = future.result()
             except Exception as e:
                 logger.error(f"Worker exception for {source}: {e}")
+
+        for future in not_done:
+            source = futures[future]
+            logger.warning(
+                f"Source '{source}' exceeded request deadline of {config.request_deadline_seconds}s"
+            )
+            self.writer.record_tick(
+                tick_ts=tick_int,
+                source=source,
+                status="TIMEOUT",
+                latency_ms=round(config.request_deadline_seconds * 1000, 2),
+                error_message=f"Request exceeded deadline of {config.request_deadline_seconds}s",
+            )
 
         # Flush tick logs periodically or every 6 ticks (1 minute)
         if self.total_ticks % 6 == 0:
@@ -256,6 +275,8 @@ class WarsawHistorianDaemon:
             z_str = f"zbk TU: {zbk_res['n_trip_updates']:,}"
         elif not should_poll_zbk:
             z_str = "zbk: -"
+        elif any(futures[f] == "zbk_rt" for f in not_done):
+            z_str = "zbk: timeout"
         else:
             z_str = "zbk: err"
 
@@ -301,8 +322,26 @@ class WarsawHistorianDaemon:
                 self.last_gtfs_sync_time = time.time()
 
             # Wait for next wall-clock aligned tick
-            sched_ts, actual_ts, is_missed = next(tick_generator)
-            self.execute_tick(sched_ts, actual_ts, is_missed)
+            try:
+                sched_ts, actual_ts, is_missed = next(tick_generator)
+            except StopIteration:
+                logger.info("Tick generator exhausted. Exiting run loop.")
+                break
+
+            try:
+                self.execute_tick(sched_ts, actual_ts, is_missed)
+            except Exception as e:
+                logger.exception(f"Unhandled exception during tick execution: {e}")
+                try:
+                    self.writer.record_tick(
+                        tick_ts=int(sched_ts),
+                        source="system",
+                        status="EXCEPTION",
+                        error_message=str(e),
+                    )
+                    self.writer.flush_ticks()
+                except Exception:
+                    pass
 
             # Health reporting every 15 minutes
             if time.time() - self.last_health_time >= config.health_interval_seconds:

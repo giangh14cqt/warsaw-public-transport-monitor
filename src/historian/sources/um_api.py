@@ -7,7 +7,7 @@ Fetches real-time vehicle positions for buses (type=1) and trams (type=2).
 import email.utils
 import logging
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import requests
 
@@ -23,11 +23,16 @@ class WarsawCityApiClient:
         self,
         api_key: Optional[str] = None,
         api_url: Optional[str] = None,
-        timeout_seconds: float = 7.0,
+        timeout_seconds: Union[float, Tuple[float, float]] = (2.5, 4.5),
     ):
         self.api_key = api_key or config.um_api_key
         self.api_url = api_url or config.um_api_url
-        self.timeout = timeout_seconds
+        if isinstance(timeout_seconds, (int, float)):
+            connect_t = min(2.5, float(timeout_seconds) / 2.0)
+            read_t = max(1.0, float(timeout_seconds) - connect_t)
+            self.timeout: Tuple[float, float] = (connect_t, read_t)
+        else:
+            self.timeout = timeout_seconds
         self.session = requests.Session()
         self.session.headers.update({"User-Agent": "WarsawDelayTelemetry/2.0"})
 

@@ -14,13 +14,21 @@ from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
 import duckdb
+import numpy as np
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 from google.transit import gtfs_realtime_pb2
 
 from src.historian.config import paths
-from src.historian.matching.geometry import interpolate_stop_boundary_timestamp, metric_distance
+from src.historian.matching.geometry import (
+    LAT_0_DEG,
+    LON_0_DEG,
+    METERS_PER_DEG_LAT,
+    METERS_PER_DEG_LON,
+    interpolate_stop_boundary_timestamp,
+    metric_distance,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -203,27 +211,34 @@ class GoldStopEventReconstructor:
             fix_lons = trip_fixes["lon"].values
             fix_times = trip_fixes["gps_timestamp_utc"].values
 
+            # Pre-project fixes of this trip to Warsaw Euclidean metric coordinates
+            fix_xs = (fix_lons - LON_0_DEG) * METERS_PER_DEG_LON
+            fix_ys = (fix_lats - LAT_0_DEG) * METERS_PER_DEG_LAT
+
             sched_min_seq = int(stop_group["stop_sequence"].min())
             sched_max_seq = int(stop_group["stop_sequence"].max())
 
             trip_rows: List[Dict[str, Any]] = []
 
-            for _, stop_row in stop_group.iterrows():
-                seq = int(stop_row["stop_sequence"])
-                stop_id = str(stop_row["stop_id"])
-                stop_name = str(stop_row["stop_name"])
-                s_lat = float(stop_row["stop_lat"])
-                s_lon = float(stop_row["stop_lon"])
+            for stop_row in stop_group.itertuples(index=False):
+                seq = int(stop_row.stop_sequence)
+                stop_id = str(stop_row.stop_id)
+                stop_name = str(stop_row.stop_name)
+                s_lat = float(stop_row.stop_lat)
+                s_lon = float(stop_row.stop_lon)
 
-                sched_arr_utc = self._parse_hhmmss_to_utc(date_str, stop_row["arrival_time"])
-                sched_dep_utc = self._parse_hhmmss_to_utc(date_str, stop_row["departure_time"])
+                sched_arr_utc = self._parse_hhmmss_to_utc(date_str, stop_row.arrival_time)
+                sched_dep_utc = self._parse_hhmmss_to_utc(date_str, stop_row.departure_time)
 
-                # Compute distances from all fixes of this trip to the stop
-                dists = [metric_distance(lat, lon, s_lat, s_lon) for lat, lon in zip(fix_lats, fix_lons, strict=False)]
-                min_dist = min(dists) if dists else 99999.0
+                s_x = (s_lon - LON_0_DEG) * METERS_PER_DEG_LON
+                s_y = (s_lat - LAT_0_DEG) * METERS_PER_DEG_LAT
+
+                # Vectorized Euclidean metric distances for this stop
+                dists = np.hypot(fix_xs - s_x, fix_ys - s_y)
+                min_dist = float(dists.min()) if len(dists) > 0 else 99999.0
 
                 # Detect entry and exit around stop radius (25m)
-                inside_indices = [i for i, d in enumerate(dists) if d <= self.stop_radius]
+                inside_indices = np.where(dists <= self.stop_radius)[0]
 
                 actual_arr_utc = None
                 actual_dep_utc = None
@@ -233,18 +248,18 @@ class GoldStopEventReconstructor:
                 dep_delay_s = None
                 dwell_s = None
 
-                if inside_indices:
+                if len(inside_indices) > 0:
                     event_type = "STOPPED"
-                    first_in = inside_indices[0]
-                    last_in = inside_indices[-1]
+                    first_in = int(inside_indices[0])
+                    last_in = int(inside_indices[-1])
 
                     # Sub-10s arrival interpolation
                     if first_in > 0:
                         t_arr = interpolate_stop_boundary_timestamp(
                             t_outside=float(fix_times[first_in - 1]),
-                            d_outside=dists[first_in - 1],
+                            d_outside=float(dists[first_in - 1]),
                             t_inside=float(fix_times[first_in]),
-                            d_inside=dists[first_in],
+                            d_inside=float(dists[first_in]),
                             radius_meters=self.stop_radius,
                         )
                         bracket = fix_times[first_in] - fix_times[first_in - 1]
@@ -256,9 +271,9 @@ class GoldStopEventReconstructor:
                     if last_in < len(fix_times) - 1:
                         t_dep = interpolate_stop_boundary_timestamp(
                             t_outside=float(fix_times[last_in + 1]),
-                            d_outside=dists[last_in + 1],
+                            d_outside=float(dists[last_in + 1]),
                             t_inside=float(fix_times[last_in]),
-                            d_inside=dists[last_in],
+                            d_inside=float(dists[last_in]),
                             radius_meters=self.stop_radius,
                         )
                     else:
@@ -278,7 +293,7 @@ class GoldStopEventReconstructor:
                 elif min_dist <= 60.0:
                     event_type = "PASSED"
                     # Vehicle passed near stop without stopping
-                    closest_idx = dists.index(min_dist)
+                    closest_idx = int(np.argmin(dists))
                     actual_arr_utc = int(fix_times[closest_idx])
                     actual_dep_utc = actual_arr_utc
                     dwell_s = 0
