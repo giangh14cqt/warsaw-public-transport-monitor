@@ -48,9 +48,9 @@ flowchart TB
         end
         subgraph HistorianPipeline ["Historian Observed Actuals (historian_daemon.py)"]
             H1["10s Wall-Clock Poller (UM API)"]
-            H2["Bronze Verbatim Store (JSONL)"]
-            H3["Silver Deduplication & Trajectories"]
-            H4["Gold Stop Event Detector (30m buffer)"]
+            H2["Bronze Verbatim Store (JSONL / tar.zst)"]
+            H3["Silver Trajectory Kinematics & DuckDB Trip Matcher"]
+            H4["Gold Stop Event Reconstructor (25m buffer + sub-10s interpolation)"]
             H5["GTFS-RT Companion Matching (Error Δ)"]
         end
     end
@@ -101,7 +101,8 @@ flowchart TB
     H1 --> H2 --> H3 --> H4
     H5 --> H4
     H4 --> D_Hist
-    S5 -.-> H4
+    S5 -.->|schedule_index.duckdb| H3
+    S5 -.->|stops timetable| H4
 
     S3 --> D_Exo
     S4 --> D_Exo
@@ -164,6 +165,86 @@ flowchart TB
 
 ---
 
+## 🔄 End-to-End Database Matching Architecture
+
+The system resolves raw telemetry into modeling matrices through two sequential, decoupled database matching pipelines:
+
+```mermaid
+%%{init: {
+  'theme': 'dark',
+  'themeVariables': {
+    'darkMode': true,
+    'background': '#0d1117',
+    'mainBkg': '#161b22',
+    'primaryColor': '#1f2937',
+    'primaryTextColor': '#f0f6fc',
+    'primaryBorderColor': '#58a6ff',
+    'lineColor': '#8b949e',
+    'secondaryColor': '#161b22',
+    'tertiaryColor': '#21262d',
+    'clusterBkg': '#161b22',
+    'clusterBorder': '#30363d',
+    'edgeLabelBackground': '#161b22'
+  }
+}}%%
+flowchart LR
+    subgraph MatchPhase1 ["Phase 1: Raw Data to Gold Stop Events"]
+        direction TB
+        P1_Bronze["Raw GPS Pings (Bronze)<br/><code>{route, brigade, lat, lon, time}</code>"]
+        P1_DuckDB["DuckDB Schedule Index<br/><code>schedule_index.duckdb</code>"]
+        P1_Silver["Silver Trajectories<br/><code>trajectories.parquet</code><br/><i>(route, brigade, time window match)</i>"]
+        P1_Gold["Gold Stop Events<br/><code>stop_events.parquet</code><br/><i>(25m buffer + sub-10s crossing + ZBK error Δ)</i>"]
+
+        P1_Bronze --> P1_Silver
+        P1_DuckDB -.->|Trip spans| P1_Silver
+        P1_Silver --> P1_Gold
+        P1_DuckDB -.->|Stop timetable| P1_Gold
+    end
+
+    subgraph MatchPhase2 ["Phase 2: Gold Stop Events to Design Matrix ('Mat Matrix')"]
+        direction TB
+        P2_Gold["Gold Stop Events<br/><code>stop_events.parquet</code>"]
+        P2_DuckDB["DuckDB Vectorized SQL Engine<br/><code>src/fusion/feature_mart.py</code>"]
+        P2_Window["Window Lags & Deltas<br/><i>prev_stop_delay, Δt_run, headway_dev</i>"]
+        P2_Exo["4-Way Exogenous Joins<br/><i>Weather, OSM Corridors, Calendar, Hubs</i>"]
+        P2_Mart["Fused Feature Mart<br/><code>feature_mart_observed.parquet</code>"]
+        P2_Matrix["Design Matrix [X | y]<br/><i>Target y = Δt_run, Matrix X in R^{N x P}</i><br/><i>Purged Temporal Block CV Splitting</i>"]
+
+        P2_Gold --> P2_DuckDB
+        P2_DuckDB --> P2_Window --> P2_Exo --> P2_Mart --> P2_Matrix
+    end
+
+    P1_Gold ==> P2_Gold
+
+    style MatchPhase1 fill:#161b22,stroke:#30363d,stroke-width:1.5px,color:#f0f6fc
+    style MatchPhase2 fill:#161b22,stroke:#30363d,stroke-width:1.5px,color:#f0f6fc
+
+    classDef p1Style fill:#16243b,stroke:#58a6ff,stroke-width:2px,color:#f0f6fc;
+    classDef p2Style fill:#271d3b,stroke:#bc8cff,stroke-width:2px,color:#f0f6fc;
+
+    linkStyle default stroke:#8b949e,stroke-width:1.5px;
+
+    class P1_Bronze,P1_DuckDB,P1_Silver,P1_Gold p1Style;
+    class P2_Gold,P2_DuckDB,P2_Window,P2_Exo,P2_Mart,P2_Matrix p2Style;
+```
+
+1. **Raw Telemetry to Gold Stop Events**:
+   - Matches raw `(route_id, brigade)` operational pings against `schedule_index.duckdb` within operational time windows $[s_{\text{start}} - 600\text{s}, s_{\text{end}} + 900\text{s}]$ to identify `matched_trip_id`.
+   - Projects fixes onto Warsaw local metric plane ($<0.08\%$ distortion) and intersects with 25m stop buffers.
+   - Computes continuous sub-10s boundary crossing timestamps, measured dwells, and live operator forecast error $\Delta$.
+   - **Deep Dive**: [`architect/historian_pipeline/medallion_architecture.md`](file:///Users/truonggiangdo/Data/LearningMaterials/UW/Thesis/DelayTraffic/playground/architect/historian_pipeline/medallion_architecture.md#database-spatial-matching-engine-raw-data-bronze-silver-gold).
+
+2. **Gold Stop Events to Modeling Design Matrix ("Mat Matrix")**:
+   - Out-of-core DuckDB vectorized SQL query pipeline scanning `stop_events.parquet`.
+   - Computes autoregressive lag features (`prev_stop_delay`, `prev2_stop_delay`, $\Delta t_{\text{run}}$, $\Delta t_{\text{dwell}}$, $\text{trip\_progress}$) partitioned by `trip_instance_key`.
+   - Computes inter-vehicle headway deviations partitioned by `(route_id, stop_id)`.
+   - Executes four concurrent exogenous joins (IMGW synoptic weather, OSMnx road corridor topology, Polish calendar, transit hubs).
+   - Filters origin stops, terminal turnaround layovers (*pętle*), and extreme outliers.
+   - Slices the resulting design matrix $[\mathbf{X} \mid \mathbf{y}]$ via purged temporal block cross-validation with an adaptive embargo buffer for econometric and machine learning estimation.
+   - **Deep Dive**: [`architect/data_processing/feature_mart_fusion.md`](file:///Users/truonggiangdo/Data/LearningMaterials/UW/Thesis/DelayTraffic/playground/architect/data_processing/feature_mart_fusion.md#database-matching-feature-matrix-mat-matrix-assembly-gold-feature-mart-modeling-matrix).
+
+---
+
 ## 📂 Architecture Directory Index
 
 The architecture documentation is organized into three specialized segments:
@@ -171,8 +252,8 @@ The architecture documentation is organized into three specialized segments:
 | Segment | Path | Description |
 | :--- | :--- | :--- |
 | **1. Legacy Pipeline** | [`legacy_pipeline/`](file:///Users/truonggiangdo/Data/LearningMaterials/UW/Thesis/DelayTraffic/playground/architect/legacy_pipeline/) | GTFS-RT 30s protobuf ingestion, hourly partitioning, remote server daemon, and backup scripts. |
-| **2. Historian Pipeline** | [`historian_pipeline/`](file:///Users/truonggiangdo/Data/LearningMaterials/UW/Thesis/DelayTraffic/playground/architect/historian_pipeline/) | 10s wall-clock aligned observed actuals, Medallion storage (Bronze/Silver/Gold), spatial buffer stop matching, and GTFS-RT forecast error calculation. |
-| **3. Data Processing & Modeling** | [`data_processing/`](file:///Users/truonggiangdo/Data/LearningMaterials/UW/Thesis/DelayTraffic/playground/architect/data_processing/) | Exogenous feature engineering (weather, OSM, hubs), DuckDB dual-datasource fusion, purged temporal validation, econometric TWFE, GBDTs, and xAI attribution. |
+| **2. Historian Pipeline** | [`historian_pipeline/`](file:///Users/truonggiangdo/Data/LearningMaterials/UW/Thesis/DelayTraffic/playground/architect/historian_pipeline/) | 10s wall-clock aligned observed actuals, Medallion storage (Bronze/Silver/Gold), DuckDB static GTFS schedule matching, 25m geofence sub-10s interpolation, and GTFS-RT forecast error calculation. |
+| **3. Data Processing & Modeling** | [`data_processing/`](file:///Users/truonggiangdo/Data/LearningMaterials/UW/Thesis/DelayTraffic/playground/architect/data_processing/) | Exogenous feature engineering (weather, OSM, hubs), DuckDB dual-datasource fusion, Database Matching (Gold to Mat Matrix), purged temporal validation, econometric TWFE, GBDTs, and xAI attribution. |
 
 ---
 

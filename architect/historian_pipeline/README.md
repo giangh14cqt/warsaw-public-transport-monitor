@@ -52,11 +52,11 @@ flowchart TD
     %% Medallion Pipeline
     subgraph Medallion ["Medallion Data Pipeline (Local Tier)"]
         direction TB
-        BronzeTier[("Bronze Tier (Verbatim)<br/><code>data/historian/bronze/YYYY-MM-DD/*.jsonl.gz</code>")]
-        SilverEngine["Silver Deduplication & Filtering<br/><b>src/historian/silver.py</b><br/><i>Velocity (0-120 km/h) & Trajectories</i>"]
-        SilverTier[("Silver Tier (Clean Fixes)<br/><code>data/historian/silver/YYYY-MM-DD/fixes.parquet</code>")]
-        GoldEngine["Gold Stop Event Detector<br/><b>src/historian/gold.py</b><br/><i>30m GIS buffer + Dwell + Error Δ</i>"]
-        GoldTier[("Gold Tier (Stop Events)<br/><code>data/historian/gold/stop_events/date=YYYY-MM-DD/</code>")]
+        BronzeTier[("Bronze Tier (Verbatim)<br/><code>data/historian/bronze/source=*/date=YYYY-MM-DD/hour=HH.tar.zst</code>")]
+        SilverEngine["Silver Deduplication & Trip Matcher<br/><b>src/historian/silver.py</b><br/><i>Kinematics & DuckDB (route, brigade) Trip Window Match</i>"]
+        SilverTier[("Silver Tier (Clean Trajectories)<br/><code>data/historian/silver/date=YYYY-MM-DD/trajectories.parquet</code>")]
+        GoldEngine["Gold Stop Event Reconstructor<br/><b>src/historian/gold.py</b><br/><i>25m buffer + sub-10s interpolation + Dwell + Error Δ</i>"]
+        GoldTier[("Gold Tier (Stop Events)<br/><code>data/historian/gold/stop_events/date=YYYY-MM-DD/stop_events.parquet</code>")]
     end
 
     %% Remote Sync
@@ -76,10 +76,11 @@ flowchart TD
     ClockSync --> Healthcheck
 
     BronzeTier --> SilverEngine
+    GTFS_Static -.->|schedule_index.duckdb| SilverEngine
     SilverEngine --> SilverTier
 
     SilverTier --> GoldEngine
-    GTFS_Static -.-> GoldEngine
+    GTFS_Static -.->|stops timetable| GoldEngine
     BronzeTier -.->|ZBK TripUpdates| GoldEngine
     GoldEngine --> GoldTier
 
@@ -227,6 +228,9 @@ graph TD
 - [`src/historian/clock.py`](file:///Users/truonggiangdo/Data/LearningMaterials/UW/Thesis/DelayTraffic/playground/src/historian/clock.py) - Sub-second precision wall-clock boundary scheduler.
 - [`src/historian/sources/um_api.py`](file:///Users/truonggiangdo/Data/LearningMaterials/UW/Thesis/DelayTraffic/playground/src/historian/sources/um_api.py) - Warsaw Open Data API client with vehicle type normalization.
 - [`src/historian/sources/zbiorkom.py`](file:///Users/truonggiangdo/Data/LearningMaterials/UW/Thesis/DelayTraffic/playground/src/historian/sources/zbiorkom.py) - Companion GTFS-RT TripUpdates poller.
-- [`src/historian/bronze.py`](file:///Users/truonggiangdo/Data/LearningMaterials/UW/Thesis/DelayTraffic/playground/src/historian/bronze.py) - Verbatim JSONL storage writer with gzip compression and SHA256 integrity.
-- [`src/historian/silver.py`](file:///Users/truonggiangdo/Data/LearningMaterials/UW/Thesis/DelayTraffic/playground/src/historian/silver.py) - Trajectory cleaning, speed thresholding, and Parquet conversion.
-- [`src/historian/gold.py`](file:///Users/truonggiangdo/Data/LearningMaterials/UW/Thesis/DelayTraffic/playground/src/historian/gold.py) - Spatial GIS buffer stop event detection, dwell time calculation, and forecast error pairing.
+- [`src/historian/bronze.py`](file:///Users/truonggiangdo/Data/LearningMaterials/UW/Thesis/DelayTraffic/playground/src/historian/bronze.py) - Verbatim JSONL/tar.zst storage writer with payload hashing.
+- [`src/historian/silver.py`](file:///Users/truonggiangdo/Data/LearningMaterials/UW/Thesis/DelayTraffic/playground/src/historian/silver.py) - Trajectory cleaning, kinematics, and DuckDB brigade-trip database matching.
+- [`src/historian/gold.py`](file:///Users/truonggiangdo/Data/LearningMaterials/UW/Thesis/DelayTraffic/playground/src/historian/gold.py) - 25m spatial geofence buffer stop event detection, sub-10s linear interpolation, dwell measurement, and live forecast error pairing.
+- [`src/historian/matching/geometry.py`](file:///Users/truonggiangdo/Data/LearningMaterials/UW/Thesis/DelayTraffic/playground/src/historian/matching/geometry.py) - Warsaw local metric projection ($<0.08\%$ distortion) and polyline linear referencing.
+- **Deep Dive Specification**: See [Database & Spatial Matching Engine: Raw Data (Bronze) → Silver → Gold](file:///Users/truonggiangdo/Data/LearningMaterials/UW/Thesis/DelayTraffic/playground/architect/historian_pipeline/medallion_architecture.md#database-spatial-matching-engine-raw-data-bronze-silver-gold).
+

@@ -185,5 +185,5 @@ python run_pipeline.py --stage xai --datasource historian --model lgbm
 ## 📑 Detailed Architecture Documents in this Segment
 
 1. [`exogenous_enrichment.md`](file:///Users/truonggiangdo/Data/LearningMaterials/UW/Thesis/DelayTraffic/playground/architect/data_processing/exogenous_enrichment.md) - Weather, road topology, and transit interchange extraction mechanics.
-2. [`feature_mart_fusion.md`](file:///Users/truonggiangdo/Data/LearningMaterials/UW/Thesis/DelayTraffic/playground/architect/data_processing/feature_mart_fusion.md) - DuckDB vectorized dual-datasource fusion engine, lagged feature engineering, and schema dictionary.
+2. [`feature_mart_fusion.md`](file:///Users/truonggiangdo/Data/LearningMaterials/UW/Thesis/DelayTraffic/playground/architect/data_processing/feature_mart_fusion.md) - DuckDB vectorized dual-datasource fusion engine, database matching (Gold stop events to modeling matrix), lagged feature engineering, and design matrix taxonomy.
 3. [`modeling_and_xai.md`](file:///Users/truonggiangdo/Data/LearningMaterials/UW/Thesis/DelayTraffic/playground/architect/data_processing/modeling_and_xai.md) - Purged temporal block validation, econometric TWFE, GBDTs, and xAI diagnostic suite.
