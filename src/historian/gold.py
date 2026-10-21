@@ -80,9 +80,17 @@ class GoldStopEventReconstructor:
         self.require_complete_trips = require_complete_trips
         (self.gold_dir / "stop_events").mkdir(parents=True, exist_ok=True)
 
-    def _get_active_duckdb(self) -> str:
+    def _get_active_duckdb(self, date_str: Optional[str] = None) -> str:
+        from src.historian.static_gtfs import HistorianGTFSVersioner
+
+        gtfs_parent = self.gold_dir.parent / "gtfs" if self.gold_dir else None
+        versioner = HistorianGTFSVersioner(gtfs_dir=gtfs_parent)
+        active_db = versioner.get_active_duckdb(date_str)
+        if active_db and Path(active_db).exists():
+            return str(active_db)
+
         gtfs_dir = paths.gtfs_dir
-        db_files = list(gtfs_dir.glob("*/schedule_index.duckdb"))
+        db_files = sorted(gtfs_dir.glob("*/schedule_index.duckdb"))
         if not db_files:
             raise FileNotFoundError("No schedule_index.duckdb found for GTFS timetable lookups.")
         return str(db_files[-1])
@@ -163,7 +171,7 @@ class GoldStopEventReconstructor:
             return None
 
         # Load static timetable stops for all matched trips via DuckDB
-        db_path = self._get_active_duckdb()
+        db_path = self._get_active_duckdb(date_str)
         con = duckdb.connect(db_path, read_only=True)
         unique_trips = matched_df["matched_trip_id"].unique().tolist()
 

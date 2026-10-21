@@ -128,19 +128,62 @@ class HistorianGTFSVersioner:
         return unpack_dir
 
     def _build_duckdb_index(self, unpack_dir: Path) -> None:
-        """Indexes trips, stop_times, stops, and shapes in DuckDB for sub-millisecond timetable lookups."""
+        """Indexes trips, stop_times, stops, shapes, and calendar_dates in DuckDB for sub-millisecond timetable lookups."""
         db_path = unpack_dir / "schedule_index.duckdb"
         trips_csv = unpack_dir / "trips.txt"
         stop_times_csv = unpack_dir / "stop_times.txt"
         stops_csv = unpack_dir / "stops.txt"
         shapes_csv = unpack_dir / "shapes.txt"
-
-        if db_path.exists():
-            return
+        calendar_dates_csv = unpack_dir / "calendar_dates.txt"
+        calendar_csv = unpack_dir / "calendar.txt"
 
         if not trips_csv.exists() or not stop_times_csv.exists():
             logger.warning(f"Incomplete GTFS files in {unpack_dir}; skipping DuckDB indexing.")
             return
+
+        if db_path.exists():
+            try:
+                con = duckdb.connect(str(db_path))
+                existing_tables = set(t[0] for t in con.execute("SHOW TABLES").fetchall())
+                if "trips" in existing_tables and "stop_times" in existing_tables:
+                    if calendar_dates_csv.exists() and "calendar_dates" not in existing_tables:
+                        con.execute(f"""
+                            CREATE TABLE calendar_dates AS
+                            SELECT service_id, CAST(date AS VARCHAR) AS date, CAST(exception_type AS INTEGER) AS exception_type
+                            FROM read_csv('{calendar_dates_csv}', header=true, all_varchar=true);
+                            CREATE INDEX idx_calendar_dates ON calendar_dates(date, service_id);
+                        """)
+                    if calendar_csv.exists() and "calendar" not in existing_tables:
+                        con.execute(f"""
+                            CREATE TABLE calendar AS
+                            SELECT service_id, CAST(monday AS INTEGER) AS monday, CAST(tuesday AS INTEGER) AS tuesday,
+                                   CAST(wednesday AS INTEGER) AS wednesday, CAST(thursday AS INTEGER) AS thursday,
+                                   CAST(friday AS INTEGER) AS friday, CAST(saturday AS INTEGER) AS saturday,
+                                   CAST(sunday AS INTEGER) AS sunday, CAST(start_date AS VARCHAR) AS start_date,
+                                   CAST(end_date AS VARCHAR) AS end_date
+                            FROM read_csv('{calendar_csv}', header=true, all_varchar=true);
+                            CREATE INDEX idx_calendar ON calendar(service_id);
+                        """)
+                    if stops_csv.exists() and "stops" not in existing_tables:
+                        con.execute(f"""
+                            CREATE TABLE stops AS
+                            SELECT stop_id, stop_name, CAST(stop_lat AS DOUBLE) AS stop_lat, CAST(stop_lon AS DOUBLE) AS stop_lon
+                            FROM read_csv('{stops_csv}', header=true, all_varchar=true);
+                            CREATE INDEX idx_stops ON stops(stop_id);
+                        """)
+                    if shapes_csv.exists() and "shapes" not in existing_tables:
+                        con.execute(f"""
+                            CREATE TABLE shapes AS
+                            SELECT shape_id, CAST(shape_pt_lat AS DOUBLE) AS shape_pt_lat, CAST(shape_pt_lon AS DOUBLE) AS shape_pt_lon,
+                                   CAST(shape_pt_sequence AS INTEGER) AS shape_pt_sequence
+                            FROM read_csv('{shapes_csv}', header=true, all_varchar=true);
+                            CREATE INDEX idx_shapes ON shapes(shape_id, shape_pt_sequence);
+                        """)
+                    con.close()
+                    return
+                con.close()
+            except Exception as e:
+                logger.warning(f"Error inspecting or updating existing DuckDB tables in {db_path}: {e}")
 
         logger.info(f"Building DuckDB index at {db_path}...")
         con = duckdb.connect(str(db_path))
@@ -188,8 +231,109 @@ class HistorianGTFSVersioner:
                 CREATE INDEX idx_shapes ON shapes(shape_id, shape_pt_sequence);
             """)
 
+        if calendar_dates_csv.exists():
+            con.execute(f"""
+                CREATE TABLE calendar_dates AS
+                SELECT
+                    service_id,
+                    CAST(date AS VARCHAR) AS date,
+                    CAST(exception_type AS INTEGER) AS exception_type
+                FROM read_csv('{calendar_dates_csv}', header=true, all_varchar=true);
+
+                CREATE INDEX idx_calendar_dates ON calendar_dates(date, service_id);
+            """)
+
+        if calendar_csv.exists():
+            con.execute(f"""
+                CREATE TABLE calendar AS
+                SELECT
+                    service_id,
+                    CAST(monday AS INTEGER) AS monday,
+                    CAST(tuesday AS INTEGER) AS tuesday,
+                    CAST(wednesday AS INTEGER) AS wednesday,
+                    CAST(thursday AS INTEGER) AS thursday,
+                    CAST(friday AS INTEGER) AS friday,
+                    CAST(saturday AS INTEGER) AS saturday,
+                    CAST(sunday AS INTEGER) AS sunday,
+                    CAST(start_date AS VARCHAR) AS start_date,
+                    CAST(end_date AS VARCHAR) AS end_date
+                FROM read_csv('{calendar_csv}', header=true, all_varchar=true);
+
+                CREATE INDEX idx_calendar ON calendar(service_id);
+            """)
+
         con.close()
         logger.info("Schedule indexing complete.")
+
+    def get_active_duckdb(self, date_str: Optional[str] = None) -> Optional[Path]:
+        """
+        Resolves the appropriate static GTFS schedule_index.duckdb for a given date_str (YYYY-MM-DD).
+        If date_str is provided, selects the snapshot that covers date_str in calendar_dates / feed_info.
+        Falls back to the latest available snapshot if date_str is omitted or no exact match exists.
+        Ensures all tables (including calendar_dates and stops) are indexed.
+        """
+        candidate_dirs = []
+        if self.gtfs_dir.exists():
+            candidate_dirs.append(self.gtfs_dir)
+        fallback_dir = paths.root / "data" / "gtfs"
+        if fallback_dir.exists() and fallback_dir not in candidate_dirs:
+            candidate_dirs.append(fallback_dir)
+
+        duckdb_candidates = []
+        for cdir in candidate_dirs:
+            for db_path in sorted(cdir.glob("*/schedule_index.duckdb")):
+                duckdb_candidates.append(db_path)
+
+        if not duckdb_candidates:
+            return None
+
+        # Ensure all candidate duckdbs have complete tables indexed
+        for db_path in duckdb_candidates:
+            self._build_duckdb_index(db_path.parent)
+
+        if not date_str:
+            return duckdb_candidates[-1]
+
+        target_compact = date_str.replace("-", "")
+        matches = []
+        for db_path in duckdb_candidates:
+            parent = db_path.parent
+            cal_dates_file = parent / "calendar_dates.txt"
+            feed_info_file = parent / "feed_info.txt"
+
+            feed_start = ""
+            if feed_info_file.exists():
+                try:
+                    fi = pd.read_csv(feed_info_file, dtype=str)
+                    if "feed_start_date" in fi.columns:
+                        feed_start = str(fi["feed_start_date"].iloc[0]).strip()
+                except Exception:
+                    pass
+
+            has_date = False
+            if cal_dates_file.exists():
+                try:
+                    cd = pd.read_csv(cal_dates_file, dtype=str)
+                    has_date = (cd["date"] == target_compact).any()
+                except Exception:
+                    pass
+
+            matches.append(
+                {
+                    "path": db_path,
+                    "has_date": has_date,
+                    "feed_start": feed_start,
+                    "mtime": db_path.stat().st_mtime,
+                }
+            )
+
+        date_matches = [m for m in matches if m["has_date"]]
+        if date_matches:
+            date_matches.sort(key=lambda m: (m["feed_start"], m["mtime"]), reverse=True)
+            return date_matches[0]["path"]
+
+        matches.sort(key=lambda m: (m["feed_start"], m["mtime"]), reverse=True)
+        return matches[0]["path"]
 
     def get_current_unpack_dir(self) -> Optional[Path]:
         return self._current_unpack_dir

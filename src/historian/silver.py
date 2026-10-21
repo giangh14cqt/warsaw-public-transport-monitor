@@ -261,30 +261,109 @@ class SilverTrajectoryProcessor:
         if df.empty:
             return df
 
-        # Locate DuckDB schedule index
-        gtfs_dir = paths.gtfs_dir
-        db_files = list(gtfs_dir.glob("*/schedule_index.duckdb"))
-        if not db_files:
-            logger.warning("No schedule_index.duckdb found; proceeding with unlinked trajectories.")
+        # Locate DuckDB schedule index for the specific service date
+        db_path = self.gtfs_versioner.get_active_duckdb(date_str)
+        if not db_path or not Path(db_path).exists():
+            logger.warning(f"No schedule_index.duckdb found for {date_str}; proceeding with unlinked trajectories.")
             return df
 
-        db_path = str(db_files[-1])
-
         try:
-            con = duckdb.connect(db_path, read_only=True)
-            # Query trip time spans by route and brigade
-            trip_spans = con.execute("""
-                SELECT
-                    t.trip_id,
-                    t.route_id,
-                    t.brigade,
-                    MIN(st.departure_time) AS trip_start,
-                    MAX(st.arrival_time) AS trip_end
-                FROM trips t
-                JOIN stop_times st ON t.trip_id = st.trip_id
-                WHERE t.brigade IS NOT NULL
-                GROUP BY t.trip_id, t.route_id, t.brigade
-            """).df()
+            con = duckdb.connect(str(db_path), read_only=True)
+            tables = set(t[0] for t in con.execute("SHOW TABLES").fetchall())
+
+            target_date_compact = date_str.replace("-", "")
+            dt_obj = datetime.datetime.strptime(date_str, "%Y-%m-%d")
+            day_of_week = dt_obj.strftime("%A").lower()
+
+            # Filter trips by service_id active on date_str
+            active_clause = ""
+            if "calendar_dates" in tables and "calendar" in tables:
+                active_clause = f"""
+                    WITH active_services AS (
+                        SELECT service_id
+                        FROM calendar
+                        WHERE {day_of_week} = 1
+                          AND start_date <= '{target_date_compact}'
+                          AND end_date >= '{target_date_compact}'
+                          AND service_id NOT IN (
+                              SELECT service_id FROM calendar_dates WHERE date = '{target_date_compact}' AND exception_type = 2
+                          )
+                        UNION
+                        SELECT service_id
+                        FROM calendar_dates
+                        WHERE date = '{target_date_compact}' AND exception_type = 1
+                    )
+                """
+            elif "calendar_dates" in tables:
+                active_clause = f"""
+                    WITH active_services AS (
+                        SELECT DISTINCT service_id
+                        FROM calendar_dates
+                        WHERE date = '{target_date_compact}' AND exception_type = 1
+                    )
+                """
+            elif "calendar" in tables:
+                active_clause = f"""
+                    WITH active_services AS (
+                        SELECT DISTINCT service_id
+                        FROM calendar
+                        WHERE {day_of_week} = 1
+                          AND start_date <= '{target_date_compact}'
+                          AND end_date >= '{target_date_compact}'
+                    )
+                """
+
+            if active_clause:
+                query = f"""
+                    {active_clause}
+                    SELECT
+                        t.trip_id,
+                        t.route_id,
+                        t.brigade,
+                        MIN(st.departure_time) AS trip_start,
+                        MAX(st.arrival_time) AS trip_end
+                    FROM trips t
+                    JOIN stop_times st ON t.trip_id = st.trip_id
+                    JOIN active_services act ON t.service_id = act.service_id
+                    WHERE t.brigade IS NOT NULL
+                    GROUP BY t.trip_id, t.route_id, t.brigade
+                    ORDER BY trip_start
+                """
+            else:
+                query = """
+                    SELECT
+                        t.trip_id,
+                        t.route_id,
+                        t.brigade,
+                        MIN(st.departure_time) AS trip_start,
+                        MAX(st.arrival_time) AS trip_end
+                    FROM trips t
+                    JOIN stop_times st ON t.trip_id = st.trip_id
+                    WHERE t.brigade IS NOT NULL
+                    GROUP BY t.trip_id, t.route_id, t.brigade
+                    ORDER BY trip_start
+                """
+
+            trip_spans = con.execute(query).df()
+
+            # Graceful fallback: if calendar produced 0 trips (e.g., date out of range), use unfiltered trips
+            if trip_spans.empty and active_clause:
+                logger.warning(f"No active services matched for {date_str} in GTFS calendar; falling back to unfiltered trips.")
+                fallback_query = """
+                    SELECT
+                        t.trip_id,
+                        t.route_id,
+                        t.brigade,
+                        MIN(st.departure_time) AS trip_start,
+                        MAX(st.arrival_time) AS trip_end
+                    FROM trips t
+                    JOIN stop_times st ON t.trip_id = st.trip_id
+                    WHERE t.brigade IS NOT NULL
+                    GROUP BY t.trip_id, t.route_id, t.brigade
+                    ORDER BY trip_start
+                """
+                trip_spans = con.execute(fallback_query).df()
+
             con.close()
 
             if trip_spans.empty:
@@ -318,18 +397,28 @@ class SilverTrajectoryProcessor:
                     trip_map[key] = []
                 trip_map[key].append((r.trip_id, r.start_sec, r.end_sec))
 
-            # Match each fix to active trip with a 15-minute buffer
+            # Match each fix to active trip with a 15-minute buffer, selecting the closest window candidate
             matched_trips = []
             for r in df[["route_id", "brigade", "sec_of_day"]].itertuples(index=False):
                 key = (str(r.route_id), str(r.brigade))
                 sec = r.sec_of_day
                 candidate_id = None
                 if key in trip_map:
+                    valid_candidates = []
                     for tid, s_start, s_end in trip_map[key]:
                         # 10m pre-departure to 15m post-arrival tolerance
                         if (s_start - 600) <= sec <= (s_end + 900):
-                            candidate_id = tid
-                            break
+                            if s_start <= sec <= s_end:
+                                dist = 0
+                            elif sec < s_start:
+                                dist = s_start - sec
+                            else:
+                                dist = sec - s_end
+                            valid_candidates.append((dist, tid))
+                    if valid_candidates:
+                        valid_candidates.sort(key=lambda x: x[0])
+                        candidate_id = valid_candidates[0][1]
+
                 matched_trips.append(candidate_id)
 
             df["matched_trip_id"] = matched_trips
@@ -374,3 +463,29 @@ class SilverTrajectoryProcessor:
             f"Silver trajectories complete for {date_str}: {len(matched_df):,} fixes written to {out_file}"
         )
         return out_file
+
+    def rematch_trips_for_date(self, date_str: str) -> Optional[Path]:
+        """
+        Re-matches GTFS trips on existing Silver trajectories using the active calendar
+        and overwrites trajectories.parquet without re-extracting Bronze.
+        """
+        out_partition_dir = self.silver_dir / f"date={date_str}"
+        out_file = out_partition_dir / "trajectories.parquet"
+        if not out_file.exists() or out_file.stat().st_size == 0:
+            logger.warning(f"No existing Silver trajectory file found at {out_file} to re-match.")
+            return None
+
+        logger.info(f"Re-matching GTFS trips for {date_str} on {out_file}...")
+        df = pd.read_parquet(out_file)
+        matched_df = self.match_trips_using_gtfs(df, date_str)
+
+        table = pa.Table.from_pandas(matched_df, schema=SILVER_SCHEMA, preserve_index=False)
+        tmp_file = out_file.with_suffix(".parquet.tmp")
+        pq.write_table(table, tmp_file, compression="zstd")
+        tmp_file.replace(out_file)
+
+        logger.info(
+            f"Silver trajectories re-matched for {date_str}: {len(matched_df):,} fixes written to {out_file}"
+        )
+        return out_file
+

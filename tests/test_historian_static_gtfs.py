@@ -41,6 +41,11 @@ def _create_mock_gtfs_zip() -> bytes:
             "SH1,52.2300,21.0000,0\n"
             "SH1,52.2450,21.0100,1\n",
         )
+        z.writestr(
+            "calendar_dates.txt",
+            "service_id,date,exception_type\n"
+            "SERV1,20261018,1\n",
+        )
     return buffer.getvalue()
 
 
@@ -69,6 +74,7 @@ def test_sync_daily_gtfs_downloads_and_indexes(tmp_path: Path):
     assert "stop_times" in tables
     assert "stops" in tables
     assert "shapes" in tables
+    assert "calendar_dates" in tables
 
     trips_count = con.execute("SELECT count(*) FROM trips").fetchone()[0]
     assert trips_count == 2
