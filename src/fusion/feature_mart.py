@@ -373,10 +373,18 @@ class FeatureMartAssembler:
         exclude_terminals: bool = True,
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
-        datasource: str = "legacy",
+        datasource: str = "historian",
     ) -> str:
-        """Construct the optimized DuckDB SQL query for multi-source spatiotemporal fusion."""
-        if datasource == "historian" or "historian" in raw_pattern or "stop_events" in raw_pattern:
+        if datasource == "legacy":
+            is_historian = False
+        elif raw_pattern and ("historian" in raw_pattern or "stop_events" in raw_pattern):
+            is_historian = True
+        elif raw_pattern and ("raw" in raw_pattern or "delays" in raw_pattern):
+            is_historian = False
+        else:
+            is_historian = (datasource == "historian")
+
+        if is_historian:
             return self.build_historian_fusion_sql(
                 gold_pattern=raw_pattern,
                 weather_parquet_path=weather_parquet_path,
@@ -626,12 +634,18 @@ class FeatureMartAssembler:
         exclude_terminals: bool = True,
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
-        datasource: str = "legacy",
+        datasource: str = "historian",
     ) -> str:
-        """Execute full spatial-temporal join and anomaly filtering in DuckDB."""
-        if datasource == "historian" or (
-            raw_pattern and ("historian" in raw_pattern or "stop_events" in raw_pattern)
-        ):
+        if datasource == "legacy":
+            is_historian = False
+        elif raw_pattern and ("historian" in raw_pattern or "stop_events" in raw_pattern):
+            is_historian = True
+        elif raw_pattern and ("raw" in raw_pattern or "delays" in raw_pattern):
+            is_historian = False
+        else:
+            is_historian = (datasource == "historian")
+
+        if is_historian:
             in_raw = raw_pattern or self.historian_gold_pattern
             out_path = output_parquet or self.historian_output_parquet
             ds = "historian"

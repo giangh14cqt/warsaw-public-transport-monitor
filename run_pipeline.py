@@ -140,9 +140,9 @@ def main():
     parser.add_argument(
         "--datasource",
         type=str,
-        default="legacy",
+        default="historian",
         choices=["legacy", "historian"],
-        help="Telemetry datasource to fuse and model: 'legacy' (30s GTFS-RT) or 'historian' (10s observed ground truth).",
+        help="Telemetry datasource to fuse and model: 'historian' (10s observed ground truth, default) or 'legacy' (30s GTFS-RT reference baseline).",
     )
     parser.add_argument(
         "--dry-run",

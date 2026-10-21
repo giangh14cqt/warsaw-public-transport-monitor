@@ -211,7 +211,13 @@ def run_stage_fusion(args: argparse.Namespace) -> Dict[str, Any]:
     from src.fusion.feature_mart import FeatureMartAssembler
 
     t0 = time.time()
-    datasource = getattr(args, "datasource", "legacy")
+    datasource = getattr(args, "datasource", None)
+    raw_pat_arg = getattr(args, "raw_pattern", None)
+    if datasource is None:
+        if raw_pat_arg and ("data/raw" in raw_pat_arg or "delays_part" in raw_pat_arg):
+            datasource = "legacy"
+        else:
+            datasource = "historian"
     assembler = FeatureMartAssembler(data_dir=str(paths.data_dir))
     mart_path = paths.get_feature_mart_str(datasource)
 
@@ -222,7 +228,7 @@ def run_stage_fusion(args: argparse.Namespace) -> Dict[str, Any]:
 
     force_rebuild = getattr(args, "force_rebuild", False)
     default_pat = paths.historian_gold_pattern if datasource == "historian" else paths.get_raw_pattern()
-    raw_pat = getattr(args, "raw_pattern", None) or default_pat
+    raw_pat = raw_pat_arg or default_pat
     start_date = getattr(args, "start_date", None)
     end_date = getattr(args, "end_date", None)
 
@@ -293,7 +299,7 @@ def run_stage_benchmark(args: argparse.Namespace) -> Dict[str, Any]:
     from src.models.benchmark import run_benchmark, run_stratified_benchmark
 
     t0 = time.time()
-    datasource = getattr(args, "datasource", "legacy")
+    datasource = getattr(args, "datasource", "historian")
     mart_path = paths.get_feature_mart_str(datasource)
     if not os.path.exists(mart_path):
         raise FileNotFoundError(f"Feature mart [{datasource}] not found at {mart_path}. Run --stage fusion --datasource {datasource} first.")
@@ -412,7 +418,7 @@ def run_stage_xai(args: argparse.Namespace) -> Dict[str, Any]:
     os.makedirs(figures_dir, exist_ok=True)
     os.makedirs(tables_dir, exist_ok=True)
 
-    datasource = getattr(args, "datasource", "legacy")
+    datasource = getattr(args, "datasource", "historian")
     mart_path = paths.get_feature_mart_str(datasource)
     start_date = getattr(args, "start_date", None)
     end_date = getattr(args, "end_date", None)

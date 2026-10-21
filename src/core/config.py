@@ -41,10 +41,10 @@ class DataPaths:
     tables_dir: Path = reports_dir / "tables"
     logs_dir: Path = root / "logs"
 
-    def get_feature_mart_str(self, datasource: str = "legacy") -> str:
-        if datasource == "historian":
-            return str(self.feature_mart_observed)
-        return str(self.feature_mart)
+    def get_feature_mart_str(self, datasource: str = "historian") -> str:
+        if datasource == "legacy":
+            return str(self.feature_mart)
+        return str(self.feature_mart_observed)
 
     def get_raw_pattern(self) -> str:
         return self.raw_pattern

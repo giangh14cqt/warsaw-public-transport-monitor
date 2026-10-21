@@ -119,10 +119,12 @@ def inspect_available_ranges(data_dir: Optional[str] = None) -> Dict[str, Any]:
     """
     base_data_dir = data_dir or str(paths.data_dir)
     raw_pattern = os.path.join(base_data_dir, "raw", "**", "*.parquet")
+    historian_pattern = os.path.join(base_data_dir, "historian", "gold", "stop_events", "date=*", "*.parquet")
     weather_path = os.path.join(base_data_dir, "processed", "imgw_weather_hourly.parquet")
     gtfs_dir = os.path.join(base_data_dir, "gtfs")
     osm_path = os.path.join(base_data_dir, "processed", "osm_corridor_segments.parquet")
     mart_path = os.path.join(base_data_dir, "processed", "feature_mart.parquet")
+    mart_observed_path = os.path.join(base_data_dir, "historian", "processed", "feature_mart_observed.parquet")
 
     con = duckdb.connect(":memory:")
 
@@ -182,6 +184,57 @@ def inspect_available_ranges(data_dir: Optional[str] = None) -> Dict[str, Any]:
             "total_files": 0,
             "total_records": 0,
             "guidance": "Run ./pull_from_gdrive.sh to pull daily raw partitions from Google Drive.",
+        }
+
+    # 1b. Historian Observed Ground-Truth Stop Events
+    gold_files = glob.glob(historian_pattern)
+    if gold_files:
+        try:
+            gold_stats = con.execute(f"""
+                SELECT
+                    to_timestamp(MIN(actual_arrival_utc)) AT TIME ZONE '{WARSAW_TZ}' as min_local,
+                    to_timestamp(MAX(actual_arrival_utc)) AT TIME ZONE '{WARSAW_TZ}' as max_local,
+                    COUNT(*) as total_rows,
+                    COUNT(DISTINCT trip_id) as n_trips,
+                    COUNT(DISTINCT route_id) as n_routes
+                FROM read_parquet('{historian_pattern}')
+            """).fetchone()
+
+            part_dates = sorted(list({
+                os.path.basename(os.path.dirname(f)).replace("date=", "")
+                for f in gold_files if "date=" in f
+            }))
+
+            min_g_local = str(gold_stats[0]) if gold_stats and gold_stats[0] else None
+            max_g_local = str(gold_stats[1]) if gold_stats and gold_stats[1] else None
+            g_rows = int(gold_stats[2]) if gold_stats and gold_stats[2] is not None else 0
+
+            report["sources"]["historian_gold"] = {
+                "status": "AVAILABLE",
+                "total_files": len(gold_files),
+                "total_records": g_rows,
+                "start_datetime_local": min_g_local,
+                "end_datetime_local": max_g_local,
+                "start_date": min_g_local[:10] if min_g_local else None,
+                "end_date": max_g_local[:10] if max_g_local else None,
+                "distinct_trips": int(gold_stats[3]) if gold_stats else 0,
+                "distinct_routes": int(gold_stats[4]) if gold_stats else 0,
+                "partition_dates": part_dates,
+                "path_pattern": historian_pattern,
+            }
+        except Exception as e:
+            logger.warning(f"Error querying historian gold parquet: {e}")
+            report["sources"]["historian_gold"] = {
+                "status": "ERROR",
+                "error": str(e),
+                "total_files": len(gold_files),
+            }
+    else:
+        report["sources"]["historian_gold"] = {
+            "status": "MISSING",
+            "total_files": 0,
+            "total_records": 0,
+            "guidance": "Run ./pull_historian_from_gdrive.sh to sync Historian data from Google Drive.",
         }
 
     # 2. Weather Telemetry
@@ -347,7 +400,48 @@ def inspect_available_ranges(data_dir: Optional[str] = None) -> Dict[str, Any]:
         report["sources"]["feature_mart"] = {
             "status": "NOT_BUILT",
             "path": mart_path,
-            "guidance": "Run 'python run_pipeline.py --stage fusion' to assemble unified feature mart.",
+            "guidance": "Run 'python run_pipeline.py --stage fusion --datasource legacy' to assemble legacy feature mart.",
+        }
+
+    # 5b. Feature Mart Observed (Historian Ground Truth)
+    if os.path.exists(mart_observed_path) and os.path.getsize(mart_observed_path) > 0:
+        try:
+            mo_stats = con.execute(f"""
+                SELECT
+                    MIN(arrival_ts) AT TIME ZONE '{WARSAW_TZ}' as min_local,
+                    MAX(arrival_ts) AT TIME ZONE '{WARSAW_TZ}' as max_local,
+                    COUNT(*) as total_rows,
+                    COUNT(DISTINCT trip_id) as n_trips,
+                    COUNT(DISTINCT route_id) as n_routes
+                FROM read_parquet('{mart_observed_path}')
+            """).fetchone()
+
+            min_mo_dt = str(mo_stats[0]) if mo_stats and mo_stats[0] else None
+            max_mo_dt = str(mo_stats[1]) if mo_stats and mo_stats[1] else None
+            mo_rows = int(mo_stats[2]) if mo_stats and mo_stats[2] is not None else 0
+
+            report["sources"]["feature_mart_observed"] = {
+                "status": "AVAILABLE",
+                "path": mart_observed_path,
+                "total_records": mo_rows,
+                "distinct_trips": int(mo_stats[3]) if mo_stats else 0,
+                "distinct_routes": int(mo_stats[4]) if mo_stats else 0,
+                "start_datetime_local": min_mo_dt,
+                "end_datetime_local": max_mo_dt,
+                "start_date": min_mo_dt[:10] if min_mo_dt else None,
+                "end_date": max_mo_dt[:10] if max_mo_dt else None,
+            }
+        except Exception as e:
+            report["sources"]["feature_mart_observed"] = {
+                "status": "ERROR",
+                "error": str(e),
+                "path": mart_observed_path,
+            }
+    else:
+        report["sources"]["feature_mart_observed"] = {
+            "status": "NOT_BUILT",
+            "path": mart_observed_path,
+            "guidance": "Run 'python run_pipeline.py --stage fusion' to assemble observed feature mart.",
         }
 
     con.close()
@@ -443,14 +537,34 @@ def format_range_report(
 
     sources = report.get("sources", {})
 
-    # Raw
+    # Historian Gold (Primary Ground Truth)
+    hg = sources.get("historian_gold", {})
+    hg_status = hg.get("status", "N/A")
+    hg_start = hg.get("start_date", "-") or "-"
+    hg_end = hg.get("end_date", "-") or "-"
+    hg_rec = f"{hg.get('total_records', 0):,} stop events"
+    lines.append(
+        f"{'Historian Ground Truth':<26} | {hg_status:<11} | {hg_start:<20} | {hg_end:<20} | {hg_rec}"
+    )
+
+    # Observed Feature Mart (Primary)
+    mo = sources.get("feature_mart_observed", {})
+    mo_status = mo.get("status", "N/A")
+    mo_start = mo.get("start_date", "-") or "-"
+    mo_end = mo.get("end_date", "-") or "-"
+    mo_rec = f"{mo.get('total_records', 0):,} fused obs"
+    lines.append(
+        f"{'Observed Feature Mart':<26} | {mo_status:<11} | {mo_start:<20} | {mo_end:<20} | {mo_rec}"
+    )
+
+    # Raw (Legacy Reference)
     raw = sources.get("raw_telemetry", {})
     raw_status = raw.get("status", "N/A")
     raw_start = raw.get("start_date", "-") or "-"
     raw_end = raw.get("end_date", "-") or "-"
     raw_rec = f"{raw.get('total_records', 0):,} rec ({raw.get('total_files', 0)} files)"
     lines.append(
-        f"{'Raw Transit Telemetry':<26} | {raw_status:<11} | {raw_start:<20} | {raw_end:<20} | {raw_rec}"
+        f"{'Raw Transit Telemetry (Leg)':<26} | {raw_status:<11} | {raw_start:<20} | {raw_end:<20} | {raw_rec}"
     )
 
     # Weather
@@ -481,14 +595,14 @@ def format_range_report(
         f"{'OSMnx Road Corridors':<26} | {o_status:<11} | {'(Static Network)':<20} | {'(Static Network)':<20} | {o_rec}"
     )
 
-    # Feature Mart
+    # Legacy Feature Mart
     m = sources.get("feature_mart", {})
     m_status = m.get("status", "N/A")
     m_start = m.get("start_date", "-") or "-"
     m_end = m.get("end_date", "-") or "-"
     m_rec = f"{m.get('total_records', 0):,} fused obs"
     lines.append(
-        f"{'Assembled Feature Mart':<26} | {m_status:<11} | {m_start:<20} | {m_end:<20} | {m_rec}"
+        f"{'Legacy Feature Mart':<26} | {m_status:<11} | {m_start:<20} | {m_end:<20} | {m_rec}"
     )
 
     # 2. Detailed Raw Telemetry Partitions
