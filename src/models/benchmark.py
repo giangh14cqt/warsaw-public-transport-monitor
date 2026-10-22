@@ -5,9 +5,10 @@ Executes purged temporal block validation and outputs comparative performance me
 
 import logging
 import os
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import duckdb
+import numpy as np
 import pandas as pd
 
 from src.core.config import features, paths
@@ -25,11 +26,42 @@ def classify_cohort(df: pd.DataFrame) -> pd.Series:
     return classify_cohort_series(df)
 
 
+def compute_regime_metrics(
+    y_true: np.ndarray, y_pred: np.ndarray, val_df: pd.DataFrame
+) -> Dict[str, Optional[float]]:
+    """Evaluates validation MAE across orthogonal regimes: dry vs rain and peak vs offpeak."""
+    res: Dict[str, Optional[float]] = {
+        "val_mae_dry": None,
+        "val_mae_rain": None,
+        "val_mae_peak": None,
+        "val_mae_offpeak": None,
+    }
+    if len(y_true) == 0:
+        return res
+
+    if "precipitation_mm" in val_df.columns:
+        rain_mask = (val_df["precipitation_mm"] > 0).to_numpy()
+        if rain_mask.sum() > 0:
+            res["val_mae_rain"] = round(float(np.mean(np.abs(y_true[rain_mask] - y_pred[rain_mask]))), 2)
+        if (~rain_mask).sum() > 0:
+            res["val_mae_dry"] = round(float(np.mean(np.abs(y_true[~rain_mask] - y_pred[~rain_mask]))), 2)
+
+    if "is_peak_hour" in val_df.columns:
+        peak_mask = (val_df["is_peak_hour"] == 1).to_numpy()
+        if peak_mask.sum() > 0:
+            res["val_mae_peak"] = round(float(np.mean(np.abs(y_true[peak_mask] - y_pred[peak_mask]))), 2)
+        if (~peak_mask).sum() > 0:
+            res["val_mae_offpeak"] = round(float(np.mean(np.abs(y_true[~peak_mask] - y_pred[~peak_mask]))), 2)
+
+    return res
+
+
 def run_benchmark(
     feature_mart_df: pd.DataFrame,
     sample_size: int = 100000,
     cohort: Optional[str] = None,
     exclude_terminals: bool = True,
+    objective: str = "huber",
 ) -> pd.DataFrame:
     """
     Run end-to-end comparative benchmark across:
@@ -47,6 +79,8 @@ def run_benchmark(
         Optional transit cohort to filter on ('urban_tram', 'urban_bus', 'suburban_bus', 'all').
     exclude_terminals : bool
         Whether to filter out terminal turnaround layover stops (default: True).
+    objective : str
+        Loss objective for gradient boosting: 'huber' (default), 'quantile', or 'regression'.
     """
     df = feature_mart_df.copy()
 
@@ -72,7 +106,7 @@ def run_benchmark(
         df = df[df["_cohort"] == cohort].drop(columns=["_cohort"]).copy()
         logger.info(f"Filtered dataset to cohort '{cohort}': {len(df):,} records remaining.")
 
-    if len(df) > sample_size:
+    if len(df) > sample_size and sample_size > 0 and "inverse_sampling_weight" not in df.columns:
         logger.info(f"Subsampling {sample_size} rows from {len(df)} rows for benchmark efficiency.")
         df = df.sample(n=sample_size, random_state=42).copy()
 
@@ -95,20 +129,25 @@ def run_benchmark(
     twfe.fit(train_df, valid_features)
     twfe_preds = twfe.predict(val_df)
     twfe_metrics = compute_regression_metrics(val_df[target_col], twfe_preds, prefix="val_")
+    twfe_regimes = compute_regime_metrics(val_df[target_col].to_numpy(), twfe_preds, val_df)
 
     # 2. LightGBM Non-Linear Regressor
-    logger.info("Training LightGBM regressor...")
-    lgb_gbm = GradientBoostingBenchmark(target_col=target_col, model_type="lightgbm")
+    logger.info(f"Training LightGBM regressor (objective={objective})...")
+    lgb_gbm = GradientBoostingBenchmark(target_col=target_col, model_type="lightgbm", objective=objective)
     lgb_metrics = lgb_gbm.train(
         train_df, val_df, valid_features, n_estimators=200, learning_rate=0.05
     )
+    lgb_preds = lgb_gbm.predict(val_df)
+    lgb_regimes = compute_regime_metrics(val_df[target_col].to_numpy(), lgb_preds, val_df)
 
     # 3. CatBoost Non-Linear Regressor
-    logger.info("Training CatBoost regressor...")
-    cb_gbm = GradientBoostingBenchmark(target_col=target_col, model_type="catboost")
+    logger.info(f"Training CatBoost regressor (objective={objective})...")
+    cb_gbm = GradientBoostingBenchmark(target_col=target_col, model_type="catboost", objective=objective)
     cb_metrics = cb_gbm.train(
         train_df, val_df, valid_features, n_estimators=200, learning_rate=0.05
     )
+    cb_preds = cb_gbm.predict(val_df)
+    cb_regimes = compute_regime_metrics(val_df[target_col].to_numpy(), cb_preds, val_df)
 
     benchmark_summary = pd.DataFrame(
         [
@@ -119,6 +158,10 @@ def run_benchmark(
                 "val_medae": twfe_metrics.get("val_medae"),
                 "val_wape": twfe_metrics.get("val_wape"),
                 "val_r2": twfe_metrics.get("val_r2"),
+                "val_mae_dry": twfe_regimes.get("val_mae_dry"),
+                "val_mae_rain": twfe_regimes.get("val_mae_rain"),
+                "val_mae_peak": twfe_regimes.get("val_mae_peak"),
+                "val_mae_offpeak": twfe_regimes.get("val_mae_offpeak"),
             },
             {
                 "model": "LightGBM Regressor",
@@ -127,6 +170,10 @@ def run_benchmark(
                 "val_medae": lgb_metrics.get("val_medae"),
                 "val_wape": lgb_metrics.get("val_wape"),
                 "val_r2": lgb_metrics.get("val_r2"),
+                "val_mae_dry": lgb_regimes.get("val_mae_dry"),
+                "val_mae_rain": lgb_regimes.get("val_mae_rain"),
+                "val_mae_peak": lgb_regimes.get("val_mae_peak"),
+                "val_mae_offpeak": lgb_regimes.get("val_mae_offpeak"),
             },
             {
                 "model": "CatBoost Regressor",
@@ -135,6 +182,10 @@ def run_benchmark(
                 "val_medae": cb_metrics.get("val_medae"),
                 "val_wape": cb_metrics.get("val_wape"),
                 "val_r2": cb_metrics.get("val_r2"),
+                "val_mae_dry": cb_regimes.get("val_mae_dry"),
+                "val_mae_rain": cb_regimes.get("val_mae_rain"),
+                "val_mae_peak": cb_regimes.get("val_mae_peak"),
+                "val_mae_offpeak": cb_regimes.get("val_mae_offpeak"),
             },
         ]
     )
@@ -146,6 +197,7 @@ def run_stratified_benchmark(
     sample_size: int = 100000,
     cohorts: Optional[List[str]] = None,
     exclude_terminals: bool = True,
+    objective: str = "huber",
 ) -> pd.DataFrame:
     """
     Run comparative benchmarks across pooled data and stratified transit cohorts:
@@ -165,6 +217,7 @@ def run_stratified_benchmark(
                 sample_size=sample_size,
                 cohort=cohort_name,
                 exclude_terminals=exclude_terminals,
+                objective=objective,
             )
             summary.insert(0, "cohort", c)
             all_results.append(summary)

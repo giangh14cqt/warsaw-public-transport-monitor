@@ -150,6 +150,23 @@ class TestModelsTWFE(unittest.TestCase):
         self.assertIn("signalized_intersection_count", summary_text)
         self.assertIn("Overall R²", summary_text)
 
+    def test_twfe_sample_weighting_and_standardized_coefficients(self):
+        """Verify WLS estimation with inverse_sampling_weight and standardized coefficients."""
+        df_weighted = self.df.copy()
+        df_weighted["inverse_sampling_weight"] = np.random.uniform(0.5, 2.0, size=len(df_weighted))
+
+        twfe = TWFEBaselineModel(target_col="delta_t_run")
+        features = ["signalized_intersection_count", "segment_length_meters"]
+        summary = twfe.fit(df_weighted, features)
+
+        self.assertIn("std_coefficients", summary)
+        self.assertIn("signalized_intersection_count", twfe.std_coefficients)
+        self.assertGreater(twfe.std_coefficients["signalized_intersection_count"], 0)
+
+        # Verify elasticity table contains std_coefficient
+        elas_df = twfe.get_elasticity_table()
+        self.assertIn("std_coefficient", elas_df.columns)
+
     def test_production_feature_mart_twfe(self):
         """Test TWFE fitting on sample from real feature_mart.parquet."""
         mart_path = "data/processed/feature_mart.parquet"

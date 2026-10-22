@@ -585,12 +585,14 @@ def run_counterfactual_pipeline(
     feature_mart_path: Optional[str] = None,
     output_dir: Optional[str] = None,
     tables_dir: Optional[str] = None,
+    sample_size: int = 50000,
+    sampling_strategy: str = "stratified",
+    objective: str = "huber",
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Execute end-to-end Counterfactual Diagnostics workflow."""
-    import duckdb
-
+    from src.fusion.sampling import load_feature_mart_sample
     from src.models.gbm import GradientBoostingBenchmark
     from src.models.validation import PurgedTemporalBlockSplitter
     from src.pipeline.ranges import build_date_filter_clause
@@ -601,43 +603,31 @@ def run_counterfactual_pipeline(
     os.makedirs(out_dir_str, exist_ok=True)
     os.makedirs(tbl_dir_str, exist_ok=True)
 
-    con = duckdb.connect()
-    logger.info(f"Loading feature mart from {mart_path_str}...")
-    try:
-        if start_date or end_date:
-            date_where = build_date_filter_clause(
-                "arrival_ts", start_date=start_date, end_date=end_date
-            )
-            sample_query = f"SELECT * FROM '{mart_path_str}' WHERE {date_where} USING SAMPLE 100000 (reservoir, 42)"
-        else:
-            sample_query = f"SELECT * FROM '{mart_path_str}' USING SAMPLE 100000 (reservoir, 42)"
-        sample_df = con.execute(sample_query).df()
-    finally:
-        con.close()
+    date_where = ""
+    if start_date or end_date:
+        date_where = build_date_filter_clause(
+            "arrival_ts", start_date=start_date, end_date=end_date
+        )
+
+    logger.info(
+        f"Loading {sample_size:,} observations ({sampling_strategy}) from {mart_path_str} for counterfactual diagnostics..."
+    )
+    sample_df = load_feature_mart_sample(
+        mart_path=mart_path_str,
+        sample_size=sample_size,
+        strategy=sampling_strategy,
+        date_where_sql=date_where,
+        seed=42,
+    )
 
     target_col = "delta_t_run" if "delta_t_run" in sample_df.columns else "arrival_delay_seconds"
-    feature_cols = [
-        "prev_stop_delay",
-        "signalized_intersection_count",
-        "segment_length_meters",
-        "is_dedicated_right_of_way",
-        "trip_progress",
-        "headway_deviation",
-        "hour_of_day",
-        "day_of_week",
-        "is_peak_hour",
-        "is_tram",
-        "lane_capacity",
-        "precipitation_mm",
-        "temperature_c",
-    ]
-    valid_features = [c for c in feature_cols if c in sample_df.columns]
+    valid_features = [c for c in features.benchmark_features if c in sample_df.columns]
 
     splitter = PurgedTemporalBlockSplitter(embargo_minutes=30.0, purge_trips=True)
     train_df, val_df, test_df = splitter.split(sample_df, train_ratio=0.6, val_ratio=0.2)
 
-    logger.info("Training reference LightGBM regressor for counterfactual diagnostics...")
-    gbm = GradientBoostingBenchmark(target_col=target_col, model_type="lightgbm")
+    logger.info(f"Training reference LightGBM regressor (objective={objective}) for counterfactual diagnostics...")
+    gbm = GradientBoostingBenchmark(target_col=target_col, model_type="lightgbm", objective=objective)
     gbm.train(train_df, val_df, valid_features, n_estimators=150, learning_rate=0.05)
 
     cf_engine = CounterfactualDiagnostics(gbm, valid_features, target_col=target_col)

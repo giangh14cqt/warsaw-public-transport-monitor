@@ -13,7 +13,7 @@ Features:
 """
 
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -63,6 +63,7 @@ class TWFEBaselineModel:
         self.elasticities: Dict[str, float] = {}
         self.conf_int_lower: Dict[str, float] = {}
         self.conf_int_upper: Dict[str, float] = {}
+        self.std_coefficients: Dict[str, float] = {}
 
         self.grand_mean: float = 0.0
         self.entity_effects: Dict[Any, float] = {}
@@ -70,9 +71,15 @@ class TWFEBaselineModel:
         self.fitted_summary: Dict[str, Any] = {}
         self.ols_results = None
 
-    def fit(self, df: pd.DataFrame, feature_cols: List[str]) -> Dict[str, Any]:
+    def fit(
+        self,
+        df: pd.DataFrame,
+        feature_cols: List[str],
+        sample_weight: Optional[Any] = None,
+    ) -> Dict[str, Any]:
         """
         Fit Two-Way Fixed Effects model using within-transformation demeaning.
+        Supports sample weights (WLS) for stratified inverse-probability sampling.
 
         Parameters
         ----------
@@ -215,11 +222,22 @@ class TWFEBaselineModel:
         if self.active_features:
             X_active = X_resid[:, active_indices]
 
-            # Fit OLS via statsmodels
+            # Extract sample weights for WLS if provided or in DataFrame
+            weights = None
+            if sample_weight is not None:
+                weights = np.asarray(sample_weight, dtype=float)
+            elif "inverse_sampling_weight" in data.columns:
+                weights = data["inverse_sampling_weight"].to_numpy(dtype=float)
+
+            # Fit OLS/WLS via statsmodels
             try:
                 import statsmodels.api as sm
 
-                ols_model = sm.OLS(y_resid, X_active)
+                if weights is not None:
+                    ols_model = sm.WLS(y_resid, X_active, weights=weights)
+                else:
+                    ols_model = sm.OLS(y_resid, X_active)
+
                 cov_type = self.cov_type if self.cov_type in ["HC1", "HC3"] else "nonrobust"
                 res = ols_model.fit(cov_type=cov_type)
                 self.ols_results = res
@@ -229,14 +247,19 @@ class TWFEBaselineModel:
                 tvalues = res.tvalues
                 conf_int = res.conf_int()
             except Exception as e:
-                logger.warning(f"Statsmodels OLS error ({e}), using numpy least squares fallback.")
-                beta, _, _, _ = np.linalg.lstsq(X_active, y_resid, rcond=None)
+                logger.warning(f"Statsmodels OLS/WLS error ({e}), using numpy least squares fallback.")
+                if weights is not None:
+                    w_sqrt = np.sqrt(weights)[:, None]
+                    beta, _, _, _ = np.linalg.lstsq(X_active * w_sqrt, y_resid * np.sqrt(weights), rcond=None)
+                else:
+                    beta, _, _, _ = np.linalg.lstsq(X_active, y_resid, rcond=None)
                 bse = np.zeros(len(beta))
                 pvals = np.ones(len(beta))
                 tvalues = np.zeros(len(beta))
                 conf_int = np.column_stack([beta - 1.96 * bse, beta + 1.96 * bse])
 
-            # Store active coefficients and compute elasticities
+            # Store active coefficients and compute elasticities & standardized coefficients
+            std_y = float(np.std(y))
             for local_idx, col in enumerate(self.active_features):
                 b = float(beta[local_idx])
                 se = float(bse[local_idx])
@@ -246,13 +269,16 @@ class TWFEBaselineModel:
                 c_high = float(conf_int[local_idx, 1])
 
                 mean_x = float(data[col].mean())
+                std_x = float(np.std(data[col]))
                 elasticity = float(b * (mean_x / mean_y)) if abs(mean_y) > 1e-6 else 0.0
+                std_coef = float(b * (std_x / std_y)) if std_y > 1e-6 else 0.0
 
                 self.coefficients[col] = round(b, 6)
                 self.standard_errors[col] = round(se, 6)
                 self.p_values[col] = round(pval, 6)
                 self.t_stats[col] = round(tstat, 4)
                 self.elasticities[col] = round(elasticity, 6)
+                self.std_coefficients[col] = round(std_coef, 6)
                 self.conf_int_lower[col] = round(c_low, 6)
                 self.conf_int_upper[col] = round(c_high, 6)
         else:
@@ -309,6 +335,7 @@ class TWFEBaselineModel:
             "standard_errors": self.standard_errors,
             "pvalues": self.p_values,
             "elasticities": self.elasticities,
+            "std_coefficients": self.std_coefficients,
         }
 
         logger.info(
@@ -355,7 +382,7 @@ class TWFEBaselineModel:
     def get_elasticity_table(self) -> pd.DataFrame:
         """
         Generate structured DataFrame summarizing coefficients, standard errors,
-        t-statistics, p-values, 95% confidence intervals, and elasticities.
+        t-statistics, p-values, 95% confidence intervals, elasticities, and standardized coefficients.
         """
         records = []
         for feat in self.active_features:
@@ -364,6 +391,7 @@ class TWFEBaselineModel:
             t = self.t_stats.get(feat, 0.0)
             p = self.p_values.get(feat, 1.0)
             elas = self.elasticities.get(feat, 0.0)
+            std_c = self.std_coefficients.get(feat, 0.0)
             ci_low = self.conf_int_lower.get(feat, b - 1.96 * se)
             ci_high = self.conf_int_upper.get(feat, b + 1.96 * se)
 
@@ -379,6 +407,7 @@ class TWFEBaselineModel:
                     "ci_lower_95": ci_low,
                     "ci_upper_95": ci_high,
                     "elasticity": elas,
+                    "std_coefficient": std_c,
                     "significance": sig,
                 }
             )
@@ -394,6 +423,7 @@ class TWFEBaselineModel:
                     "ci_lower_95": 0.0,
                     "ci_upper_95": 0.0,
                     "elasticity": 0.0,
+                    "std_coefficient": 0.0,
                     "significance": "[absorbed]",
                 }
             )

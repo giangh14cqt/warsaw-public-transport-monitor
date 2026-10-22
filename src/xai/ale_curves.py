@@ -73,7 +73,9 @@ class ALENonLinearDetector:
         if feature_name not in data.columns:
             raise KeyError(f"Feature '{feature_name}' not present in dataframe.")
 
-        vals = data[feature_name].dropna().to_numpy(dtype=float)
+        # Ensure X_base and vals share the exact same row index by dropping NaNs in feature_name together
+        valid_rows = data[feature_name].notna()
+        vals = data.loc[valid_rows, feature_name].to_numpy(dtype=float)
         if len(vals) == 0 or np.var(vals) < 1e-9:
             logger.warning(
                 f"Feature '{feature_name}' has zero or near-zero variance; returning flat ALE."
@@ -103,10 +105,10 @@ class ALENonLinearDetector:
         ale_diffs = []
         bin_counts = []
 
-        # Prepare evaluation copy
+        # Prepare evaluation copy aligned with valid_rows
         eval_cols = self.feature_cols if self.feature_cols else list(data.columns)
         active_cols = [c for c in eval_cols if c in data.columns]
-        X_base = data[active_cols].copy()
+        X_base = data.loc[valid_rows, active_cols].copy()
 
         # Handle booleans and categoricals
         for c in X_base.columns:
@@ -306,13 +308,15 @@ class ALENonLinearDetector:
 def run_ale_pipeline(
     feature_mart_path: Optional[str] = None,
     output_dir: Optional[str] = None,
-    sample_size: int = 30000,
+    sample_size: int = 50000,
+    sampling_strategy: str = "stratified",
+    objective: str = "huber",
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Execute end-to-end ALE non-linear curve diagnostics workflow."""
-    import duckdb
-
+    from src.core.config import features
+    from src.fusion.sampling import load_feature_mart_sample
     from src.models.gbm import GradientBoostingBenchmark
     from src.models.validation import PurgedTemporalBlockSplitter
     from src.pipeline.ranges import build_date_filter_clause
@@ -320,60 +324,56 @@ def run_ale_pipeline(
     mart_path_str = feature_mart_path or paths.get_feature_mart_str()
     out_dir_str = output_dir or str(paths.figures_xai)
     os.makedirs(out_dir_str, exist_ok=True)
-    con = duckdb.connect()
-    logger.info("Loading feature mart sample for ALE curve diagnostics...")
-    try:
-        if start_date or end_date:
-            date_where = build_date_filter_clause(
-                "arrival_ts", start_date=start_date, end_date=end_date
-            )
-            sample_query = f"SELECT * FROM '{mart_path_str}' WHERE {date_where} USING SAMPLE {sample_size} (reservoir, 42)"
-        else:
-            sample_query = (
-                f"SELECT * FROM '{mart_path_str}' USING SAMPLE {sample_size} (reservoir, 42)"
-            )
-        df = con.execute(sample_query).df()
-    finally:
-        con.close()
+
+    date_where = ""
+    if start_date or end_date:
+        date_where = build_date_filter_clause(
+            "arrival_ts", start_date=start_date, end_date=end_date
+        )
+
+    logger.info(
+        f"Loading {sample_size:,} observations ({sampling_strategy}) from {mart_path_str} for ALE curve diagnostics..."
+    )
+    df = load_feature_mart_sample(
+        mart_path=mart_path_str,
+        sample_size=sample_size,
+        strategy=sampling_strategy,
+        date_where_sql=date_where,
+        seed=42,
+    )
+
     if "is_terminal_stop" in df.columns:
         df = df[df["is_terminal_stop"] == False].copy()
     elif "trip_progress" in df.columns:
         df = df[df["trip_progress"] < 0.99].copy()
 
-    feature_cols = [
-        "prev_stop_delay",
-        "signalized_intersection_count",
-        "segment_length_meters",
-        "is_dedicated_right_of_way",
-        "trip_progress",
-        "headway_deviation",
-        "hour_of_day",
-        "day_of_week",
-        "is_peak_hour",
-        "precipitation_mm",
-        "temperature_c",
-    ]
-    valid_features = [c for c in feature_cols if c in df.columns]
+    valid_features = [c for c in features.benchmark_features if c in df.columns]
 
     splitter = PurgedTemporalBlockSplitter(embargo_minutes=30.0, purge_trips=True)
     train_df, val_df, test_df = splitter.split(df, train_ratio=0.6, val_ratio=0.2)
 
-    logger.info("Training gradient boosting model for ALE analysis...")
-    gbm = GradientBoostingBenchmark(target_col="delta_t_run", model_type="lightgbm")
+    logger.info(f"Training gradient boosting model (objective={objective}) for ALE analysis...")
+    gbm = GradientBoostingBenchmark(target_col="delta_t_run", model_type="lightgbm", objective=objective)
     gbm.train(train_df, val_df, valid_features, n_estimators=80)
+
+    ale_target_features = [
+        "prev_stop_delay",
+        "trip_progress",
+        "signalized_intersection_count",
+        "segment_length_meters",
+        "is_dedicated_right_of_way",
+        "temperature_c",
+        "precipitation_mm",
+        "precip_lag_1h",
+        "precip_3h_cumulative",
+        "headway_deviation",
+    ]
+    active_ale_targets = [c for c in ale_target_features if c in test_df.columns]
 
     detector = ALENonLinearDetector(gbm)
     report = detector.run_suite(
         test_df[valid_features],
-        features=[
-            "prev_stop_delay",
-            "trip_progress",
-            "signalized_intersection_count",
-            "segment_length_meters",
-            "is_dedicated_right_of_way",
-            "temperature_c",
-            "precipitation_mm",
-        ],
+        features=active_ale_targets,
         output_dir=out_dir_str,
     )
     return report

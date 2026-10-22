@@ -322,17 +322,28 @@ def run_stage_benchmark(args: argparse.Namespace) -> Dict[str, Any]:
         if date_filter and date_filter != "1=1":
             date_where_sql = f"WHERE {date_filter}"
 
+    sampling_strategy = getattr(args, "sampling_strategy", "stratified")
+    objective = getattr(args, "objective", "huber")
+
     con = duckdb.connect()
     range_lbl = (
         f" ({start_date or 'earliest'} to {end_date or 'latest'})"
         if (start_date or end_date)
         else ""
     )
-    logger.info(f"Loading {sample_size:,} sample rows from {mart_path}{range_lbl}...")
+    logger.info(
+        f"Loading {sample_size:,} sample rows ({sampling_strategy}) from {mart_path}{range_lbl}..."
+    )
+    from src.fusion.sampling import load_feature_mart_sample
+
     try:
-        df_sample = con.execute(
-            f"SELECT * FROM '{mart_path}' {date_where_sql} USING SAMPLE {sample_size} (reservoir, 42)"
-        ).df()
+        df_sample = load_feature_mart_sample(
+            mart_path=mart_path,
+            sample_size=sample_size,
+            strategy=sampling_strategy,
+            date_where_sql=date_where_sql,
+            con=con,
+        )
     finally:
         con.close()
 
@@ -352,10 +363,10 @@ def run_stage_benchmark(args: argparse.Namespace) -> Dict[str, Any]:
 
     if cohort_arg == "stratified":
         logger.info(
-            "Executing stratified benchmark across pooled, urban tram, urban bus, and suburban bus cohorts..."
+            f"Executing stratified benchmark across pooled, urban tram, urban bus, and suburban bus cohorts (objective={objective})..."
         )
         cohort_df = run_stratified_benchmark(
-            df_sample, sample_size=sample_size, exclude_terminals=exclude_terminals
+            df_sample, sample_size=sample_size, exclude_terminals=exclude_terminals, objective=objective
         )
         cohort_csv = os.path.join(tables_dir, "benchmark_by_cohort.csv")
         cohort_df.to_csv(cohort_csv, index=False)
@@ -373,7 +384,7 @@ def run_stage_benchmark(args: argparse.Namespace) -> Dict[str, Any]:
 
         if pooled_df.empty:
             pooled_df = run_benchmark(
-                df_sample, sample_size=sample_size, exclude_terminals=exclude_terminals
+                df_sample, sample_size=sample_size, exclude_terminals=exclude_terminals, objective=objective
             )
         pooled_df.to_csv(summary_csv, index=False)
         logger.info(f"Pooled benchmark comparison table exported to {summary_csv}")
@@ -381,13 +392,14 @@ def run_stage_benchmark(args: argparse.Namespace) -> Dict[str, Any]:
     else:
         target_cohort = None if cohort_arg == "all" else cohort_arg
         logger.info(
-            f"Executing benchmark for cohort '{cohort_arg}' (exclude_terminals={exclude_terminals})..."
+            f"Executing benchmark for cohort '{cohort_arg}' (exclude_terminals={exclude_terminals}, objective={objective})..."
         )
         summary_df = run_benchmark(
             df_sample,
             sample_size=sample_size,
             cohort=target_cohort,
             exclude_terminals=exclude_terminals,
+            objective=objective,
         )
         summary_df.to_csv(summary_csv, index=False)
         logger.info(f"Benchmark comparison table exported to {summary_csv}")
@@ -422,40 +434,55 @@ def run_stage_xai(args: argparse.Namespace) -> Dict[str, Any]:
     mart_path = paths.get_feature_mart_str(datasource)
     start_date = getattr(args, "start_date", None)
     end_date = getattr(args, "end_date", None)
+    sample_size = getattr(args, "sample_size", 50000)
+    sampling_strategy = getattr(args, "sampling_strategy", "stratified")
+    objective = getattr(args, "objective", "huber")
 
     # 1. TreeSHAP Attribution
-    logger.info("1/4: Computing global TreeSHAP beeswarm and local waterfall attributions...")
+    logger.info(f"1/4: Computing global TreeSHAP beeswarm and local waterfall attributions ({sampling_strategy}, N={sample_size:,})...")
     shap_res = run_shap_pipeline(
         feature_mart_path=mart_path,
         output_dir=figures_dir,
+        sample_size=sample_size,
+        sampling_strategy=sampling_strategy,
+        objective=objective,
         start_date=start_date,
         end_date=end_date,
     )
 
     # 2. ALE Non-Linear Thresholds
-    logger.info("2/4: Computing Accumulated Local Effects (ALE) non-linear curves...")
+    logger.info(f"2/4: Computing Accumulated Local Effects (ALE) non-linear curves ({sampling_strategy}, N={sample_size:,})...")
     ale_res = run_ale_pipeline(
         feature_mart_path=mart_path,
         output_dir=figures_dir,
+        sample_size=sample_size,
+        sampling_strategy=sampling_strategy,
+        objective=objective,
         start_date=start_date,
         end_date=end_date,
     )
 
     # 3. Infrastructure Buffering & Interactions
-    logger.info("3/4: Quantifying dedicated right-of-way infrastructure buffering...")
+    logger.info(f"3/4: Quantifying dedicated right-of-way infrastructure buffering ({sampling_strategy}, N={sample_size:,})...")
     inter_res = run_interaction_pipeline(
         feature_mart_path=mart_path,
         output_dir=figures_dir,
+        sample_size=sample_size,
+        sampling_strategy=sampling_strategy,
+        objective=objective,
         start_date=start_date,
         end_date=end_date,
     )
 
     # 4. DiCE Counterfactual Diagnostics
-    logger.info("4/4: Generating actionable counterfactual intervention diagnostics...")
+    logger.info(f"4/4: Generating actionable counterfactual intervention diagnostics ({sampling_strategy}, N={sample_size:,})...")
     cf_res = run_counterfactual_pipeline(
         feature_mart_path=mart_path,
         output_dir=figures_dir,
         tables_dir=tables_dir,
+        sample_size=sample_size,
+        sampling_strategy=sampling_strategy,
+        objective=objective,
         start_date=start_date,
         end_date=end_date,
     )

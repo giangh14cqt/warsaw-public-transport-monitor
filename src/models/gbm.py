@@ -26,6 +26,10 @@ class GradientBoostingBenchmark:
         self,
         target_col: str = "delta_t_run",
         model_type: str = "lightgbm",
+        objective: str = "regression",
+        huber_delta: float = 60.0,
+        quantile_alpha: float = 0.90,
+        winsorize: bool = True,
         params: Optional[Dict[str, Any]] = None,
     ):
         """
@@ -37,11 +41,26 @@ class GradientBoostingBenchmark:
             Target regression column (default 'delta_t_run' or 'arrival_delay_seconds').
         model_type : str
             'lightgbm' or 'catboost'.
+        objective : str
+            Loss objective: 'huber' (robust to extreme delay shocks, default),
+            'quantile' (upper 90th percentile delay buffer), or 'regression' / 'l2'.
+        huber_delta : float
+            Threshold in seconds for Huber transition between L2 and L1 (default: 60.0s).
+        quantile_alpha : float
+            Target quantile when objective='quantile' (default: 0.90).
+        winsorize : bool
+            Whether to apply in-fold winsorization to volatile propagation features
+            (fit strictly on training fold at p01/p99 to prevent leakage).
         params : Dict[str, Any], optional
             Model-specific hyperparameters overriding defaults.
         """
         self.target_col = target_col
         self.model_type = model_type.lower()
+        self.objective = objective.lower()
+        self.huber_delta = float(huber_delta)
+        self.quantile_alpha = float(quantile_alpha)
+        self.winsorize = winsorize
+        self._winsor_bounds: Dict[str, Tuple[float, float]] = {}
         self.params = params or {}
         self.model = None
         self.feature_cols: List[str] = []
@@ -75,6 +94,9 @@ class GradientBoostingBenchmark:
         if is_training:
             self.cat_cols = detected_cat
 
+        # In-fold winsorization on volatile autoregressive propagation features (fit on train fold only)
+        WINSOR_CANDIDATES = ["prev_stop_delay", "prev2_stop_delay", "headway_deviation"]
+
         for col in active_feats:
             if col in self.cat_cols:
                 if self.model_type == "lightgbm":
@@ -89,6 +111,15 @@ class GradientBoostingBenchmark:
                     X[col] = X[col].fillna(0.0)
                 X[col] = X[col].astype(float)
 
+                if self.winsorize and col in WINSOR_CANDIDATES:
+                    if is_training:
+                        lower_b = float(X[col].quantile(0.01))
+                        upper_b = float(X[col].quantile(0.99))
+                        self._winsor_bounds[col] = (lower_b, upper_b)
+                    if col in self._winsor_bounds:
+                        lb, ub = self._winsor_bounds[col]
+                        X[col] = X[col].clip(lb, ub)
+
         return X, y
 
     def train(
@@ -100,6 +131,7 @@ class GradientBoostingBenchmark:
         n_estimators: int = 250,
         learning_rate: float = 0.05,
         early_stopping_rounds: int = 25,
+        sample_weight: Optional[Any] = None,
     ) -> Dict[str, float]:
         """
         Train gradient boosting model with early stopping on validation split.
@@ -120,6 +152,8 @@ class GradientBoostingBenchmark:
             Shrinkage rate (default 0.05).
         early_stopping_rounds : int
             Rounds of early stopping patience (default 25).
+        sample_weight : Optional[Any]
+            Sample weights for training (if None, auto-checks inverse_sampling_weight in train_df).
 
         Returns
         -------
@@ -136,6 +170,13 @@ class GradientBoostingBenchmark:
 
         if y_train is None or y_val is None:
             raise ValueError(f"Target column '{self.target_col}' missing from datasets.")
+
+        # Extract sample weights for training
+        w_train = None
+        if sample_weight is not None:
+            w_train = np.asarray(sample_weight, dtype=float)
+        elif "inverse_sampling_weight" in train_df.columns:
+            w_train = train_df["inverse_sampling_weight"].to_numpy(dtype=float)
 
         if self.model_type == "lightgbm":
             try:
@@ -154,6 +195,16 @@ class GradientBoostingBenchmark:
                     "verbosity": -1,
                     "n_jobs": -1,
                 }
+
+                if self.objective == "huber":
+                    default_params["objective"] = "huber"
+                    default_params["huber_delta"] = self.huber_delta
+                elif self.objective == "quantile":
+                    default_params["objective"] = "quantile"
+                    default_params["alpha"] = self.quantile_alpha
+                elif self.objective in ("regression", "l2", "mse"):
+                    default_params["objective"] = "regression"
+
                 default_params.update(self.params)
 
                 callbacks = []
@@ -164,6 +215,7 @@ class GradientBoostingBenchmark:
                 self.model.fit(
                     X_train,
                     y_train,
+                    sample_weight=w_train,
                     eval_set=[(X_val, y_val)] if len(X_val) > 0 else None,
                     callbacks=callbacks if callbacks else None,
                 )
@@ -196,6 +248,14 @@ class GradientBoostingBenchmark:
                     "early_stopping_rounds": early_stopping_rounds,
                     "verbose": False,
                 }
+
+                if self.objective == "huber":
+                    default_params["loss_function"] = f"Huber:delta={self.huber_delta}"
+                elif self.objective == "quantile":
+                    default_params["loss_function"] = f"Quantile:alpha={self.quantile_alpha}"
+                elif self.objective in ("regression", "l2", "mse"):
+                    default_params["loss_function"] = "RMSE"
+
                 default_params.update(self.params)
 
                 cat_features_idx = [
@@ -205,6 +265,7 @@ class GradientBoostingBenchmark:
                 self.model.fit(
                     X_train,
                     y_train,
+                    sample_weight=w_train,
                     eval_set=(X_val, y_val) if len(X_val) > 0 else None,
                     cat_features=cat_features_idx if cat_features_idx else None,
                 )

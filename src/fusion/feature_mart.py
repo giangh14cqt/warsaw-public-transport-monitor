@@ -72,13 +72,46 @@ class FeatureMartAssembler:
         has_hub = os.path.exists(hub_path)
 
         weather_subquery = (
-            f"SELECT * FROM read_parquet('{weather_parquet_path}')"
+            f"""
+            WITH hourly_agg AS (
+                SELECT
+                    date_trunc('hour', timestamp) AS timestamp,
+                    AVG(temperature_c) AS temperature_c,
+                    MAX(precipitation_mm) AS precipitation_mm,
+                    AVG(wind_speed_ms) AS wind_speed_ms,
+                    AVG(relative_humidity) AS relative_humidity,
+                    BOOL_OR(freezing_rain_flag) AS freezing_rain_flag
+                FROM read_parquet('{weather_parquet_path}')
+                GROUP BY 1
+            )
+            SELECT
+                timestamp,
+                temperature_c,
+                precipitation_mm,
+                CASE WHEN precipitation_mm > 0 THEN 1 ELSE 0 END AS is_raining,
+                CASE
+                    WHEN precipitation_mm = 0 THEN 0
+                    WHEN precipitation_mm <= 0.5 THEN 1
+                    WHEN precipitation_mm <= 1.5 THEN 2
+                    ELSE 3
+                END AS rain_intensity_category,
+                COALESCE(LAG(precipitation_mm, 1) OVER (ORDER BY timestamp), 0.0) AS precip_lag_1h,
+                COALESCE(SUM(precipitation_mm) OVER (ORDER BY timestamp ROWS BETWEEN 2 PRECEDING AND CURRENT ROW), precipitation_mm) AS precip_3h_cumulative,
+                wind_speed_ms,
+                relative_humidity,
+                freezing_rain_flag
+            FROM hourly_agg
+            """
             if has_weather
             else """
                 SELECT
                     NULL::TIMESTAMP AS timestamp,
                     11.3::DOUBLE AS temperature_c,
                     0.0::DOUBLE AS precipitation_mm,
+                    0::BIGINT AS is_raining,
+                    0::BIGINT AS rain_intensity_category,
+                    0.0::DOUBLE AS precip_lag_1h,
+                    0.0::DOUBLE AS precip_3h_cumulative,
                     3.0::DOUBLE AS wind_speed_ms,
                     75.0::DOUBLE AS relative_humidity,
                     false::BOOLEAN AS freezing_rain_flag
@@ -339,6 +372,10 @@ class FeatureMartAssembler:
                 COALESCE(hub.is_metro_proximity, 0) AS is_metro_proximity,
                 COALESCE(w.temperature_c, 11.3) AS temperature_c,
                 COALESCE(w.precipitation_mm, 0.0) AS precipitation_mm,
+                COALESCE(w.is_raining, 0) AS is_raining,
+                COALESCE(w.rain_intensity_category, 0) AS rain_intensity_category,
+                COALESCE(w.precip_lag_1h, 0.0) AS precip_lag_1h,
+                COALESCE(w.precip_3h_cumulative, 0.0) AS precip_3h_cumulative,
                 COALESCE(w.wind_speed_ms, 3.0) AS wind_speed_ms,
                 COALESCE(w.relative_humidity, 75.0) AS relative_humidity,
                 COALESCE(w.freezing_rain_flag, false) AS freezing_rain_flag,
@@ -599,6 +636,10 @@ class FeatureMartAssembler:
                 -- IMGW Weather Exogenous Features
                 COALESCE(w.temperature_c, 11.3) AS temperature_c,
                 COALESCE(w.precipitation_mm, 0.0) AS precipitation_mm,
+                COALESCE(w.is_raining, 0) AS is_raining,
+                COALESCE(w.rain_intensity_category, 0) AS rain_intensity_category,
+                COALESCE(w.precip_lag_1h, 0.0) AS precip_lag_1h,
+                COALESCE(w.precip_3h_cumulative, 0.0) AS precip_3h_cumulative,
                 COALESCE(w.wind_speed_ms, 3.0) AS wind_speed_ms,
                 COALESCE(w.relative_humidity, 75.0) AS relative_humidity,
                 COALESCE(w.freezing_rain_flag, false) AS freezing_rain_flag,

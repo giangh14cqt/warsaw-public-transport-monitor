@@ -145,6 +145,20 @@ def main():
         help="Telemetry datasource to fuse and model: 'historian' (10s observed ground truth, default) or 'legacy' (30s GTFS-RT reference baseline).",
     )
     parser.add_argument(
+        "--sampling-strategy",
+        type=str,
+        default="stratified",
+        choices=["stratified", "uniform", "none"],
+        help="Subsampling method: 'stratified' (multi-dimensional feature quotas + IPS weights, default), 'uniform' (reservoir), or 'none' (full dataset).",
+    )
+    parser.add_argument(
+        "--objective",
+        type=str,
+        default="huber",
+        choices=["huber", "quantile", "regression"],
+        help="Loss objective for gradient boosting: 'huber' (robust to extreme delay shocks, default), 'quantile' (90th percentile buffer), or 'regression' (L2/RMSE).",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Dry run mode for preflight and testing without touching production paths.",

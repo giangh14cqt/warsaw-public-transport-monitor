@@ -121,6 +121,10 @@ class FeatureRegistry:
     meteorological: List[str] = field(
         default_factory=lambda: [
             "precipitation_mm",
+            "is_raining",
+            "rain_intensity_category",
+            "precip_lag_1h",
+            "precip_3h_cumulative",
             "temperature_c",
             "relative_humidity",
             "wind_speed_ms",
@@ -152,6 +156,10 @@ class FeatureRegistry:
             "lane_capacity",
             "is_tram",
             "precipitation_mm",
+            "is_raining",
+            "rain_intensity_category",
+            "precip_lag_1h",
+            "precip_3h_cumulative",
             "temperature_c",
             "relative_humidity",
             "wind_speed_ms",
@@ -179,7 +187,13 @@ class FeatureRegistry:
             "is_tram",
             "lane_capacity",
             "precipitation_mm",
+            "is_raining",
+            "rain_intensity_category",
+            "precip_lag_1h",
+            "precip_3h_cumulative",
             "temperature_c",
+            "relative_humidity",
+            "wind_speed_ms",
         ]
     )
 
@@ -214,6 +228,10 @@ class FeatureRegistry:
             "is_public_holiday": "Temporal Day-to-Day",
             # Meteorological Telemetry
             "precipitation_mm": "Meteorological Conditions",
+            "is_raining": "Meteorological Conditions",
+            "rain_intensity_category": "Meteorological Conditions",
+            "precip_lag_1h": "Meteorological Conditions",
+            "precip_3h_cumulative": "Meteorological Conditions",
             "temperature_c": "Meteorological Conditions",
             "relative_humidity": "Meteorological Conditions",
             "wind_speed_ms": "Meteorological Conditions",

@@ -118,6 +118,46 @@ class TestModelsGBM(unittest.TestCase):
         self.assertIn("val_mae", metrics)
         self.assertGreater(metrics["val_mae"], 0.0)
 
+    def test_huber_and_quantile_objectives(self):
+        """Verify LightGBM and CatBoost train with Huber and Quantile loss objectives."""
+        for obj in ["huber", "quantile"]:
+            lgb = GradientBoostingBenchmark(target_col="delta_t_run", model_type="lightgbm", objective=obj)
+            metrics = lgb.train(self.train_df, self.val_df, self.features, n_estimators=30)
+            self.assertIn("val_mae", metrics)
+
+            cb = GradientBoostingBenchmark(target_col="delta_t_run", model_type="catboost", objective=obj)
+            metrics_cb = cb.train(self.train_df, self.val_df, self.features, n_estimators=30)
+            self.assertIn("val_mae", metrics_cb)
+
+    def test_sample_weight_training(self):
+        """Verify models accept sample_weight without error."""
+        weights = np.random.uniform(0.5, 2.0, len(self.train_df))
+        gbm = GradientBoostingBenchmark(target_col="delta_t_run", model_type="lightgbm")
+        metrics = gbm.train(
+            self.train_df, self.val_df, self.features, n_estimators=30, sample_weight=weights
+        )
+        self.assertIn("val_mae", metrics)
+
+    def test_in_fold_winsorization(self):
+        """Verify in-fold winsorization clips extreme propagation anomalies without leakage."""
+        df_train = self.train_df.copy()
+        df_train["prev_stop_delay"] = np.random.normal(0, 10, len(df_train))
+        # Add a massive anomaly to train
+        df_train.iloc[0, df_train.columns.get_loc("prev_stop_delay")] = 9999.0
+
+        df_val = self.val_df.copy()
+        df_val["prev_stop_delay"] = np.random.normal(0, 10, len(df_val))
+        df_val.iloc[0, df_val.columns.get_loc("prev_stop_delay")] = 8888.0
+
+        gbm = GradientBoostingBenchmark(target_col="delta_t_run", model_type="lightgbm", winsorize=True)
+        feats = self.features + ["prev_stop_delay"]
+        gbm.train(df_train, df_val, feats, n_estimators=20)
+
+        # Check bounds were stored
+        self.assertIn("prev_stop_delay", gbm._winsor_bounds)
+        lower, upper = gbm._winsor_bounds["prev_stop_delay"]
+        self.assertLess(upper, 5000.0)
+
 
 if __name__ == "__main__":
     unittest.main()

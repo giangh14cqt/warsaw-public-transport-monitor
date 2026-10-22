@@ -56,7 +56,11 @@ The goal is to provide clear, actionable recommendations across all project area
 | Phenomenon | Bias Induced | Recommended Strategy | Status |
 | :--- | :--- | :--- | :--- |
 | **Terminal Layover & Turnaround Rest Breaks** | Vehicles parked at terminal loops (*pętle*, e.g., Os. Górczewska, Żerań FSO) keep GPS units on and log idle time that reflects driver rest breaks, not road congestion. | Exclude first and last stops (`stop_sequence == 1` or `max_seq`), or remove records where vehicle speed $= 0$ for $> 5$ minutes at designated turnaround loops. | **Implemented** (Integrated into `src/fusion/feature_mart.py`, `trajectory.py`, and `benchmark.py`; reduces MAE by ~1.2–1.9s) |
-| **Fleet & Route Type Differences** | Suburban routes (L-lines, e.g., L41) and express buses (500-lines) operate on 50–80 km/h regional highways, while city trams (e.g., Tram 17, 33) run on dedicated tracks with signal priority. Combining them in one regression creates unobserved heterogeneity. | **Stratify the dataset into 3 distinct cohorts**: (1) Urban Trams, (2) Core Urban Buses (100–200 & 500 lines), and (3) Suburban Feeders (700 & L-lines). Run separate benchmark models for each. | **Implemented** (Grouped by `transit_cohort` and evaluated via `--cohort stratified` in `run_pipeline.py`; tram MAE reaches 22.98s, WAPE 85.94%) |
+| **Fleet & Route Type Differences** | Suburban routes (L-lines, e.g., L41) and express buses (500-lines) operate on 50–80 km/h regional highways, while city trams (e.g., Tram 17, 33) run on dedicated tracks with signal priority. Combining them in one regression creates unobserved heterogeneity. | **Stratify the dataset into 3 distinct cohorts**: (1) Urban Trams, (2) Core Urban Buses (100–200 & 500 lines), and (3) Suburban Feeders (700 & L-lines). Run separate benchmark models for each. | **Implemented** (Grouped by `transit_cohort` and evaluated via `--cohort stratified` in `run_pipeline.py`; tram MAE reaches 28.19s, $R^2 = 0.7921$) |
+| **Feature Imbalance & Weather Regime Underrepresentation** | Rain episodes represent a small fraction of operating hours; uniform sampling under-represents adverse weather, underestimating delay risks during storm events. | **Multi-Dimensional Stratified Feature Sampling & IPS Weights**: Stratify across 12 orthogonal feature cells ($\text{Weather} \times \text{ROW} \times \text{Peak}$) without stratifying on the target. Compute normalized Inverse Probability of Sampling (IPS) weights ($w_i$) for Weighted Least Squares (WLS) TWFE and weighted tree training. | **Implemented** (`src/fusion/sampling.py`, `src/models/twfe.py`, `src/models/gbm.py`; debiases estimates back to true population proportions) |
+| **Extreme Delay Outliers & Quadratic Penalty Blowup** | Severe delay spikes ($> 10\text{--}30$ min) inflate squared loss ($L_2$), destabilizing tree splits and inflating panel regression coefficients. | **In-Fold Winsorization & Huber Loss**: Fit $[p_{01}, p_{99}]$ winsorization bounds strictly on training folds (`prev_stop_delay`, `headway_deviation`). Optimize **Huber loss** ($\delta=60.0\text{s}$) to apply linear penalties to extreme outliers. | **Implemented** (`src/models/gbm.py`, `src/models/twfe.py`; stabilizes tree optimization) |
+| **Multi-Month Scalability & OOM Risks (~72M Records)** | Window ranking and full 45-column projections across 4+ months of continuous telemetry exhaust memory buffers during fusion. | **Streaming Key Joins & Memory Downcasting**: Project only keys `(trip_id, route_id, stop_sequence, arrival_ts)` during window ranking; downcast floats to `float32`, integers, and categories via `downcast_dataframe`; stream out-of-core batches via `stream_feature_mart_batches`. | **Implemented** (`src/fusion/sampling.py`, `src/historian/gold.py`; reduces join latency from 4.13s to 2.02s on 2.28M rows) |
+| **Decomposed Weather Dynamics** | Single hourly rainfall depth overlooks storm onset, duration, and surface water accumulation. | Add `is_raining` (binary indicator), `rain_intensity_category`, `precip_lag_1h` (1h lag), and `precip_3h_cumulative` (3h moving sum). | **Implemented** (`src/exogenous/imgw.py`, `src/fusion/feature_mart.py`) |
 | **Temporary Service Disruptions & Detours** | Collisions, track blockages, or major construction projects (e.g., *Tramwaj do Wilanowa* on Sobieskiego) cause extreme delay spikes ($> 30$ min) unrelated to routine corridor traffic. | Ingest the GTFS-RT `alerts.pb` feed and exclude stop segments during active construction work or detour alerts. | Planned (Phase A) |
 | **GPS Jitter & Stop Clustering** | Near multi-platform transfer hubs (e.g., *Dworzec Centralny 01* through *30*), vehicles passing within 20 meters of neighboring platforms can trigger false arrival events. | Apply a Kalman filter or check trajectory distances against GTFS `shapes.txt` to reject coordinate anomalies. | Planned (Phase A) |
 
@@ -130,29 +134,34 @@ To make the research findings clear and interactive for defenses and presentatio
 
 ---
 
-## 8. Completed Phase: Top 3 High-Impact Feature Enhancements (October 2026)
+## 8. Completed Phases: Feature & Methodological Enhancements
 
-Based on feasibility and econometric impact, the top 3 candidate features were engineered, validated, and fused into the production feature mart (**8,828,803 records**, expanded from the initial 4.53M dataset):
-
-### 8.1 Implemented Feature Sets
+### 8.1 Phase 1: High-Impact Infrastructure & Topology Features (October 2026)
 1. **Polish School & Public Holiday Calendar** ([`src/core/polish_calendar.py`](src/core/polish_calendar.py)):
-   - `is_school_day`: Exact Mazowieckie voivodeship academic calendar (Winter breaks *ferie zimowe*, summer breaks, Christmas/Easter breaks, Teacher's Day).
+   - `is_school_day`: Exact Mazowieckie voivodeship academic calendar.
    - `is_public_holiday`: Polish statutory holidays computed via the Anonymous Gregorian Easter algorithm.
 2. **Transit Transfer Hub Density & Metro Proximity** ([`src/exogenous/interchange.py`](src/exogenous/interchange.py)):
    - `interchange_line_count`: Total transit routes serving each stop post (7,241 GTFS stops mapped).
-   - `is_metro_proximity`: 300-meter geodesic buffer around all 39 Warsaw Metro (M1 & M2) stations (600 stops flagged).
+   - `is_metro_proximity`: 300-meter geodesic buffer around all 39 Warsaw Metro (M1 & M2) stations.
 3. **GTFS Route Shape Micro-Topology & Tortuosity** ([`src/exogenous/osm.py`](src/exogenous/osm.py)):
    - `actual_path_length_meters`: Cumulative polyline length along GTFS shapes.
-   - `tortuosity_ratio`: Ratio of actual route trajectory length to Euclidean displacement ($\ge 1.0$), capturing chicanes, roundabouts, and sharp curves across 10,081 corridor segments (mean tortuosity = 1.219).
+   - `tortuosity_ratio`: Ratio of actual route trajectory length to Euclidean displacement ($\ge 1.0$), capturing bends and roundabouts across 10,081 corridor segments.
 
-### 8.2 Empirical Uplift Across Cohorts
-
-| Cohort | Best Model | Baseline MAE | New MAE | Baseline RMSE | New RMSE | Baseline $R^2$ | **New $R^2$** | Relative $R^2$ Gain |
-| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Pooled Network** | LightGBM | 29.26s | **29.05s** | 50.72s | **50.17s** | +0.0357 | **+0.0450** | **+26.1%** |
-| **Urban Trams** | LightGBM | 24.03s | **22.98s** | 35.83s | **35.33s** | +0.1390 | **+0.1837** | **+32.2%** |
-| **Urban Buses** | LightGBM | 30.85s | **30.32s** | 55.97s | **52.16s** | +0.0262 | **+0.0342** | **+30.5%** |
-| **Suburban Buses** | CatBoost | 29.15s | **29.24s** | 55.89s | **55.43s** | +0.0169 | **+0.0195** | **+15.4%** |
+### 8.2 Phase 2: Ground-Truth Historian, Stratified Sampling & Scalability Architecture
+1. **Observed Ground-Truth Tier (Track B Historian)**:
+   - Reconstructed **2,639,240 stop events** across **103,450 complete trips** (5 days, Oct 18–22, 2026) from **38,214,890 silver GPS fixes** with sub-10s linear interpolation and 100% active calendar compliance.
+2. **Multi-Dimensional Stratified Feature Sampling with Normalized IPS Weights**:
+   - Stratifies along 12 orthogonal cells ($\text{Weather Regime} \times \text{Infrastructure ROW} \times \text{Congestion Peak}$) without target stratification.
+   - Computes normalized Inverse Probability of Sampling (IPS) weights ($w_i$) ingested by Weighted Least Squares (WLS) TWFE regression and gradient boosting.
+3. **In-Fold Winsorization & Huber Loss Objective**:
+   - Features winsorized at $[p_{01}, p_{99}]$ bounds fit strictly on training partitions.
+   - Huber loss ($\delta=60.0\text{s}$) eliminates quadratic penalty blowup from extreme delay shocks.
+4. **Multi-Month Scalability Architecture (~72M Records for 4+ Months)**:
+   - Streaming key-join projection in DuckDB cutting query latency from 4.13s to 2.02s on 2.28M rows.
+   - Memory downcasting (`downcast_dataframe`) reducing in-memory footprint by 30–50%.
+   - Out-of-core batch streaming (`stream_feature_mart_batches`) and incremental date partition reuse.
+5. **Decomposed Weather Dynamics**:
+   - Added `is_raining`, `rain_intensity_category`, `precip_lag_1h`, and `precip_3h_cumulative`.
 
 ---
 
@@ -160,13 +169,19 @@ Based on feasibility and econometric impact, the top 3 candidate features were e
 
 ```text
 Phase A: Data & Hygiene Refinements
-├── Keep background daemon capturing winter telemetry continuously
+├── Keep background daemon capturing winter telemetry continuously (Track B Historian)
 ├── [x] Exclude terminal turnaround idling records (stop_sequence == 1 or max_seq)
 ├── [x] Stratify evaluation by transit cohort (Trams vs Core Buses vs Suburban)
-└── [x] Top 3 High-Impact Features: Polish Calendar, Metro/Hub Proximity, Shape Tortuosity
+├── [x] Top 3 High-Impact Features: Polish Calendar, Metro/Hub Proximity, Shape Tortuosity
+├── [x] Multi-Dimensional Stratified Feature Sampling & Normalized IPS Weighting
+├── [x] In-Fold Winsorization [p01, p99] and Robust Huber Loss (δ=60s)
+├── [x] Decomposed Weather Dynamics (is_raining, rain category, 1h/3h lags)
+└── [x] Multi-Month Out-of-Core Scalability (DuckDB streaming key joins, downcasting)
 
 Phase B: Advanced Econometric & Spatial Upgrades
 ├── Add Two-Way Clustered Standard Errors (route_id x date) in TWFE
+├── [x] Weighted Least Squares (WLS) with Normalized IPS Weights in TWFE
+├── [x] Standardized Regression Coefficients (β*_k) for Scale-Free Comparability
 ├── [x] Map-match full citywide stop pairs against OSMnx via GTFS shapes.txt (10,081 segments, 4,179 signals)
 ├── [x] Compute shape tortuosity ratio and polyline lengths across all corridor links
 └── Attach Vistula river bridge bottleneck indicator flags
@@ -176,3 +191,4 @@ Phase C: Causal ML & Interactive Interface
 ├── Fit Hazard / Duration models for schedule recovery rates
 └── Deploy Streamlit interactive policy sandbox for route-level simulation
 ```
+

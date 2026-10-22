@@ -153,10 +153,19 @@ class GoldStopEventReconstructor:
 
         return forecasts
 
-    def process_date(self, date_str: str) -> Optional[Path]:
+    def process_date(self, date_str: str, force: bool = False) -> Optional[Path]:
         """
         Reconstructs all stop arrival/departure events and actual delays for a given date.
+        If force=False and gold partition exists, reuses existing file for fast multi-date processing.
         """
+        out_partition_dir = self.gold_dir / "stop_events" / f"date={date_str}"
+        out_file = out_partition_dir / "stop_events.parquet"
+        if not force and out_file.exists() and out_file.stat().st_size > 0:
+            logger.info(
+                f"Reusing existing Gold stop events ({out_file.stat().st_size / (1024 * 1024):.1f} MB) for {date_str} at {out_file} (use force=True to reprocess)."
+            )
+            return out_file
+
         silver_file = self.silver_dir / f"date={date_str}" / "trajectories.parquet"
         if not silver_file.exists():
             logger.warning(f"No Silver trajectory file found at {silver_file}.")

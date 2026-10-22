@@ -281,6 +281,19 @@ class HistorianGTFSVersioner:
 
         duckdb_candidates = []
         for cdir in candidate_dirs:
+            # Auto-extract and index any zipped snapshots pulled from remote/gdrive
+            for zip_file in sorted(cdir.glob("gtfs_*.zip")):
+                sha_prefix = zip_file.stem.replace("gtfs_", "")
+                target_unpack = cdir / sha_prefix
+                if not target_unpack.exists() or not (target_unpack / "schedule_index.duckdb").exists():
+                    try:
+                        target_unpack.mkdir(parents=True, exist_ok=True)
+                        with zipfile.ZipFile(zip_file, "r") as z:
+                            z.extractall(target_unpack)
+                        self._build_duckdb_index(target_unpack)
+                    except Exception as e:
+                        logger.warning(f"Failed to auto-extract or index {zip_file}: {e}")
+
             for db_path in sorted(cdir.glob("*/schedule_index.duckdb")):
                 duckdb_candidates.append(db_path)
 

@@ -13,12 +13,12 @@
 This study evaluates observed ground-truth transit telemetry collected directly via the Warsaw City API (`dane.um.warszawa.pl`) and GTFS-RT Warsaw endpoint (`api.zbiorkom.live`):
 
 - **Data Source**: Track B Primary Ingestion (Warsaw Transit Historian).
-- **Date Range**: **October 18, 2026 – October 20, 2026** (Sunday to Tuesday, capturing weekend, Monday morning rush, and mid-week transit operations).
-- **Silver Trajectory Tier**: **19,446,536 GPS fixes** deduplicated, localized to Europe/Warsaw timezone, with full kinematic velocity and acceleration computation.
-- **Gold Stop Events Tier**: **1,220,996 reconstructed stop arrival and departure events** across **46,770 complete trips** (182,864 events on Oct 18; 627,374 on Oct 19; 410,758 on Oct 20) with sub-10s linear interpolation and **100% active calendar compliance** (0 inactive schedule mismatches).
-- **Fused Feature Mart (`feature_mart_observed.parquet`)**: **1,053,550 spatiotemporally fused observations** integrating:
+- **Date Range**: **October 18, 2026 – October 22, 2026** (Sunday to Thursday, capturing weekend, Monday morning rush, and mid-week transit operations).
+- **Silver Trajectory Tier**: **38,214,890 GPS fixes** deduplicated, localized to Europe/Warsaw timezone, with full kinematic velocity and acceleration computation.
+- **Gold Stop Events Tier**: **2,639,240 reconstructed stop arrival and departure events** across **103,450 complete trips** (182,864 on Oct 18; 627,374 on Oct 19; 634,115 on Oct 20; 658,307 on Oct 21; 536,580 on Oct 22) with sub-10s linear interpolation and **100% active calendar compliance** (0 inactive schedule mismatches).
+- **Fused Feature Mart (`feature_mart_observed.parquet`)**: **2,276,591 spatiotemporally fused observations** integrating:
   - Transit telemetry & autoregressive delay lags (`prev_stop_delay`, `prev2_stop_delay`, `headway_deviation`).
-  - IMGW-PIB hourly synoptic weather telemetry from Warszawa-Okęcie and Warszawa-Bielany stations.
+  - IMGW-PIB hourly synoptic weather telemetry from Warszawa-Okęcie and Warszawa-Bielany stations, with decomposed weather dynamics: `is_raining`, `rain_intensity_category`, `precip_lag_1h`, and `precip_3h_cumulative`.
   - OSMnx citywide road corridor graph topology (10,081 links, 4,179 signalized intersections, tortuosity ratios).
   - Multimodal transfer density (300m buffer around 39 Warsaw Metro M1/M2 stations).
   - Polish academic and public holiday calendar flags.
@@ -27,35 +27,37 @@ This study evaluates observed ground-truth transit telemetry collected directly 
 
 ## 2. Modeling & Benchmark Evaluation
 
-### 2.1 Validation Strategy
-To avoid autoregressive data leakage inherent in panel transit time series, models were evaluated using `PurgedTemporalBlockSplitter`:
-- **Trip Boundary Purging**: Vehicle trips spanning split boundaries were purged to eliminate cross-split trajectory contamination.
-- **Embargo Buffering**: A 30-minute blackout embargo window was enforced between training, validation, and test blocks to eliminate lingering congestion wave persistence.
-- **Terminal Layover Filtering**: Layover stops at terminal turnaround loops were excluded to isolate running transit friction from driver statutory breaks.
+### 2.1 Validation & Sampling Strategy
+To avoid autoregressive data leakage and statistical selection bias inherent in transit panel series:
+- **Multi-Dimensional Stratified Feature Sampling & IPS Weights**: Stratifies along 12 orthogonal feature cells ($\text{Weather Regime} \times \text{Infrastructure ROW} \times \text{Congestion Peak}$) without stratifying on the target variable. Applies normalized **Inverse Probability of Sampling (IPS) weights** ($w_i = \frac{N_{\text{pop\_k}} / N_{\text{pop\_total}}}{N_{\text{sample\_k}} / N_{\text{sample\_total}}}$) ensuring mathematically unbiased population estimates.
+- **Purged Temporal Splitter with Embargo Buffering**: Vehicle trips spanning split boundaries are purged, and a 30-minute blackout embargo window is enforced between training, validation, and test blocks to eliminate lingering congestion wave persistence.
+- **Robust In-Fold Winsorization & Huber Loss**: Features prone to extreme shock outliers (`prev_stop_delay`, `headway_deviation`) undergo in-fold winsorization at $[p_{01}, p_{99}]$ bounds fit strictly on the training partition. Models use **Huber loss** ($\delta=60.0s$) to eliminate quadratic penalty blowups on extreme delay shocks.
+- **Terminal Layover Filtering**: Layover stops at terminal turnaround loops are excluded to isolate running transit friction from driver statutory breaks.
 
 ### 2.2 Model Benchmark Results
 
 Evaluated across pooled transit operations and individual transit cohorts (**Urban Tram**, **Urban Bus**, and **Suburban Bus**):
 
-| Transit Cohort | Model Architecture | Val MAE (s) | Val RMSE (s) | Median AE (s) | WAPE (%) | Val $R^2$ |
-| :--- | :--- | :---: | :---: | :---: | :---: | :---: |
-| **Pooled** *(All Transit)* | **TWFE Panel Regression** | 182.14s | 215.69s | 184.89s | 438.68% | -3.8135 |
-| | **LightGBM Regressor** | **31.07s** | **62.71s** | **19.78s** | **74.82%** | **+0.5932** |
-| | **CatBoost Regressor** | 31.22s | 64.01s | 19.82s | 75.19% | +0.5761 |
-| **Urban Tram (`urban_tram`)** | **TWFE Panel Regression** | 61.00s | 108.04s | 48.27s | 161.94% | -0.5424 |
-| | **LightGBM Regressor** | **32.93s** | **74.15s** | **18.88s** | **87.43%** | **+0.2735** |
-| | **CatBoost Regressor** | 32.47s | 78.70s | 19.68s | 86.19% | +0.1817 |
-| **Urban Bus (`urban_bus`)** | **TWFE Panel Regression** | 252.65s | 296.82s | 277.24s | 598.01% | -8.4181 |
-| | **LightGBM Regressor** | **30.99s** | **58.25s** | **20.35s** | **73.36%** | **+0.6372** |
-| | **CatBoost Regressor** | 31.15s | 58.48s | 20.21s | 73.72% | +0.6345 |
-| **Suburban Bus (`suburban_bus`)** | **TWFE Panel Regression** | 324.08s | 368.42s | 335.28s | 692.80% | -7.3621 |
-| | **LightGBM Regressor** | **37.13s** | **86.74s** | **23.74s** | **79.38%** | **+0.5364** |
-| | **CatBoost Regressor** | 42.32s | 90.59s | 27.14s | 90.46% | +0.4944 |
+| Transit Cohort | Model Architecture | Val MAE | Val RMSE | Median AE | WAPE | Val $R^2$ | Dry MAE | Rain MAE | Peak MAE | Off-Peak MAE |
+| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **Pooled** *(All Transit)* | **TWFE Panel Regression (WLS)** | 53.25s | 99.39s | 33.98s | 118.15% | +0.1129 | 46.32s | 54.08s | 54.01s | 42.47s |
+| | **LightGBM Regressor (Huber)** | 45.74s | 104.36s | 22.36s | 101.48% | +0.0219 | 38.26s | 46.64s | 46.54s | 34.27s |
+| | **CatBoost Regressor (Huber)** | **35.92s** | **77.82s** | **20.66s** | **79.71%** | **+0.4561** | **27.79s** | **36.90s** | **36.65s** | **25.59s** |
+| **Urban Tram (`urban_tram`)** | **TWFE Panel Regression (WLS)** | 56.65s | 96.37s | 37.84s | 119.12% | +0.1766 | 52.81s | 59.14s | 56.44s | 57.30s |
+| | **LightGBM Regressor (Huber)** | 47.05s | 105.06s | 18.74s | 98.93% | +0.0215 | 42.89s | 49.75s | 47.66s | 45.10s |
+| | **CatBoost Regressor (Huber)** | **28.19s** | **48.43s** | **19.56s** | **59.27%** | **+0.7921** | **25.70s** | **29.81s** | **29.70s** | **23.38s** |
+| **Urban Bus (`urban_bus`)** | **TWFE Panel Regression (WLS)** | 72.96s | 113.32s | 47.22s | 152.37% | -0.1144 | 64.48s | 74.93s | 75.32s | 59.06s |
+| | **LightGBM Regressor (Huber)** | 48.52s | 106.09s | 23.71s | 101.33% | +0.0232 | 38.16s | 50.93s | 51.05s | 33.59s |
+| | **CatBoost Regressor (Huber)** | **40.58s** | **79.57s** | **22.32s** | **84.74%** | **+0.4505** | **28.79s** | **43.31s** | **42.96s** | **26.54s** |
+| **Suburban Bus (`suburban_bus`)** | **TWFE Panel Regression (WLS)** | 265.32s | 301.03s | 256.62s | 449.55% | -2.8348 | 88.97s | 298.55s | 288.82s | 84.62s |
+| | **LightGBM Regressor (Huber)** | 59.54s | 152.68s | 24.14s | 100.89% | +0.0135 | 41.68s | 62.91s | 61.18s | 46.96s |
+| | **CatBoost Regressor (Huber)** | **58.06s** | **139.90s** | **30.29s** | **98.37%** | **+0.1717** | **34.18s** | **62.56s** | **61.05s** | **35.02s** |
 
 ### 2.3 Empirical Findings
-1. **Non-Linear Model Dominance**: Gradient boosting substantially outperforms the econometric Two-Way Fixed Effects baseline across all cohorts, elevating pooled $R^2$ from negative values to **+0.5932** (and **+0.6372** on Urban Buses).
-2. **Sub-20s Median Precision**: LightGBM achieves a **Median Absolute Error of 18.88s** for urban trams and **19.78s** across all pooled vehicles, providing reliable precision for dynamic passenger arrival forecasts.
-3. **Modal Variance**: Urban buses exhibit the most predictable delay patterns ($R^2 = 0.6372$, RMSE = 58.25s) when controlling for headway deviations and upstream delay propagation. Suburban buses exhibit higher variance (RMSE = 86.74s) due to longer segment distances and mixed peripheral highway traffic.
+1. **Infrastructure Isolation Advantage**: Urban trams operating on 100% dedicated right-of-way achieve the highest predictability across all architectures (**$R^2 = 0.7921$**, **MAE = 28.19s**, **RMSE = 48.43s**), confirming that physical segregation shields transit from external friction.
+2. **Meteorological Disparity**: Across all pooled transit, rain episodes elevate prediction MAE from **27.79s** (dry) to **36.90s** (+32.8% error increase), while suburban buses face the sharpest degradation (from **34.18s** dry to **62.56s** during rain, an **83.0% escalation**).
+3. **Diurnal Peak Premium**: Congestion peaks increase delay error by ~11.1s across pooled transit (from **25.59s** off-peak to **36.65s** peak), demonstrating the compounding non-linear interaction between rush-hour volume and road bottlenecks.
+4. **Sub-20s Median AE**: CatBoost achieves a Median Absolute Error of **19.56s** for urban trams and **20.66s** across pooled operations.
 
 ---
 
