@@ -47,7 +47,7 @@ class CounterfactualDiagnostics:
         self,
         model_obj: Any,
         feature_cols: Optional[List[str]] = None,
-        target_col: str = "delta_t_run",
+        target_col: str = "arrival_delay_seconds",
     ):
         """
         Initialize CounterfactualDiagnostics.
@@ -59,7 +59,7 @@ class CounterfactualDiagnostics:
         feature_cols : List[str], optional
             Ordered feature columns used during training.
         target_col : str
-            Target prediction column name.
+            Target prediction column name ('arrival_delay_seconds' or 'delta_t_run').
         """
         if hasattr(model_obj, "model") and model_obj.model is not None:
             self.model = model_obj.model
@@ -247,7 +247,8 @@ class CounterfactualDiagnostics:
         current_pred = float(self.predict(base_df)[0])
 
         orig_prev_delay = float(row.get("prev_stop_delay", 0.0))
-        orig_arrival_delay = orig_prev_delay + current_pred
+        is_level = (self.target_col == "arrival_delay_seconds")
+        orig_arrival_delay = current_pred if is_level else (orig_prev_delay + current_pred)
         observed_arrival = float(row.get("arrival_delay_seconds", orig_arrival_delay))
 
         results = {
@@ -264,12 +265,12 @@ class CounterfactualDiagnostics:
         if "is_dedicated_right_of_way" in scen_row.columns:
             scen_row["is_dedicated_right_of_way"] = 1.0
             pred_row = float(self.predict(scen_row)[0])
-            pred_arr_row = orig_prev_delay + pred_row
+            pred_arr_row = pred_row if is_level else (orig_prev_delay + pred_row)
             results["scenarios"]["dedicated_row_upgrade"] = {
                 "name": "Dedicated Transit Right-of-Way",
                 "predicted_delay": pred_row,
                 "predicted_arrival_delay": pred_arr_row,
-                "delay_savings": max(0.0, current_pred - pred_row),
+                "delay_savings": max(0.0, orig_arrival_delay - pred_arr_row),
                 "achieves_on_time": pred_arr_row <= target_on_time_threshold,
                 "mutations": {
                     "is_dedicated_right_of_way": {
@@ -284,12 +285,12 @@ class CounterfactualDiagnostics:
         if "headway_deviation" in scen_hw.columns:
             scen_hw["headway_deviation"] = 0.0
             pred_hw = float(self.predict(scen_hw)[0])
-            pred_arr_hw = orig_prev_delay + pred_hw
+            pred_arr_hw = pred_hw if is_level else (orig_prev_delay + pred_hw)
             results["scenarios"]["headway_regularization"] = {
                 "name": "Dynamic Headway Regularization (No Bunching)",
                 "predicted_delay": pred_hw,
                 "predicted_arrival_delay": pred_arr_hw,
-                "delay_savings": max(0.0, current_pred - pred_hw),
+                "delay_savings": max(0.0, orig_arrival_delay - pred_arr_hw),
                 "achieves_on_time": pred_arr_hw <= target_on_time_threshold,
                 "mutations": {
                     "headway_deviation": {
@@ -299,38 +300,42 @@ class CounterfactualDiagnostics:
                 },
             }
 
-        # 3. Policy: Upstream Delay Absorption (Terminal / Hub Holding)
+        # 3. Policy: Upstream Delay Absorption (Bounded Holding Buffer)
         scen_up = base_df.copy()
         if "prev_stop_delay" in scen_up.columns:
-            scen_up["prev_stop_delay"] = 0.0
+            holding_buffer = 120.0  # Realistic 2-minute turnaround/holding buffer
+            bounded_prev_delay = max(0.0, orig_prev_delay - holding_buffer)
+            scen_up["prev_stop_delay"] = bounded_prev_delay
             pred_up = float(self.predict(scen_up)[0])
-            pred_arr_up = 0.0 + pred_up
+            pred_arr_up = pred_up if is_level else (bounded_prev_delay + pred_up)
             results["scenarios"]["upstream_delay_absorption"] = {
-                "name": "Upstream Schedule Recovery / Hub Holding",
+                "name": "Upstream Schedule Recovery / Bounded Holding",
                 "predicted_delay": pred_up,
                 "predicted_arrival_delay": pred_arr_up,
-                "delay_savings": max(0.0, current_pred - pred_up),
+                "delay_savings": max(0.0, orig_arrival_delay - pred_arr_up),
                 "arrival_delay_savings": max(0.0, orig_arrival_delay - pred_arr_up),
                 "achieves_on_time": pred_arr_up <= target_on_time_threshold,
-                "mutations": {"prev_stop_delay": {"from": orig_prev_delay, "to": 0.0}},
+                "mutations": {"prev_stop_delay": {"from": orig_prev_delay, "to": bounded_prev_delay}},
             }
 
         # 4. Policy: Transit Signal Priority (TSP Green Wave)
         scen_tsp = base_df.copy()
         if "signalized_intersection_count" in scen_tsp.columns:
-            scen_tsp["signalized_intersection_count"] = 0.0
+            orig_sig = float(row.get("signalized_intersection_count", 0.0))
+            tsp_sig = max(0.0, orig_sig - 2.0)  # TSP green wave mitigates up to 2 stop signals
+            scen_tsp["signalized_intersection_count"] = tsp_sig
             pred_tsp = float(self.predict(scen_tsp)[0])
-            pred_arr_tsp = orig_prev_delay + pred_tsp
+            pred_arr_tsp = pred_tsp if is_level else (orig_prev_delay + pred_tsp)
             results["scenarios"]["transit_signal_priority"] = {
-                "name": "Full Transit Signal Priority (TSP)",
+                "name": "Transit Signal Priority (TSP Green Wave)",
                 "predicted_delay": pred_tsp,
                 "predicted_arrival_delay": pred_arr_tsp,
-                "delay_savings": max(0.0, current_pred - pred_tsp),
+                "delay_savings": max(0.0, orig_arrival_delay - pred_arr_tsp),
                 "achieves_on_time": pred_arr_tsp <= target_on_time_threshold,
                 "mutations": {
                     "signalized_intersection_count": {
-                        "from": float(row.get("signalized_intersection_count", 0.0)),
-                        "to": 0.0,
+                        "from": orig_sig,
+                        "to": tsp_sig,
                     }
                 },
             }
@@ -351,22 +356,22 @@ class CounterfactualDiagnostics:
                 "to": 0.0,
             }
         if "prev_stop_delay" in scen_joint.columns:
-            # Hub recovery resets prior accumulated delay to zero
-            joint_mutations["prev_stop_delay"] = {"from": orig_prev_delay, "to": 0.0}
-            scen_joint["prev_stop_delay"] = 0.0
+            bounded_prev_delay = max(0.0, orig_prev_delay - 120.0)
+            scen_joint["prev_stop_delay"] = bounded_prev_delay
+            joint_mutations["prev_stop_delay"] = {"from": orig_prev_delay, "to": bounded_prev_delay}
         if "signalized_intersection_count" in scen_joint.columns:
             orig_sig = float(row.get("signalized_intersection_count", 0.0))
-            new_sig = 0.0
-            scen_joint["signalized_intersection_count"] = new_sig
-            joint_mutations["signalized_intersection_count"] = {"from": orig_sig, "to": new_sig}
+            tsp_sig = max(0.0, orig_sig - 2.0)
+            scen_joint["signalized_intersection_count"] = tsp_sig
+            joint_mutations["signalized_intersection_count"] = {"from": orig_sig, "to": tsp_sig}
 
         pred_joint = float(self.predict(scen_joint)[0])
-        pred_arr_joint = 0.0 + pred_joint
+        pred_arr_joint = pred_joint if is_level else (bounded_prev_delay + pred_joint)
         results["scenarios"]["joint_multimodal_remedy"] = {
             "name": "Joint Multimodal Operational & Infrastructure Remedy",
             "predicted_delay": pred_joint,
             "predicted_arrival_delay": pred_arr_joint,
-            "delay_savings": max(0.0, current_pred - pred_joint),
+            "delay_savings": max(0.0, orig_arrival_delay - pred_arr_joint),
             "achieves_on_time": pred_arr_joint <= target_on_time_threshold,
             "mutations": joint_mutations,
         }
@@ -620,7 +625,7 @@ def run_counterfactual_pipeline(
         seed=42,
     )
 
-    target_col = "delta_t_run" if "delta_t_run" in sample_df.columns else "arrival_delay_seconds"
+    target_col = "arrival_delay_seconds" if "arrival_delay_seconds" in sample_df.columns else "delta_t_run"
     valid_features = [c for c in features.benchmark_features if c in sample_df.columns]
 
     splitter = PurgedTemporalBlockSplitter(embargo_minutes=30.0, purge_trips=True)

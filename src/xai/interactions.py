@@ -333,8 +333,9 @@ def run_interaction_pipeline(
     splitter = PurgedTemporalBlockSplitter(embargo_minutes=30.0, purge_trips=True)
     train_df, val_df, test_df = splitter.split(df, train_ratio=0.6, val_ratio=0.2)
 
-    logger.info(f"Training gradient boosting model (objective={objective}) for interaction analysis...")
-    gbm = GradientBoostingBenchmark(target_col="delta_t_run", model_type="lightgbm", objective=objective)
+    target_col = "arrival_delay_seconds" if "arrival_delay_seconds" in df.columns else "delta_t_run"
+    logger.info(f"Training gradient boosting model (objective={objective}, target={target_col}) for interaction analysis...")
+    gbm = GradientBoostingBenchmark(target_col=target_col, model_type="lightgbm", objective=objective)
     gbm.train(train_df, val_df, valid_features, n_estimators=80)
 
     quantifier = InteractionQuantifier(gbm)
@@ -374,8 +375,9 @@ if __name__ == "__main__":
     ]
     valid_features = [c for c in feature_cols if c in df.columns]
 
-    logger.info("Training gradient boosting model for interaction analysis...")
-    gbm = GradientBoostingBenchmark(target_col="delta_t_run", model_type="lightgbm")
+    target_col = "arrival_delay_seconds" if "arrival_delay_seconds" in df.columns else "delta_t_run"
+    logger.info(f"Training gradient boosting model (target={target_col}) for interaction analysis...")
+    gbm = GradientBoostingBenchmark(target_col=target_col, model_type="lightgbm")
     gbm.train(df.iloc[:20000], df.iloc[20000:], valid_features, n_estimators=80)
 
     quantifier = InteractionQuantifier(gbm)

@@ -29,35 +29,36 @@ This study evaluates observed ground-truth transit telemetry collected directly 
 
 ### 2.1 Validation & Sampling Strategy
 To avoid autoregressive data leakage and statistical selection bias inherent in transit panel series:
-- **Multi-Dimensional Stratified Feature Sampling & IPS Weights**: Stratifies along 12 orthogonal feature cells ($\text{Weather Regime} \times \text{Infrastructure ROW} \times \text{Congestion Peak}$) without stratifying on the target variable. Applies normalized **Inverse Probability of Sampling (IPS) weights** ($w_i = \frac{N_{\text{pop\_k}} / N_{\text{pop\_total}}}{N_{\text{sample\_k}} / N_{\text{sample\_total}}}$) ensuring mathematically unbiased population estimates.
+- **Trajectory-Preserving Stratified Sampling & IPS Weights**: Groups records by complete vehicle trip instances (`_trip_instance`) and stratifies along orthogonal feature cells ($\text{Weather Regime} \times \text{Transit Cohort} \times \text{Congestion Peak}$) while preserving complete multi-stop trajectories. Applies normalized **Inverse Probability of Sampling (IPS) weights** ($w_i = \frac{N_{\text{pop\_k}} / N_{\text{pop\_total}}}{N_{\text{sample\_k}} / N_{\text{sample\_total}}}$) ensuring mathematically unbiased population estimates.
 - **Purged Temporal Splitter with Embargo Buffering**: Vehicle trips spanning split boundaries are purged, and a 30-minute blackout embargo window is enforced between training, validation, and test blocks to eliminate lingering congestion wave persistence.
-- **Robust In-Fold Winsorization & Huber Loss**: Features prone to extreme shock outliers (`prev_stop_delay`, `headway_deviation`) undergo in-fold winsorization at $[p_{01}, p_{99}]$ bounds fit strictly on the training partition. Models use **Huber loss** ($\delta=60.0s$) to eliminate quadratic penalty blowups on extreme delay shocks.
+- **Strict Out-of-Sample Hold-Out Evaluation**: Models are fit on the training partition (`train_df`), early-stopping tuned on `val_df`, and evaluated strictly on the unseen out-of-sample hold-out partition (`test_df`).
+- **Primary Level Target Variable**: Models predict **Total Arrival Delay** (`arrival_delay_seconds`), capturing passenger-facing punctuality and confirming positive delay propagation ($\beta_{\text{prev\_stop}} > 0$).
 - **Terminal Layover Filtering**: Layover stops at terminal turnaround loops are excluded to isolate running transit friction from driver statutory breaks.
 
 ### 2.2 Model Benchmark Results
 
-Evaluated across pooled transit operations and individual transit cohorts (**Urban Tram**, **Urban Bus**, and **Suburban Bus**):
+Evaluated strictly on the unseen **Hold-Out Test Partition** across pooled transit operations and individual transit cohorts (**Urban Tram**, **Urban Bus**, and **Suburban Bus**):
 
-| Transit Cohort | Model Architecture | Val MAE | Val RMSE | Median AE | WAPE | Val $R^2$ | Dry MAE | Rain MAE | Peak MAE | Off-Peak MAE |
-| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Pooled** *(All Transit)* | **TWFE Panel Regression (WLS)** | 53.25s | 99.39s | 33.98s | 118.15% | +0.1129 | 46.32s | 54.08s | 54.01s | 42.47s |
-| | **LightGBM Regressor (Huber)** | 45.74s | 104.36s | 22.36s | 101.48% | +0.0219 | 38.26s | 46.64s | 46.54s | 34.27s |
-| | **CatBoost Regressor (Huber)** | **35.92s** | **77.82s** | **20.66s** | **79.71%** | **+0.4561** | **27.79s** | **36.90s** | **36.65s** | **25.59s** |
-| **Urban Tram (`urban_tram`)** | **TWFE Panel Regression (WLS)** | 56.65s | 96.37s | 37.84s | 119.12% | +0.1766 | 52.81s | 59.14s | 56.44s | 57.30s |
-| | **LightGBM Regressor (Huber)** | 47.05s | 105.06s | 18.74s | 98.93% | +0.0215 | 42.89s | 49.75s | 47.66s | 45.10s |
-| | **CatBoost Regressor (Huber)** | **28.19s** | **48.43s** | **19.56s** | **59.27%** | **+0.7921** | **25.70s** | **29.81s** | **29.70s** | **23.38s** |
-| **Urban Bus (`urban_bus`)** | **TWFE Panel Regression (WLS)** | 72.96s | 113.32s | 47.22s | 152.37% | -0.1144 | 64.48s | 74.93s | 75.32s | 59.06s |
-| | **LightGBM Regressor (Huber)** | 48.52s | 106.09s | 23.71s | 101.33% | +0.0232 | 38.16s | 50.93s | 51.05s | 33.59s |
-| | **CatBoost Regressor (Huber)** | **40.58s** | **79.57s** | **22.32s** | **84.74%** | **+0.4505** | **28.79s** | **43.31s** | **42.96s** | **26.54s** |
-| **Suburban Bus (`suburban_bus`)** | **TWFE Panel Regression (WLS)** | 265.32s | 301.03s | 256.62s | 449.55% | -2.8348 | 88.97s | 298.55s | 288.82s | 84.62s |
-| | **LightGBM Regressor (Huber)** | 59.54s | 152.68s | 24.14s | 100.89% | +0.0135 | 41.68s | 62.91s | 61.18s | 46.96s |
-| | **CatBoost Regressor (Huber)** | **58.06s** | **139.90s** | **30.29s** | **98.37%** | **+0.1717** | **34.18s** | **62.56s** | **61.05s** | **35.02s** |
+| Transit Cohort | Model Architecture | Test MAE | Test RMSE | Median AE | WAPE | Test $R^2$ | Dry MAE | Peak MAE | Off-Peak MAE |
+| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **Pooled** *(All Transit)* | **TWFE Panel Regression (WLS)** | 75.32s | 107.54s | 63.75s | 62.13% | +0.5724 | 75.32s | 75.70s | 75.06s |
+| | **LightGBM Regressor (L2)** | 34.31s | 69.04s | 21.90s | 28.31% | +0.8237 | 34.31s | 39.14s | 31.06s |
+| | **CatBoost Regressor (L2)** | **32.38s** | **67.01s** | **19.98s** | **26.71%** | **+0.8340** | **32.38s** | **36.94s** | **29.30s** |
+| **Urban Tram (`urban_tram`)** | **TWFE Panel Regression (WLS)** | 80.97s | 99.00s | 75.99s | 101.39% | -0.0031 | 80.97s | 77.72s | 83.40s |
+| | **LightGBM Regressor (L2)** | 25.05s | 36.16s | 18.34s | 31.36% | +0.8662 | 25.05s | 23.93s | 25.88s |
+| | **CatBoost Regressor (L2)** | **24.16s** | **35.41s** | **17.52s** | **30.25%** | **+0.8717** | **24.16s** | **24.27s** | **24.07s** |
+| **Urban Bus (`urban_bus`)** | **TWFE Panel Regression (WLS)** | 65.28s | 107.49s | 44.89s | 43.65% | +0.6962 | 65.28s | 74.92s | 59.18s |
+| | **LightGBM Regressor (L2)** | 38.17s | 84.11s | 21.62s | 25.52% | +0.8140 | 38.17s | 48.07s | 31.89s |
+| | **CatBoost Regressor (L2)** | **37.64s** | **80.97s** | **21.50s** | **25.17%** | **+0.8276** | **37.64s** | **47.78s** | **31.22s** |
+| **Suburban Bus (`suburban_bus`)** | **TWFE Panel Regression (WLS)** | 113.83s | 147.09s | 92.82s | 80.43% | +0.2344 | 113.83s | 109.50s | 117.05s |
+| | **LightGBM Regressor (L2)** | 44.93s | 90.39s | 28.22s | 31.74% | +0.7109 | 44.93s | 43.69s | 45.84s |
+| | **CatBoost Regressor (L2)** | **42.11s** | **85.01s** | **25.20s** | **29.75%** | **+0.7443** | **42.11s** | **43.13s** | **41.34s** |
 
 ### 2.3 Empirical Findings
-1. **Infrastructure Isolation Advantage**: Urban trams operating on 100% dedicated right-of-way achieve the highest predictability across all architectures (**$R^2 = 0.7921$**, **MAE = 28.19s**, **RMSE = 48.43s**), confirming that physical segregation shields transit from external friction.
-2. **Meteorological Disparity**: Across all pooled transit, rain episodes elevate prediction MAE from **27.79s** (dry) to **36.90s** (+32.8% error increase), while suburban buses face the sharpest degradation (from **34.18s** dry to **62.56s** during rain, an **83.0% escalation**).
-3. **Diurnal Peak Premium**: Congestion peaks increase delay error by ~11.1s across pooled transit (from **25.59s** off-peak to **36.65s** peak), demonstrating the compounding non-linear interaction between rush-hour volume and road bottlenecks.
-4. **Sub-20s Median AE**: CatBoost achieves a Median Absolute Error of **19.56s** for urban trams and **20.66s** across pooled operations.
+1. **Infrastructure Isolation Advantage**: Urban trams operating on dedicated right-of-way achieve the highest predictability across all architectures (**CatBoost $R^2 = 0.8717$**, **MAE = 24.16s**, **RMSE = 35.41s**), confirming that physical segregation shields transit from external friction.
+2. **Gradient Boosting Parity**: With genuine CatBoost integrated and LightGBM calibrated, both models achieve strong predictive accuracy ($R^2 \approx 0.82\text{--}0.87$), with CatBoost showing a consistent edge across all cohorts (reducing pooled MAE by 1.93s to **32.38s**).
+3. **Diurnal Peak Premium**: Congestion peaks increase delay error by ~7.6s across pooled transit (from **29.30s** off-peak to **36.94s** peak in CatBoost), demonstrating non-linear queueing interactions at rush hour.
+4. **Sub-20s Median AE**: Both gradient boosting models achieve a Median Absolute Error under **20s** (**17.52s** for trams, **19.98s** pooled), accurately capturing typical operational deviations.
 
 ---
 
@@ -108,6 +109,6 @@ Diverse Counterfactual Explanations (DiCE) evaluated actionable interventions ac
 ![Counterfactual Policy Impact](figures/xai/counterfactual_policy_impact.png)
 ![Counterfactual Case Study](figures/xai/counterfactual_case_study.png)
 
-- **Headway Regularization**: Pacing vehicle departures saves an average of **+45.24 seconds** of delay escalation per incident on bunched corridors.
-- **Dedicated Right-of-Way Upgrades**: Converting mixed-traffic links to dedicated bus lanes mitigates an average of **+5.16 seconds** of running delay per stop.
-- **Schedule Recovery Holding**: For severely backlogged vehicles ($\Delta t > 300\text{s}$), physical lane improvements prevent further deterioration, while upstream schedule recovery holding and dispatch resets achieve a **100% on-time recovery rate** ($\Delta t \le 120\text{s}$).
+- **Bounded Schedule Recovery Holding**: Applying realistic turnaround buffers ($\Delta t_{\text{buffer}} \le 120\text{s}$) absorbs an average of **+49.06 seconds** of downstream arrival delay escalation across severe incidents.
+- **Headway Regularization**: Pacing vehicle departures to eliminate bunching mitigates an average of **+10.04 seconds** of delay surge.
+- **Joint Multimodal Operational & Infrastructure Remedy**: Packaging bounded holding, headway regularization, signal priority, and dedicated lanes achieves an average delay reduction of **+58.52 seconds** per severe delay incident without relying on artificial resets.

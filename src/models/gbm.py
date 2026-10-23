@@ -24,7 +24,7 @@ class GradientBoostingBenchmark:
 
     def __init__(
         self,
-        target_col: str = "delta_t_run",
+        target_col: str = "arrival_delay_seconds",
         model_type: str = "lightgbm",
         objective: str = "regression",
         huber_delta: float = 60.0,
@@ -38,16 +38,16 @@ class GradientBoostingBenchmark:
         Parameters
         ----------
         target_col : str
-            Target regression column (default 'delta_t_run' or 'arrival_delay_seconds').
+            Target regression column (default 'arrival_delay_seconds' or 'delta_t_run').
         model_type : str
             'lightgbm' or 'catboost'.
         objective : str
-            Loss objective: 'huber' (robust to extreme delay shocks, default),
-            'quantile' (upper 90th percentile delay buffer), or 'regression' / 'l2'.
+            Loss objective: 'regression' / 'l2' (default), 'huber' (robust to extreme delay shocks),
+            or 'quantile' (upper 90th percentile delay buffer).
         huber_delta : float
             Threshold in seconds for Huber transition between L2 and L1 (default: 60.0s).
         quantile_alpha : float
-            Target quantile when objective='quantile' (default: 0.90).
+            Target quantile when objective='quantile' or 'huber' (default: 0.90).
         winsorize : bool
             Whether to apply in-fold winsorization to volatile propagation features
             (fit strictly on training fold at p01/p99 to prevent leakage).
@@ -198,7 +198,8 @@ class GradientBoostingBenchmark:
 
                 if self.objective == "huber":
                     default_params["objective"] = "huber"
-                    default_params["huber_delta"] = self.huber_delta
+                    default_params["alpha"] = self.quantile_alpha
+                    default_params["reg_lambda"] = 0.0  # Prevent Hessian vanishing when hi=0
                 elif self.objective == "quantile":
                     default_params["objective"] = "quantile"
                     default_params["alpha"] = self.quantile_alpha

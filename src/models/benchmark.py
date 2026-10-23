@@ -111,7 +111,7 @@ def run_benchmark(
         df = df.sample(n=sample_size, random_state=42).copy()
 
     # Determine primary target variable
-    target_col = "delta_t_run" if "delta_t_run" in df.columns else "arrival_delay_seconds"
+    target_col = "arrival_delay_seconds" if "arrival_delay_seconds" in df.columns else "delta_t_run"
 
     splitter = PurgedTemporalBlockSplitter(embargo_minutes=30.0, purge_trips=True)
     train_df, val_df, test_df = splitter.split(df, train_ratio=0.6, val_ratio=0.2)
@@ -123,13 +123,17 @@ def run_benchmark(
 
     valid_features = [c for c in features.benchmark_features if c in train_df.columns]
 
+    # Primary hold-out evaluation partition (unseen test partition)
+    eval_df = test_df if (test_df is not None and len(test_df) > 0) else val_df
+    logger.info(f"Evaluating benchmark models on hold-out partition ({len(eval_df):,} records, target={target_col})...")
+
     # 1. TWFE Panel Regression Baseline
     logger.info("Training TWFE baseline model...")
     twfe = TWFEBaselineModel(target_col=target_col, entity_col="route_id", time_col="hour_of_day")
     twfe.fit(train_df, valid_features)
-    twfe_preds = twfe.predict(val_df)
-    twfe_metrics = compute_regression_metrics(val_df[target_col], twfe_preds, prefix="val_")
-    twfe_regimes = compute_regime_metrics(val_df[target_col].to_numpy(), twfe_preds, val_df)
+    twfe_preds = twfe.predict(eval_df)
+    twfe_metrics = compute_regression_metrics(eval_df[target_col], twfe_preds, prefix="val_")
+    twfe_regimes = compute_regime_metrics(eval_df[target_col].to_numpy(), twfe_preds, eval_df)
 
     # 2. LightGBM Non-Linear Regressor
     logger.info(f"Training LightGBM regressor (objective={objective})...")
@@ -137,8 +141,9 @@ def run_benchmark(
     lgb_metrics = lgb_gbm.train(
         train_df, val_df, valid_features, n_estimators=200, learning_rate=0.05
     )
-    lgb_preds = lgb_gbm.predict(val_df)
-    lgb_regimes = compute_regime_metrics(val_df[target_col].to_numpy(), lgb_preds, val_df)
+    lgb_preds = lgb_gbm.predict(eval_df)
+    lgb_test_metrics = compute_regression_metrics(eval_df[target_col], lgb_preds, prefix="val_")
+    lgb_regimes = compute_regime_metrics(eval_df[target_col].to_numpy(), lgb_preds, eval_df)
 
     # 3. CatBoost Non-Linear Regressor
     logger.info(f"Training CatBoost regressor (objective={objective})...")
@@ -146,8 +151,9 @@ def run_benchmark(
     cb_metrics = cb_gbm.train(
         train_df, val_df, valid_features, n_estimators=200, learning_rate=0.05
     )
-    cb_preds = cb_gbm.predict(val_df)
-    cb_regimes = compute_regime_metrics(val_df[target_col].to_numpy(), cb_preds, val_df)
+    cb_preds = cb_gbm.predict(eval_df)
+    cb_test_metrics = compute_regression_metrics(eval_df[target_col], cb_preds, prefix="val_")
+    cb_regimes = compute_regime_metrics(eval_df[target_col].to_numpy(), cb_preds, eval_df)
 
     benchmark_summary = pd.DataFrame(
         [
@@ -165,11 +171,11 @@ def run_benchmark(
             },
             {
                 "model": "LightGBM Regressor",
-                "val_mae": lgb_metrics.get("val_mae"),
-                "val_rmse": lgb_metrics.get("val_rmse"),
-                "val_medae": lgb_metrics.get("val_medae"),
-                "val_wape": lgb_metrics.get("val_wape"),
-                "val_r2": lgb_metrics.get("val_r2"),
+                "val_mae": lgb_test_metrics.get("val_mae"),
+                "val_rmse": lgb_test_metrics.get("val_rmse"),
+                "val_medae": lgb_test_metrics.get("val_medae"),
+                "val_wape": lgb_test_metrics.get("val_wape"),
+                "val_r2": lgb_test_metrics.get("val_r2"),
                 "val_mae_dry": lgb_regimes.get("val_mae_dry"),
                 "val_mae_rain": lgb_regimes.get("val_mae_rain"),
                 "val_mae_peak": lgb_regimes.get("val_mae_peak"),
@@ -177,11 +183,11 @@ def run_benchmark(
             },
             {
                 "model": "CatBoost Regressor",
-                "val_mae": cb_metrics.get("val_mae"),
-                "val_rmse": cb_metrics.get("val_rmse"),
-                "val_medae": cb_metrics.get("val_medae"),
-                "val_wape": cb_metrics.get("val_wape"),
-                "val_r2": cb_metrics.get("val_r2"),
+                "val_mae": cb_test_metrics.get("val_mae"),
+                "val_rmse": cb_test_metrics.get("val_rmse"),
+                "val_medae": cb_test_metrics.get("val_medae"),
+                "val_wape": cb_test_metrics.get("val_wape"),
+                "val_r2": cb_test_metrics.get("val_r2"),
                 "val_mae_dry": cb_regimes.get("val_mae_dry"),
                 "val_mae_rain": cb_regimes.get("val_mae_rain"),
                 "val_mae_peak": cb_regimes.get("val_mae_peak"),

@@ -58,83 +58,75 @@ def build_stratified_sampling_sql(
     if strata_quota and strata_quota > 0:
         quota = strata_quota
     else:
-        # 12 orthogonal strata (3 weather x 2 infra x 2 time)
-        quota = max(1, int((sample_size + 11) // 12))
+        # Average Warsaw trip contains ~25 stops
+        avg_stops_per_trip = 25
+        target_trips = max(1, sample_size // avg_stops_per_trip)
+        quota = max(1, int((target_trips + 11) // 12))
 
     return f"""
-        WITH base_data AS (
+        WITH trip_metrics AS (
             SELECT 
-                trip_id,
-                route_id,
-                stop_sequence,
-                arrival_ts,
-                -- 1. Meteorological Regime (Dry vs Light Rain vs Moderate/Heavy Rain)
+                trip_id || '_' || CAST(arrival_ts AS DATE)::VARCHAR AS _trip_instance,
+                -- 1. Meteorological Regime (Max severity across trip duration)
                 CASE 
-                    WHEN precipitation_mm > 1.0 THEN 'mod_heavy_rain'
-                    WHEN precipitation_mm > 0.0 THEN 'light_rain'
+                    WHEN MAX(precipitation_mm) > 1.0 THEN 'mod_heavy_rain'
+                    WHEN MAX(precipitation_mm) > 0.0 THEN 'light_rain'
                     ELSE 'dry'
                 END AS _regime_weather,
 
                 -- 2. Infrastructure Right-of-Way Regime
                 CASE 
-                    WHEN transit_cohort = 'urban_tram' OR is_tram = 1 THEN 'tram_row'
-                    WHEN is_dedicated_right_of_way THEN 'bus_dedicated_row'
+                    WHEN MAX(CASE WHEN transit_cohort = 'urban_tram' OR is_tram = 1 THEN 1 ELSE 0 END) = 1 THEN 'tram_row'
+                    WHEN MAX(CASE WHEN is_dedicated_right_of_way THEN 1 ELSE 0 END) = 1 THEN 'bus_dedicated_row'
                     ELSE 'bus_mixed_traffic'
                 END AS _regime_infra,
 
                 -- 3. Temporal Congestion Peak Regime
                 CASE 
-                    WHEN is_peak_hour = 1 THEN 'peak'
+                    WHEN MAX(is_peak_hour) = 1 THEN 'peak'
                     ELSE 'offpeak'
-                END AS _regime_time
+                END AS _regime_time,
+                COUNT(*) AS _n_stops_in_trip
             FROM '{mart_path}'
             {where_filter}
+            GROUP BY 1
         ),
-        strata_metrics AS (
+        strata_trip_ranks AS (
             SELECT 
-                trip_id,
-                route_id,
-                stop_sequence,
-                arrival_ts,
+                _trip_instance,
                 _regime_weather,
                 _regime_infra,
                 _regime_time,
-                COUNT(*) OVER (PARTITION BY _regime_weather, _regime_infra, _regime_time) AS _n_stratum_pop,
-                COUNT(*) OVER () AS _n_total_pop,
+                COUNT(*) OVER (PARTITION BY _regime_weather, _regime_infra, _regime_time) AS _n_stratum_trips_pop,
+                COUNT(*) OVER () AS _n_total_trips_pop,
                 ROW_NUMBER() OVER (
                     PARTITION BY _regime_weather, _regime_infra, _regime_time
-                    ORDER BY hash(trip_id || '_' || stop_sequence || '_{seed}')
+                    ORDER BY hash(_trip_instance || '_{seed}')
                 ) AS _rank_in_stratum
-            FROM base_data
+            FROM trip_metrics
         ),
-        sampled_strata AS (
+        sampled_trips AS (
             SELECT 
-                trip_id,
-                route_id,
-                stop_sequence,
-                arrival_ts,
-                _n_stratum_pop,
-                _n_total_pop,
-                COUNT(*) OVER (PARTITION BY _regime_weather, _regime_infra, _regime_time) AS _n_stratum_sample,
-                COUNT(*) OVER () AS _n_total_sample
-            FROM strata_metrics
+                _trip_instance,
+                _n_stratum_trips_pop,
+                _n_total_trips_pop,
+                COUNT(*) OVER (PARTITION BY _regime_weather, _regime_infra, _regime_time) AS _n_stratum_trips_sample,
+                COUNT(*) OVER () AS _n_total_trips_sample
+            FROM strata_trip_ranks
             WHERE _rank_in_stratum <= {quota}
         )
         SELECT 
             b.*,
             -- Inverse Sampling Weight: (Pop_k / Total_Pop) / (Sample_k / Total_Sample)
-            -- Guarantees mathematically unbiased expectations under stratified oversampling
+            -- Guarantees mathematically unbiased expectations under stratified trip oversampling
             ROUND(
-                (CAST(s._n_stratum_pop AS DOUBLE) / s._n_total_pop) / 
-                NULLIF(CAST(s._n_stratum_sample AS DOUBLE) / s._n_total_sample, 0.0),
+                (CAST(s._n_stratum_trips_pop AS DOUBLE) / s._n_total_trips_pop) / 
+                NULLIF(CAST(s._n_stratum_trips_sample AS DOUBLE) / s._n_total_trips_sample, 0.0),
                 6
             ) AS inverse_sampling_weight
-        FROM sampled_strata s
+        FROM sampled_trips s
         JOIN '{mart_path}' b
-          ON s.trip_id = b.trip_id
-         AND s.route_id = b.route_id
-         AND s.stop_sequence = b.stop_sequence
-         AND s.arrival_ts = b.arrival_ts
+          ON s._trip_instance = (b.trip_id || '_' || CAST(b.arrival_ts AS DATE)::VARCHAR)
         ORDER BY b.arrival_ts
     """
 

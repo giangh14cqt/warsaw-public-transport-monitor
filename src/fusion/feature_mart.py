@@ -171,11 +171,12 @@ class FeatureMartAssembler:
         )
 
         interchange_subquery = (
-            f"SELECT stop_id, interchange_line_count, is_metro_proximity FROM read_parquet('{hub_path}')"
+            f"SELECT stop_id, COALESCE(zbk_slug, stop_id) AS zbk_slug, interchange_line_count, is_metro_proximity FROM read_parquet('{hub_path}')"
             if has_hub
             else """
                 SELECT
                     ''::VARCHAR AS stop_id,
+                    ''::VARCHAR AS zbk_slug,
                     1::BIGINT AS interchange_line_count,
                     0::BIGINT AS is_metro_proximity
                 WHERE 1=0
@@ -283,6 +284,8 @@ class FeatureMartAssembler:
                     confidence,
                     prev_stop_delay,
                     prev2_stop_delay,
+                    prev_actual_dep,
+                    prev_sched_dep,
                     actual_arrival_utc AS rt_arrival_time,
                     actual_departure_utc AS rt_departure_time,
                     to_timestamp(actual_arrival_utc) AS arrival_ts,
@@ -318,9 +321,10 @@ class FeatureMartAssembler:
             with_headway AS (
                 SELECT
                     *,
-                    (rt_arrival_time - LAG(rt_arrival_time) OVER (
-                        PARTITION BY route_id, stop_id
-                        ORDER BY rt_arrival_time
+                    -- Causal upstream departure headway (time gap behind preceding vehicle leaving stop s-1)
+                    (prev_actual_dep - LAG(prev_actual_dep) OVER (
+                        PARTITION BY route_id, prev_stop_id
+                        ORDER BY prev_actual_dep
                     )) AS headway_actual_s
                 FROM trajectories
             ),
@@ -365,7 +369,7 @@ class FeatureMartAssembler:
                 t.headway_actual_s,
                 CASE
                     WHEN t.headway_actual_s >= 10 AND t.headway_actual_s <= 7200
-                    THEN t.headway_actual_s - MEDIAN(t.headway_actual_s) OVER (PARTITION BY t.route_id, t.stop_id)
+                    THEN t.headway_actual_s - MEDIAN(t.headway_actual_s) OVER (PARTITION BY t.route_id, t.prev_stop_id)
                     ELSE NULL
                 END AS headway_deviation,
                 COALESCE(hub.interchange_line_count, 1) AS interchange_line_count,
@@ -389,9 +393,15 @@ class FeatureMartAssembler:
                 CASE WHEN osm.corridor_name IS NOT NULL THEN 1 ELSE 0 END AS is_study_corridor
             FROM with_headway t
             LEFT JOIN v_weather w ON t.timestamp_bucket = w.timestamp::TIMESTAMP
-            LEFT JOIN v_osm osm ON (t.prev_stop_id = osm.stop_id_prev AND t.stop_id = osm.stop_id_curr)
+            LEFT JOIN v_osm osm ON (
+                (t.prev_stop_id = osm.slug_prev AND t.stop_id = osm.slug_curr)
+                OR (t.prev_stop_id = osm.stop_id_prev AND t.stop_id = osm.stop_id_curr)
+            )
             LEFT JOIN v_calendar cal ON CAST(t.arrival_ts AS DATE)::VARCHAR = cal.calendar_date
-            LEFT JOIN v_interchange hub ON t.stop_id = hub.stop_id
+            LEFT JOIN v_interchange hub ON (
+                t.stop_id = hub.zbk_slug
+                OR t.stop_id = hub.stop_id
+            )
             WHERE t.prev_stop_id IS NOT NULL
               {terminal_filter_clause}
               AND ABS(t.delta_t_run) <= 1800
@@ -547,6 +557,7 @@ class FeatureMartAssembler:
                     departure_delay_seconds,
                     prev_stop_delay,
                     prev2_stop_delay,
+                    prev_rt_departure,
                     rt_arrival_time,
                     rt_departure_time,
                     to_timestamp(rt_arrival_time) AS arrival_ts,
@@ -585,9 +596,10 @@ class FeatureMartAssembler:
             with_headway AS (
                 SELECT
                     *,
-                    (rt_arrival_time - LAG(rt_arrival_time) OVER (
-                        PARTITION BY route_id, stop_id
-                        ORDER BY rt_arrival_time
+                    -- Causal upstream departure headway (time gap behind preceding vehicle leaving stop s-1)
+                    (prev_rt_departure - LAG(prev_rt_departure) OVER (
+                        PARTITION BY route_id, prev_stop_id
+                        ORDER BY prev_rt_departure
                     )) AS headway_actual_s
                 FROM trajectories
             ),
@@ -654,9 +666,15 @@ class FeatureMartAssembler:
                 CASE WHEN osm.corridor_name IS NOT NULL THEN 1 ELSE 0 END AS is_study_corridor
             FROM with_headway t
             LEFT JOIN v_weather w ON t.timestamp_bucket = w.timestamp::TIMESTAMP
-            LEFT JOIN v_osm osm ON (t.prev_stop_id = osm.stop_id_prev AND t.stop_id = osm.stop_id_curr)
+            LEFT JOIN v_osm osm ON (
+                (t.prev_stop_id = osm.slug_prev AND t.stop_id = osm.slug_curr)
+                OR (t.prev_stop_id = osm.stop_id_prev AND t.stop_id = osm.stop_id_curr)
+            )
             LEFT JOIN v_calendar cal ON CAST(t.arrival_ts AS DATE)::VARCHAR = cal.calendar_date
-            LEFT JOIN v_interchange hub ON t.stop_id = hub.stop_id
+            LEFT JOIN v_interchange hub ON (
+                t.stop_id = hub.zbk_slug
+                OR t.stop_id = hub.stop_id
+            )
             WHERE t.prev_stop_id IS NOT NULL  -- Retain stop-to-stop running segments
               {terminal_filter_clause}
               AND ABS(t.delta_t_run) <= 1800   -- Filter extreme segment anomalies (>30 min)

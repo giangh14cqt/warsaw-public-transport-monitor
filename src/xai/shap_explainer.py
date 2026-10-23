@@ -217,12 +217,12 @@ class TreeSHAPExplainer:
         self,
         df: pd.DataFrame,
         threshold_seconds: float = 600.0,
-        target_col: str = "delta_t_run",
+        target_col: str = "arrival_delay_seconds",
     ) -> pd.DataFrame:
         """
         Find extreme delay occurrences (Delta t > threshold_seconds).
         """
-        t_col = target_col if target_col in df.columns else "arrival_delay_seconds"
+        t_col = target_col if target_col in df.columns else "delta_t_run"
         extreme_df = (
             df[df[t_col] >= threshold_seconds].sort_values(by=t_col, ascending=False).copy()
         )
@@ -331,8 +331,9 @@ def run_shap_pipeline(
     splitter = PurgedTemporalBlockSplitter(embargo_minutes=30.0, purge_trips=True)
     train_df, val_df, test_df = splitter.split(df, train_ratio=0.6, val_ratio=0.2)
 
-    logger.info(f"Training LightGBM model (objective={objective}) for SHAP attribution...")
-    gbm = GradientBoostingBenchmark(target_col="delta_t_run", model_type="lightgbm", objective=objective)
+    target_col = "arrival_delay_seconds" if "arrival_delay_seconds" in df.columns else "delta_t_run"
+    logger.info(f"Training LightGBM model (objective={objective}, target={target_col}) for SHAP attribution...")
+    gbm = GradientBoostingBenchmark(target_col=target_col, model_type="lightgbm", objective=objective)
     gbm.train(train_df, val_df, valid_features, n_estimators=100)
 
     logger.info("Computing TreeSHAP values...")
@@ -389,8 +390,9 @@ if __name__ == "__main__":
     splitter = PurgedTemporalBlockSplitter(embargo_minutes=30.0)
     train_df, val_df, test_df = splitter.split(df, train_ratio=0.6, val_ratio=0.2)
 
-    logger.info("Training LightGBM model for SHAP attribution...")
-    gbm = GradientBoostingBenchmark(target_col="delta_t_run", model_type="lightgbm")
+    target_col = "arrival_delay_seconds" if "arrival_delay_seconds" in df.columns else "delta_t_run"
+    logger.info(f"Training LightGBM model (target={target_col}) for SHAP attribution...")
+    gbm = GradientBoostingBenchmark(target_col=target_col, model_type="lightgbm")
     gbm.train(train_df, val_df, valid_features, n_estimators=100)
 
     logger.info("Computing TreeSHAP values...")
