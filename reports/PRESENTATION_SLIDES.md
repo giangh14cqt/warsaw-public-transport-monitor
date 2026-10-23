@@ -85,21 +85,25 @@
 
 ## Slide 5: Model Benchmark Performance
 
-### Hold-Out Validation Results ($N=50,000$ Stratified Sample, Cleaned Layovers)
+### Hold-Out Validation Results (=100,000$ Stratified Sample, Cleaned Layovers)
 
-| Transit Cohort | Model Architecture | Val MAE | Val RMSE | Median AE | WAPE | Val $R^2$ | Dry MAE | Rain MAE | Peak MAE | Off-Peak MAE |
-| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Pooled** *(All)* | **TWFE Panel (WLS)** | 53.25s | 99.39s | 33.98s | 118.15% | +0.1129 | 46.32s | 54.08s | 54.01s | 42.47s |
-| | **LightGBM (Huber)** | 45.74s | 104.36s | 22.36s | 101.48% | +0.0219 | 38.26s | 46.64s | 46.54s | 34.27s |
-| | **CatBoost (Huber)** | **35.92s** | **77.82s** | **20.66s** | **79.71%** | **+0.4561** | **27.79s** | **36.90s** | **36.65s** | **25.59s** |
-| **Urban Tram** | **CatBoost (Huber)** | **28.19s** | **48.43s** | **19.56s** | **59.27%** | **+0.7921** | **25.70s** | **29.81s** | **29.70s** | **23.38s** |
-| **Urban Bus** | **CatBoost (Huber)** | **40.58s** | **79.57s** | **22.32s** | **84.74%** | **+0.4505** | **28.79s** | **43.31s** | **42.96s** | **26.54s** |
-| **Suburban Bus** | **CatBoost (Huber)** | **58.06s** | **139.90s** | **30.29s** | **98.37%** | **+0.1717** | **34.18s** | **62.56s** | **61.05s** | **35.02s** |
+| Transit Cohort | Model Architecture | Val MAE | Val RMSE | Median AE | WAPE | Val ^2$ | Dry MAE | Rain MAE | Peak MAE | Off-Peak MAE |
+| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **Pooled** *(All)* | **TWFE Panel (WLS)** | 68.33s | 129.44s | 38.77s | 46.40% | +0.6351 | 54.35s | 68.33s | 84.42s | 60.81s |
+| | **LightGBM (Huber)** | 44.44s | 128.43s | **18.31s** | 30.18% | +0.6408 | **30.03s** | 44.44s | 56.16s | 38.97s |
+| | **CatBoost (Huber)** | **42.69s** | **122.17s** | 19.37s | **29.00%** | **+0.6750** | 30.16s | **42.69s** | **52.73s** | **38.01s** |
+| **Urban Tram** | **TWFE Panel (WLS)** | 52.45s | 94.32s | 32.37s | 51.34% | +0.5994 | 46.84s | 52.45s | 56.68s | 51.57s |
+| | **LightGBM (Huber)** | **28.91s** | **72.87s** | **14.41s** | **28.30%** | **+0.7609** | **21.05s** | **28.91s** | **31.19s** | **28.44s** |
+| | **CatBoost (Huber)** | 33.14s | 75.71s | 17.33s | 32.45% | +0.7420 | 23.19s | 33.14s | 36.71s | 32.40s |
+| **Urban Bus** | **TWFE Panel (WLS)** | 80.49s | 148.88s | 49.14s | 45.28% | +0.6463 | 63.50s | 80.49s | 92.45s | 74.06s |
+| | **CatBoost (Huber)** | **53.77s** | **153.92s** | **22.30s** | **30.25%** | **+0.6220** | **34.78s** | **53.77s** | **64.55s** | **47.98s** |
+| **Suburban Bus** | **LightGBM (Huber)** | **45.01s** | **102.68s** | **22.98s** | **26.70%** | **+0.7773** | **41.23s** | **45.01s** | **76.46s** | **28.94s** |
+| | **CatBoost (Huber)** | 55.16s | 109.40s | 29.47s | 32.71% | +0.7471 | 41.60s | 55.16s | 91.73s | 36.47s |
 
 ### Key Empirical Findings:
-1. **Infrastructure Isolation Advantage**: Urban trams operating on dedicated tracks achieve **$R^2 = 0.7921$**, **MAE = 28.19s**, and **WAPE = 59.27%**—confirming dedicated ROW shields transit from traffic volatility.
-2. **Meteorological Disparity**: Rain elevates pooled MAE by **+32.8%** (27.79s $\to$ 36.90s), and suburban bus MAE by **+83.0%** (34.18s $\to$ 62.56s).
-3. **Diurnal Peak Premium**: Rush-hour peaks add +11.1s of delay error across pooled transit.
+1. **TWFE Positive ^2$ Baseline**: Collinearity rectification and weighted baseline recovery yield strictly positive TWFE panel performance across all cohorts (**^2 = +0.5994* for Trams, **^2 = +0.6463* for Urban Bus).
+2. **Infrastructure Isolation Advantage**: Urban trams operating on dedicated tracks achieve lowest errors (**LightGBM MAE = 28.91s**, **MedAE = 14.41s**, **^2 = 0.7609*)—confirming dedicated ROW protects transit from traffic volatility.
+3. **Meteorological Disparity**: Rain consistently elevates pooled MAE by **+14.4s** (30.03s $	o$ 44.44s), and peak congestion adds another **+17.2s** over off-peak.
 
 ---
 

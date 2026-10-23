@@ -11,32 +11,34 @@ from src.fusion.sampling import build_stratified_sampling_sql, load_feature_mart
 
 @pytest.fixture
 def dummy_mart_parquet(tmp_path):
-    """Creates a temporary feature mart with known imbalanced strata."""
+    """Creates a temporary feature mart with known imbalanced strata and multi-stop trips."""
     records = []
-    # 900 dry, 80 light rain, 20 heavy rain
-    for i in range(1000):
-        if i < 900:
+    # 50 trips with 20 stops each (1000 records total):
+    # 45 dry trips (900 records), 4 light rain (80 records), 1 heavy rain (20 records)
+    for trip_idx in range(50):
+        if trip_idx < 45:
             p = 0.0
-        elif i < 980:
+        elif trip_idx < 49:
             p = 0.5
         else:
             p = 2.0
 
-        records.append(
-            {
-                "trip_id": f"trip_{i}",
-                "stop_sequence": i % 10,
-                "route_id": "100" if i % 2 == 0 else "1",
-                "transit_cohort": "urban_bus" if i % 2 == 0 else "urban_tram",
-                "is_tram": 0 if i % 2 == 0 else 1,
-                "is_dedicated_right_of_way": False if i % 2 == 0 else True,
-                "is_peak_hour": 1 if i % 3 == 0 else 0,
-                "arrival_ts": f"2026-10-20 0{i % 8 + 1}:00:00",
-                "arrival_delay_seconds": float(i % 120),
-                "delta_t_run": float(i % 60),
-                "precipitation_mm": p,
-            }
-        )
+        for seq in range(20):
+            records.append(
+                {
+                    "trip_id": f"trip_{trip_idx}",
+                    "stop_sequence": seq + 1,
+                    "route_id": "100" if trip_idx % 2 == 0 else "1",
+                    "transit_cohort": "urban_bus" if trip_idx % 2 == 0 else "urban_tram",
+                    "is_tram": 0 if trip_idx % 2 == 0 else 1,
+                    "is_dedicated_right_of_way": False if trip_idx % 2 == 0 else True,
+                    "is_peak_hour": 1 if trip_idx % 3 == 0 else 0,
+                    "arrival_ts": f"2026-10-20 0{(trip_idx % 8) + 1}:00:00",
+                    "arrival_delay_seconds": float((seq * 5) % 120),
+                    "delta_t_run": float((seq * 2) % 60),
+                    "precipitation_mm": p,
+                }
+            )
     df = pd.DataFrame(records)
     out_file = tmp_path / "test_mart.parquet"
     df.to_parquet(out_file)
@@ -45,7 +47,7 @@ def dummy_mart_parquet(tmp_path):
 
 def test_build_stratified_sampling_sql_structure(dummy_mart_parquet):
     sql = build_stratified_sampling_sql(dummy_mart_parquet, sample_size=200)
-    assert "WITH base_data AS" in sql
+    assert "WITH trip_metrics AS" in sql
     assert "inverse_sampling_weight" in sql
     assert "mod_heavy_rain" in sql
 

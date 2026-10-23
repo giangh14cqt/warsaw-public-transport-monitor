@@ -128,11 +128,11 @@ class TransitInterchangeExtractor:
                 query = f"""
                     WITH trip_routes AS (
                         SELECT CAST(trip_id AS VARCHAR) AS trip_id, CAST(route_id AS VARCHAR) AS route_id
-                        FROM read_csv_auto('{trips_file}')
+                        FROM read_csv_auto('{trips_file}', all_varchar=true)
                     ),
                     stop_routes AS (
-                        SELECT CAST(st.stop_id AS VARCHAR) AS stop_id, tr.route_id
-                        FROM read_csv_auto('{stop_times_file}') st
+                        SELECT CAST(st.stop_id AS VARCHAR) AS stop_id, CAST(tr.route_id AS VARCHAR) AS route_id
+                        FROM read_csv_auto('{stop_times_file}', all_varchar=true) st
                         JOIN trip_routes tr ON CAST(st.trip_id AS VARCHAR) = tr.trip_id
                         GROUP BY st.stop_id, tr.route_id
                     ),
@@ -147,7 +147,7 @@ class TransitInterchangeExtractor:
                         CAST(s.stop_lat AS DOUBLE) AS stop_lat,
                         CAST(s.stop_lon AS DOUBLE) AS stop_lon,
                         COALESCE(rc.interchange_line_count, 1) AS interchange_line_count
-                    FROM read_csv_auto('{stops_file}') s
+                    FROM read_csv_auto('{stops_file}', all_varchar=true) s
                     LEFT JOIN route_counts rc ON CAST(s.stop_id AS VARCHAR) = rc.stop_id
                 """
             else:
@@ -158,7 +158,7 @@ class TransitInterchangeExtractor:
                         CAST(stop_lat AS DOUBLE) AS stop_lat,
                         CAST(stop_lon AS DOUBLE) AS stop_lon,
                         1 AS interchange_line_count
-                    FROM read_csv_auto('{stops_file}')
+                    FROM read_csv_auto('{stops_file}', all_varchar=true) s
                 """
 
             df = con.execute(query).df()

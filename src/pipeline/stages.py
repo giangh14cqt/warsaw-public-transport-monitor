@@ -324,6 +324,7 @@ def run_stage_benchmark(args: argparse.Namespace) -> Dict[str, Any]:
 
     sampling_strategy = getattr(args, "sampling_strategy", "stratified")
     objective = getattr(args, "objective", "huber")
+    target_var = getattr(args, "target", None)
 
     con = duckdb.connect()
     range_lbl = (
@@ -363,10 +364,14 @@ def run_stage_benchmark(args: argparse.Namespace) -> Dict[str, Any]:
 
     if cohort_arg == "stratified":
         logger.info(
-            f"Executing stratified benchmark across pooled, urban tram, urban bus, and suburban bus cohorts (objective={objective})..."
+            f"Executing stratified benchmark across pooled, urban tram, urban bus, and suburban bus cohorts (objective={objective}, target={target_var or 'arrival_delay_seconds'})..."
         )
         cohort_df = run_stratified_benchmark(
-            df_sample, sample_size=sample_size, exclude_terminals=exclude_terminals, objective=objective
+            df_sample,
+            sample_size=sample_size,
+            exclude_terminals=exclude_terminals,
+            objective=objective,
+            target=target_var,
         )
         cohort_csv = os.path.join(tables_dir, "benchmark_by_cohort.csv")
         cohort_df.to_csv(cohort_csv, index=False)
@@ -384,7 +389,11 @@ def run_stage_benchmark(args: argparse.Namespace) -> Dict[str, Any]:
 
         if pooled_df.empty:
             pooled_df = run_benchmark(
-                df_sample, sample_size=sample_size, exclude_terminals=exclude_terminals, objective=objective
+                df_sample,
+                sample_size=sample_size,
+                exclude_terminals=exclude_terminals,
+                objective=objective,
+                target=target_var,
             )
         pooled_df.to_csv(summary_csv, index=False)
         logger.info(f"Pooled benchmark comparison table exported to {summary_csv}")
@@ -392,7 +401,7 @@ def run_stage_benchmark(args: argparse.Namespace) -> Dict[str, Any]:
     else:
         target_cohort = None if cohort_arg == "all" else cohort_arg
         logger.info(
-            f"Executing benchmark for cohort '{cohort_arg}' (exclude_terminals={exclude_terminals}, objective={objective})..."
+            f"Executing benchmark for cohort '{cohort_arg}' (exclude_terminals={exclude_terminals}, objective={objective}, target={target_var or 'arrival_delay_seconds'})..."
         )
         summary_df = run_benchmark(
             df_sample,
@@ -400,6 +409,7 @@ def run_stage_benchmark(args: argparse.Namespace) -> Dict[str, Any]:
             cohort=target_cohort,
             exclude_terminals=exclude_terminals,
             objective=objective,
+            target=target_var,
         )
         summary_df.to_csv(summary_csv, index=False)
         logger.info(f"Benchmark comparison table exported to {summary_csv}")

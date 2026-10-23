@@ -159,6 +159,13 @@ def main():
         help="Loss objective for gradient boosting: 'huber' (robust to extreme delay shocks, default), 'quantile' (90th percentile buffer), or 'regression' (L2/RMSE).",
     )
     parser.add_argument(
+        "--target",
+        type=str,
+        default="arrival_delay_seconds",
+        choices=["arrival_delay_seconds", "delta_t_run"],
+        help="Primary target variable: 'arrival_delay_seconds' (total passenger delay, default) or 'delta_t_run' (incremental running delay shock).",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Dry run mode for preflight and testing without touching production paths.",

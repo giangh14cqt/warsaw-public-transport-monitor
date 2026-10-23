@@ -397,7 +397,8 @@ class SilverTrajectoryProcessor:
                     trip_map[key] = []
                 trip_map[key].append((r.trip_id, r.start_sec, r.end_sec))
 
-            # Match each fix to active trip with a 15-minute buffer, selecting the closest window candidate
+            # Match each fix to active trip with a 45-minute buffer (preventing severe delay censoring),
+            # supporting GTFS 24:00+ midnight schedule conventions.
             matched_trips = []
             for r in df[["route_id", "brigade", "sec_of_day"]].itertuples(index=False):
                 key = (str(r.route_id), str(r.brigade))
@@ -405,16 +406,19 @@ class SilverTrajectoryProcessor:
                 candidate_id = None
                 if key in trip_map:
                     valid_candidates = []
+                    # Evaluate both standard sec and next-day midnight continuation (sec + 86400) for late-night trips
+                    candidate_secs = [sec, sec + 86400] if sec < 18000 else [sec]
                     for tid, s_start, s_end in trip_map[key]:
-                        # 10m pre-departure to 15m post-arrival tolerance
-                        if (s_start - 600) <= sec <= (s_end + 900):
-                            if s_start <= sec <= s_end:
-                                dist = 0
-                            elif sec < s_start:
-                                dist = s_start - sec
-                            else:
-                                dist = sec - s_end
-                            valid_candidates.append((dist, tid))
+                        for eff_sec in candidate_secs:
+                            # 15m pre-departure to 45m post-arrival tolerance
+                            if (s_start - 900) <= eff_sec <= (s_end + 2700):
+                                if s_start <= eff_sec <= s_end:
+                                    dist = 0
+                                elif eff_sec < s_start:
+                                    dist = s_start - eff_sec
+                                else:
+                                    dist = eff_sec - s_end
+                                valid_candidates.append((dist, tid))
                     if valid_candidates:
                         valid_candidates.sort(key=lambda x: x[0])
                         candidate_id = valid_candidates[0][1]

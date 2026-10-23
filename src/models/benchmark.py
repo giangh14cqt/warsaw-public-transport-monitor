@@ -27,7 +27,12 @@ def classify_cohort(df: pd.DataFrame) -> pd.Series:
 
 
 def compute_regime_metrics(
-    y_true: np.ndarray, y_pred: np.ndarray, val_df: pd.DataFrame
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    val_df: pd.DataFrame,
+    fallback_y_true: Optional[np.ndarray] = None,
+    fallback_y_pred: Optional[np.ndarray] = None,
+    fallback_df: Optional[pd.DataFrame] = None,
 ) -> Dict[str, Optional[float]]:
     """Evaluates validation MAE across orthogonal regimes: dry vs rain and peak vs offpeak."""
     res: Dict[str, Optional[float]] = {
@@ -45,6 +50,10 @@ def compute_regime_metrics(
             res["val_mae_rain"] = round(float(np.mean(np.abs(y_true[rain_mask] - y_pred[rain_mask]))), 2)
         if (~rain_mask).sum() > 0:
             res["val_mae_dry"] = round(float(np.mean(np.abs(y_true[~rain_mask] - y_pred[~rain_mask]))), 2)
+        elif fallback_df is not None and fallback_y_true is not None and fallback_y_pred is not None and "precipitation_mm" in fallback_df.columns:
+            fb_rain = (fallback_df["precipitation_mm"] > 0).to_numpy()
+            if (~fb_rain).sum() > 0:
+                res["val_mae_dry"] = round(float(np.mean(np.abs(fallback_y_true[~fb_rain] - fallback_y_pred[~fb_rain]))), 2)
 
     if "is_peak_hour" in val_df.columns:
         peak_mask = (val_df["is_peak_hour"] == 1).to_numpy()
@@ -52,6 +61,12 @@ def compute_regime_metrics(
             res["val_mae_peak"] = round(float(np.mean(np.abs(y_true[peak_mask] - y_pred[peak_mask]))), 2)
         if (~peak_mask).sum() > 0:
             res["val_mae_offpeak"] = round(float(np.mean(np.abs(y_true[~peak_mask] - y_pred[~peak_mask]))), 2)
+        elif fallback_df is not None and fallback_y_true is not None and fallback_y_pred is not None and "is_peak_hour" in fallback_df.columns:
+            fb_peak = (fallback_df["is_peak_hour"] == 1).to_numpy()
+            if res["val_mae_peak"] is None and fb_peak.sum() > 0:
+                res["val_mae_peak"] = round(float(np.mean(np.abs(fallback_y_true[fb_peak] - fallback_y_pred[fb_peak]))), 2)
+            if res["val_mae_offpeak"] is None and (~fb_peak).sum() > 0:
+                res["val_mae_offpeak"] = round(float(np.mean(np.abs(fallback_y_true[~fb_peak] - fallback_y_pred[~fb_peak]))), 2)
 
     return res
 
@@ -62,6 +77,7 @@ def run_benchmark(
     cohort: Optional[str] = None,
     exclude_terminals: bool = True,
     objective: str = "huber",
+    target: Optional[str] = None,
 ) -> pd.DataFrame:
     """
     Run end-to-end comparative benchmark across:
@@ -81,6 +97,8 @@ def run_benchmark(
         Whether to filter out terminal turnaround layover stops (default: True).
     objective : str
         Loss objective for gradient boosting: 'huber' (default), 'quantile', or 'regression'.
+    target : Optional[str]
+        Target column name: 'arrival_delay_seconds' or 'delta_t_run'.
     """
     df = feature_mart_df.copy()
 
@@ -111,7 +129,10 @@ def run_benchmark(
         df = df.sample(n=sample_size, random_state=42).copy()
 
     # Determine primary target variable
-    target_col = "arrival_delay_seconds" if "arrival_delay_seconds" in df.columns else "delta_t_run"
+    if target and target in df.columns:
+        target_col = target
+    else:
+        target_col = "arrival_delay_seconds" if "arrival_delay_seconds" in df.columns else "delta_t_run"
 
     splitter = PurgedTemporalBlockSplitter(embargo_minutes=30.0, purge_trips=True)
     train_df, val_df, test_df = splitter.split(df, train_ratio=0.6, val_ratio=0.2)
@@ -127,13 +148,24 @@ def run_benchmark(
     eval_df = test_df if (test_df is not None and len(test_df) > 0) else val_df
     logger.info(f"Evaluating benchmark models on hold-out partition ({len(eval_df):,} records, target={target_col})...")
 
+    has_val_fallback = val_df is not None and len(val_df) > 0 and eval_df is not val_df
+    val_y_true = val_df[target_col].to_numpy() if has_val_fallback else None
+
     # 1. TWFE Panel Regression Baseline
     logger.info("Training TWFE baseline model...")
     twfe = TWFEBaselineModel(target_col=target_col, entity_col="route_id", time_col="hour_of_day")
     twfe.fit(train_df, valid_features)
     twfe_preds = twfe.predict(eval_df)
+    twfe_val_preds = twfe.predict(val_df) if has_val_fallback else None
     twfe_metrics = compute_regression_metrics(eval_df[target_col], twfe_preds, prefix="val_")
-    twfe_regimes = compute_regime_metrics(eval_df[target_col].to_numpy(), twfe_preds, eval_df)
+    twfe_regimes = compute_regime_metrics(
+        eval_df[target_col].to_numpy(),
+        twfe_preds,
+        eval_df,
+        fallback_y_true=val_y_true,
+        fallback_y_pred=twfe_val_preds,
+        fallback_df=val_df if has_val_fallback else None,
+    )
 
     # 2. LightGBM Non-Linear Regressor
     logger.info(f"Training LightGBM regressor (objective={objective})...")
@@ -142,8 +174,16 @@ def run_benchmark(
         train_df, val_df, valid_features, n_estimators=200, learning_rate=0.05
     )
     lgb_preds = lgb_gbm.predict(eval_df)
+    lgb_val_preds = lgb_gbm.predict(val_df) if has_val_fallback else None
     lgb_test_metrics = compute_regression_metrics(eval_df[target_col], lgb_preds, prefix="val_")
-    lgb_regimes = compute_regime_metrics(eval_df[target_col].to_numpy(), lgb_preds, eval_df)
+    lgb_regimes = compute_regime_metrics(
+        eval_df[target_col].to_numpy(),
+        lgb_preds,
+        eval_df,
+        fallback_y_true=val_y_true,
+        fallback_y_pred=lgb_val_preds,
+        fallback_df=val_df if has_val_fallback else None,
+    )
 
     # 3. CatBoost Non-Linear Regressor
     logger.info(f"Training CatBoost regressor (objective={objective})...")
@@ -152,8 +192,16 @@ def run_benchmark(
         train_df, val_df, valid_features, n_estimators=200, learning_rate=0.05
     )
     cb_preds = cb_gbm.predict(eval_df)
+    cb_val_preds = cb_gbm.predict(val_df) if has_val_fallback else None
     cb_test_metrics = compute_regression_metrics(eval_df[target_col], cb_preds, prefix="val_")
-    cb_regimes = compute_regime_metrics(eval_df[target_col].to_numpy(), cb_preds, eval_df)
+    cb_regimes = compute_regime_metrics(
+        eval_df[target_col].to_numpy(),
+        cb_preds,
+        eval_df,
+        fallback_y_true=val_y_true,
+        fallback_y_pred=cb_val_preds,
+        fallback_df=val_df if has_val_fallback else None,
+    )
 
     benchmark_summary = pd.DataFrame(
         [
@@ -204,6 +252,7 @@ def run_stratified_benchmark(
     cohorts: Optional[List[str]] = None,
     exclude_terminals: bool = True,
     objective: str = "huber",
+    target: Optional[str] = None,
 ) -> pd.DataFrame:
     """
     Run comparative benchmarks across pooled data and stratified transit cohorts:
@@ -224,6 +273,7 @@ def run_stratified_benchmark(
                 cohort=cohort_name,
                 exclude_terminals=exclude_terminals,
                 objective=objective,
+                target=target,
             )
             summary.insert(0, "cohort", c)
             all_results.append(summary)

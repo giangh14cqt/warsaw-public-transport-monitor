@@ -198,8 +198,7 @@ class GradientBoostingBenchmark:
 
                 if self.objective == "huber":
                     default_params["objective"] = "huber"
-                    default_params["alpha"] = self.quantile_alpha
-                    default_params["reg_lambda"] = 0.0  # Prevent Hessian vanishing when hi=0
+                    default_params["alpha"] = self.huber_delta
                 elif self.objective == "quantile":
                     default_params["objective"] = "quantile"
                     default_params["alpha"] = self.quantile_alpha

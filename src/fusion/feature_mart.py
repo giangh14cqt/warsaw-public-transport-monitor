@@ -130,9 +130,17 @@ class FeatureMartAssembler:
                 ]
                 has_osm_act_path = "actual_path_length_meters" in osm_cols
                 has_osm_tort = "tortuosity_ratio" in osm_cols
+                has_osm_slug_prev = "slug_prev" in osm_cols
+                has_osm_slug_curr = "slug_curr" in osm_cols
+                has_osm_stop_id_prev = "stop_id_prev" in osm_cols
+                has_osm_stop_id_curr = "stop_id_curr" in osm_cols
             except Exception:
                 has_osm_act_path = False
                 has_osm_tort = False
+                has_osm_slug_prev = False
+                has_osm_slug_curr = False
+                has_osm_stop_id_prev = False
+                has_osm_stop_id_curr = False
             finally:
                 con.close()
 
@@ -141,6 +149,14 @@ class FeatureMartAssembler:
                 extra_cols.append("segment_length_meters AS actual_path_length_meters")
             if not has_osm_tort:
                 extra_cols.append("1.0::DOUBLE AS tortuosity_ratio")
+            if not has_osm_slug_prev:
+                extra_cols.append("''::VARCHAR AS slug_prev")
+            if not has_osm_slug_curr:
+                extra_cols.append("''::VARCHAR AS slug_curr")
+            if not has_osm_stop_id_prev:
+                extra_cols.append("''::VARCHAR AS stop_id_prev")
+            if not has_osm_stop_id_curr:
+                extra_cols.append("''::VARCHAR AS stop_id_curr")
             extra_sql = (", " + ", ".join(extra_cols)) if extra_cols else ""
             osm_subquery = f"SELECT * {extra_sql} FROM read_parquet('{osm_parquet_path}')"
         else:
@@ -148,6 +164,8 @@ class FeatureMartAssembler:
                 SELECT
                     ''::VARCHAR AS stop_id_prev,
                     ''::VARCHAR AS stop_id_curr,
+                    ''::VARCHAR AS slug_prev,
+                    ''::VARCHAR AS slug_curr,
                     ''::VARCHAR AS corridor_name,
                     500.0::DOUBLE AS segment_length_meters,
                     500.0::DOUBLE AS actual_path_length_meters,
@@ -170,10 +188,24 @@ class FeatureMartAssembler:
             """
         )
 
-        interchange_subquery = (
-            f"SELECT stop_id, COALESCE(zbk_slug, stop_id) AS zbk_slug, interchange_line_count, is_metro_proximity FROM read_parquet('{hub_path}')"
-            if has_hub
-            else """
+        if has_hub:
+            con = duckdb.connect()
+            try:
+                hub_cols = [
+                    c[0]
+                    for c in con.execute(
+                        f"DESCRIBE SELECT * FROM read_parquet('{hub_path}') LIMIT 1"
+                    ).fetchall()
+                ]
+                has_hub_slug = "zbk_slug" in hub_cols
+            except Exception:
+                has_hub_slug = False
+            finally:
+                con.close()
+            slug_select = "zbk_slug" if has_hub_slug else "stop_id AS zbk_slug"
+            interchange_subquery = f"SELECT stop_id, {slug_select}, interchange_line_count, is_metro_proximity FROM read_parquet('{hub_path}')"
+        else:
+            interchange_subquery = """
                 SELECT
                     ''::VARCHAR AS stop_id,
                     ''::VARCHAR AS zbk_slug,
@@ -181,7 +213,6 @@ class FeatureMartAssembler:
                     0::BIGINT AS is_metro_proximity
                 WHERE 1=0
             """
-        )
 
         return weather_subquery, osm_subquery, calendar_subquery, interchange_subquery
 

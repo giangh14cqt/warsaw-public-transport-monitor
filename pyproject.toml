@@ -21,6 +21,7 @@ dependencies = [
     "pyarrow>=15.0.0",
     "tenacity>=8.2.0",
     "zstandard>=0.22.0",
+    "pytz>=2024.1",
 ]
 
 [project.optional-dependencies]

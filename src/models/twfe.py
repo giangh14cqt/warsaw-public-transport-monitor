@@ -107,11 +107,20 @@ class TWFEBaselineModel:
                 raise KeyError(f"Neither '{self.target_col}' nor default targets found in columns.")
         self.target_col = target
 
-        # Filter out entity and time cols from feature_cols to prevent perfect collinearity
+        # Filter out entity and time cols, and deterministically collinear variables from candidate features
+        cols_to_exclude = {self.target_col, self.entity_col, self.time_col}
+        if self.time_col == "hour_of_day":
+            cols_to_exclude.update(["is_peak_hour", "is_morning_peak", "is_evening_peak"])
+        # day_of_week is a discrete cyclic indicator; linear slope extrapolates dangerously out-of-sample
+        cols_to_exclude.add("day_of_week")
+        # Prevent physical collinearity between straight-line length and polyline path length
+        if "segment_length_meters" in feature_cols and "actual_path_length_meters" in feature_cols:
+            cols_to_exclude.add("segment_length_meters")
+
         candidate_features = [
             c
             for c in feature_cols
-            if c in df.columns and c not in (self.target_col, self.entity_col, self.time_col)
+            if c in df.columns and c not in cols_to_exclude
         ]
 
         # Prepare working copy and drop missing values
@@ -120,6 +129,8 @@ class TWFEBaselineModel:
             cols_to_keep.append(self.entity_col)
         if self.time_col in df.columns and self.time_col not in cols_to_keep:
             cols_to_keep.append(self.time_col)
+        if "inverse_sampling_weight" in df.columns and "inverse_sampling_weight" not in cols_to_keep:
+            cols_to_keep.append("inverse_sampling_weight")
 
         data = df[cols_to_keep].dropna().copy()
         if len(data) == 0:
@@ -165,7 +176,7 @@ class TWFEBaselineModel:
                 try:
                     import pyhdfe
 
-                    algo = pyhdfe.create(data[fe_cols])
+                    algo = pyhdfe.create(data[fe_cols], drop_singletons=False)
                     y_resid = algo.residualize(y[:, None]).ravel()
                     X_resid = algo.residualize(X_raw)
                 except Exception as e:
@@ -220,6 +231,34 @@ class TWFEBaselineModel:
                 )
 
         if self.active_features:
+            X_cand = X_resid[:, active_indices]
+
+            # Prune collinear columns via QR decomposition with column pivoting
+            try:
+                import scipy.linalg as la
+
+                _, R, P = la.qr(X_cand, mode="economic", pivoting=True)
+                diag_R = np.abs(np.diag(R))
+                tol = max(X_cand.shape) * np.spacing(np.max(diag_R)) if len(diag_R) > 0 else 1e-10
+                rank = int(np.sum(diag_R > max(tol, 1e-7)))
+                if rank < len(active_indices):
+                    keep_cand_indices = sorted(P[:rank])
+                    dropped_cand_indices = [idx for idx in range(len(active_indices)) if idx not in keep_cand_indices]
+                    for d_idx in dropped_cand_indices:
+                        col = self.active_features[d_idx]
+                        self.absorbed_features.append(col)
+                        self.coefficients[col] = 0.0
+                        self.standard_errors[col] = 0.0
+                        self.p_values[col] = 1.0
+                        self.t_stats[col] = 0.0
+                        self.elasticities[col] = 0.0
+                        logger.info(f"Feature '{col}' dropped due to linear collinearity with other regressors.")
+
+                    self.active_features = [self.active_features[i] for i in keep_cand_indices]
+                    active_indices = [active_indices[i] for i in keep_cand_indices]
+            except Exception as e:
+                logger.debug(f"QR collinearity check skipped: {e}")
+
             X_active = X_resid[:, active_indices]
 
             # Extract sample weights for WLS if provided or in DataFrame
@@ -292,17 +331,34 @@ class TWFEBaselineModel:
             r = y.copy()
 
         data["_pe_residual"] = r
-        base_grand = float(np.mean(r))
+        if weights is not None:
+            base_grand = float(np.average(r, weights=weights))
+        else:
+            base_grand = float(np.mean(r))
         self.grand_mean = base_grand
 
         if has_entity:
-            entity_means = data.groupby(self.entity_col)["_pe_residual"].mean() - base_grand
+            if weights is not None:
+                data["_w_res"] = data["_pe_residual"] * weights
+                data["_w"] = weights
+                ent_sums = data.groupby(self.entity_col)[["_w_res", "_w"]].sum()
+                entity_means = (ent_sums["_w_res"] / ent_sums["_w"].replace(0, np.nan)).fillna(0.0) - base_grand
+                data.drop(columns=["_w_res", "_w"], inplace=True)
+            else:
+                entity_means = data.groupby(self.entity_col)["_pe_residual"].mean() - base_grand
             self.entity_effects = entity_means.to_dict()
         else:
             self.entity_effects = {}
 
         if has_time:
-            time_means = data.groupby(self.time_col)["_pe_residual"].mean() - base_grand
+            if weights is not None:
+                data["_w_res"] = data["_pe_residual"] * weights
+                data["_w"] = weights
+                time_sums = data.groupby(self.time_col)[["_w_res", "_w"]].sum()
+                time_means = (time_sums["_w_res"] / time_sums["_w"].replace(0, np.nan)).fillna(0.0) - base_grand
+                data.drop(columns=["_w_res", "_w"], inplace=True)
+            else:
+                time_means = data.groupby(self.time_col)["_pe_residual"].mean() - base_grand
             self.time_effects = time_means.to_dict()
         else:
             self.time_effects = {}
