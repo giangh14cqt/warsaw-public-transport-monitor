@@ -34,6 +34,7 @@ from src.pipeline.stages import (
     run_stage_benchmark,
     run_stage_exogenous,
     run_stage_fusion,
+    run_stage_gold,
     run_stage_preflight,
     run_stage_ranges,
     run_stage_xai,
@@ -70,6 +71,8 @@ def main():
         choices=[
             "preflight",
             "exogenous",
+            "gold",
+            "reconstruct",
             "fusion",
             "benchmark",
             "xai",
@@ -161,9 +164,9 @@ def main():
     parser.add_argument(
         "--target",
         type=str,
-        default="arrival_delay_seconds",
-        choices=["arrival_delay_seconds", "delta_t_run"],
-        help="Primary target variable: 'arrival_delay_seconds' (total passenger delay, default) or 'delta_t_run' (incremental running delay shock).",
+        default="delta_t_run",
+        choices=["delta_t_run", "arrival_delay_seconds"],
+        help="Primary target variable: 'delta_t_run' (inter-stop running delay diff, default) or 'arrival_delay_seconds' (cumulative arrival delay).",
     )
     parser.add_argument(
         "--dry-run",
@@ -199,6 +202,9 @@ def main():
 
         if args.stage in ("exogenous", "all"):
             stages_executed["exogenous"] = run_stage_exogenous(args)
+
+        if args.stage in ("gold", "reconstruct"):
+            stages_executed["gold"] = run_stage_gold(args)
 
         if args.stage in ("fusion", "all"):
             stages_executed["fusion"] = run_stage_fusion(args)

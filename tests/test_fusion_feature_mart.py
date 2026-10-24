@@ -367,7 +367,7 @@ class TestFeatureMartAssembler(unittest.TestCase):
         self.assertEqual(row["prev_stop_id"], "1001")
         self.assertEqual(row["prev_stop_delay"], 10)
         self.assertEqual(row["arrival_delay_seconds"], 30)
-        self.assertEqual(row["delta_t_run"], 20.0)
+        self.assertEqual(row["delta_t_run"], 15.0)
         self.assertEqual(row["dwell_seconds"], 20)
         self.assertEqual(row["zbk_forecast_delay_s"], 40)
         self.assertEqual(row["forecast_error_s"], -10)

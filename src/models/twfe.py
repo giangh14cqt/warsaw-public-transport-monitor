@@ -32,7 +32,7 @@ class TWFEBaselineModel:
         target_col: str = "delta_t_run",
         entity_col: str = "route_id",
         time_col: str = "hour_of_day",
-        cov_type: str = "HC1",
+        cov_type: str = "cluster",
     ):
         """
         Initialize TWFE Baseline Model.
@@ -46,7 +46,7 @@ class TWFEBaselineModel:
         time_col : str
             Temporal fixed effect column (default 'hour_of_day').
         cov_type : str
-            Covariance estimator for robust standard errors: 'HC1', 'HC3', or 'nonrobust'.
+            Covariance estimator for standard errors: 'cluster', 'HC1', 'HC3', or 'nonrobust'.
         """
         self.target_col = target_col
         self.entity_col = entity_col
@@ -116,6 +116,9 @@ class TWFEBaselineModel:
         # Prevent physical collinearity between straight-line length and polyline path length
         if "segment_length_meters" in feature_cols and "actual_path_length_meters" in feature_cols:
             cols_to_exclude.add("segment_length_meters")
+        # Prevent collinear functional forms of instantaneous rainfall in linear specification
+        if "precipitation_mm" in feature_cols:
+            cols_to_exclude.update(["is_raining", "rain_intensity_category"])
 
         candidate_features = [
             c
@@ -123,7 +126,7 @@ class TWFEBaselineModel:
             if c in df.columns and c not in cols_to_exclude
         ]
 
-        # Prepare working copy and drop missing values
+        # Prepare working copy and impute missing feature values with 0.0 (consistent with predict)
         cols_to_keep = [self.target_col] + candidate_features
         if self.entity_col in df.columns and self.entity_col not in cols_to_keep:
             cols_to_keep.append(self.entity_col)
@@ -132,7 +135,13 @@ class TWFEBaselineModel:
         if "inverse_sampling_weight" in df.columns and "inverse_sampling_weight" not in cols_to_keep:
             cols_to_keep.append("inverse_sampling_weight")
 
-        data = df[cols_to_keep].dropna().copy()
+        data = df[cols_to_keep].copy()
+        if sample_weight is not None:
+            data["_explicit_weight"] = np.asarray(sample_weight, dtype=float)
+        for col in candidate_features:
+            if col in data.columns and data[col].isna().any():
+                data[col] = data[col].fillna(0.0)
+        data = data.dropna(subset=[self.target_col]).copy()
         if len(data) == 0:
             raise ValueError("No valid rows remaining after dropping missing values.")
 
@@ -154,7 +163,13 @@ class TWFEBaselineModel:
         self.feature_cols = valid_features
 
         y = data[self.target_col].to_numpy(dtype=float)
-        mean_y = float(np.mean(y))
+        weights = None
+        if "_explicit_weight" in data.columns:
+            weights = data["_explicit_weight"].to_numpy(dtype=float)
+        elif "inverse_sampling_weight" in data.columns:
+            weights = data["inverse_sampling_weight"].to_numpy(dtype=float)
+
+        mean_y = float(np.average(y, weights=weights)) if weights is not None else float(np.mean(y))
         self.grand_mean = mean_y
 
         has_entity = self.entity_col in data.columns and data[self.entity_col].nunique() > 1
@@ -177,8 +192,9 @@ class TWFEBaselineModel:
                     import pyhdfe
 
                     algo = pyhdfe.create(data[fe_cols], drop_singletons=False)
-                    y_resid = algo.residualize(y[:, None]).ravel()
-                    X_resid = algo.residualize(X_raw)
+                    w_col = weights[:, None] if weights is not None else None
+                    y_resid = algo.residualize(y[:, None], weights=w_col).ravel()
+                    X_resid = algo.residualize(X_raw, weights=w_col)
                 except Exception as e:
                     logger.warning(
                         f"pyhdfe residualization failed ({e}); falling back to sequential demeaning."
@@ -207,7 +223,11 @@ class TWFEBaselineModel:
                             )
             else:
                 y_resid = y - mean_y
-                X_resid = X_raw - np.mean(X_raw, axis=0)
+                X_resid = (
+                    X_raw - np.average(X_raw, axis=0, weights=weights)
+                    if weights is not None
+                    else X_raw - np.mean(X_raw, axis=0)
+                )
 
         # Detect active vs absorbed features (features whose variance after residualization is < 1e-6)
         self.active_features = []
@@ -261,14 +281,7 @@ class TWFEBaselineModel:
 
             X_active = X_resid[:, active_indices]
 
-            # Extract sample weights for WLS if provided or in DataFrame
-            weights = None
-            if sample_weight is not None:
-                weights = np.asarray(sample_weight, dtype=float)
-            elif "inverse_sampling_weight" in data.columns:
-                weights = data["inverse_sampling_weight"].to_numpy(dtype=float)
-
-            # Fit OLS/WLS via statsmodels
+            # Fit OLS/WLS via statsmodels with absorbed FE degrees-of-freedom adjustment
             try:
                 import statsmodels.api as sm
 
@@ -277,8 +290,21 @@ class TWFEBaselineModel:
                 else:
                     ols_model = sm.OLS(y_resid, X_active)
 
-                cov_type = self.cov_type if self.cov_type in ["HC1", "HC3"] else "nonrobust"
-                res = ols_model.fit(cov_type=cov_type)
+                n_fe_dof = (int(data[self.entity_col].nunique()) if has_entity else 0) + (
+                    max(0, int(data[self.time_col].nunique()) - (1 if has_entity else 0))
+                    if has_time
+                    else 0
+                )
+                ols_model.df_resid = float(max(1, len(y_resid) - X_active.shape[1] - n_fe_dof))
+
+                if self.cov_type == "cluster" and has_entity:
+                    res = ols_model.fit(
+                        cov_type="cluster",
+                        cov_kwds={"groups": data[self.entity_col].astype(str).to_numpy()},
+                    )
+                else:
+                    cov_type = self.cov_type if self.cov_type in ["HC1", "HC3"] else "nonrobust"
+                    res = ols_model.fit(cov_type=cov_type)
                 self.ols_results = res
                 beta = res.params
                 bse = res.bse
@@ -337,31 +363,48 @@ class TWFEBaselineModel:
             base_grand = float(np.mean(r))
         self.grand_mean = base_grand
 
-        if has_entity:
-            if weights is not None:
-                data["_w_res"] = data["_pe_residual"] * weights
-                data["_w"] = weights
-                ent_sums = data.groupby(self.entity_col)[["_w_res", "_w"]].sum()
-                entity_means = (ent_sums["_w_res"] / ent_sums["_w"].replace(0, np.nan)).fillna(0.0) - base_grand
-                data.drop(columns=["_w_res", "_w"], inplace=True)
-            else:
-                entity_means = data.groupby(self.entity_col)["_pe_residual"].mean() - base_grand
-            self.entity_effects = entity_means.to_dict()
-        else:
-            self.entity_effects = {}
+        data["_pe_residual"] = r - base_grand
+        self.entity_effects = {}
+        self.time_effects = {}
 
-        if has_time:
-            if weights is not None:
-                data["_w_res"] = data["_pe_residual"] * weights
-                data["_w"] = weights
-                time_sums = data.groupby(self.time_col)[["_w_res", "_w"]].sum()
-                time_means = (time_sums["_w_res"] / time_sums["_w"].replace(0, np.nan)).fillna(0.0) - base_grand
-                data.drop(columns=["_w_res", "_w"], inplace=True)
-            else:
-                time_means = data.groupby(self.time_col)["_pe_residual"].mean() - base_grand
-            self.time_effects = time_means.to_dict()
-        else:
-            self.time_effects = {}
+        if has_entity or has_time:
+            ent_eff = {k: 0.0 for k in data[self.entity_col].unique()} if has_entity else {}
+            time_eff = {k: 0.0 for k in data[self.time_col].unique()} if has_time else {}
+            n_iter = 3 if (has_entity and has_time) else 1
+            for _ in range(n_iter):
+                if has_entity:
+                    rem_ent = data["_pe_residual"].to_numpy(dtype=float) - (
+                        data[self.time_col].map(time_eff).fillna(0.0).to_numpy(dtype=float)
+                        if has_time
+                        else 0.0
+                    )
+                    if weights is not None:
+                        data["_w_res"] = rem_ent * weights
+                        data["_w"] = weights
+                        ent_sums = data.groupby(self.entity_col)[["_w_res", "_w"]].sum()
+                        ent_eff = (ent_sums["_w_res"] / ent_sums["_w"].replace(0, np.nan)).fillna(0.0).to_dict()
+                    else:
+                        data["_rem_ent"] = rem_ent
+                        ent_eff = data.groupby(self.entity_col)["_rem_ent"].mean().fillna(0.0).to_dict()
+                if has_time:
+                    rem_time = data["_pe_residual"].to_numpy(dtype=float) - (
+                        data[self.entity_col].map(ent_eff).fillna(0.0).to_numpy(dtype=float)
+                        if has_entity
+                        else 0.0
+                    )
+                    if weights is not None:
+                        data["_w_res"] = rem_time * weights
+                        data["_w"] = weights
+                        time_sums = data.groupby(self.time_col)[["_w_res", "_w"]].sum()
+                        time_eff = (time_sums["_w_res"] / time_sums["_w"].replace(0, np.nan)).fillna(0.0).to_dict()
+                    else:
+                        data["_rem_time"] = rem_time
+                        time_eff = data.groupby(self.time_col)["_rem_time"].mean().fillna(0.0).to_dict()
+            for tmp_col in ["_w_res", "_w", "_rem_ent", "_rem_time"]:
+                if tmp_col in data.columns:
+                    data.drop(columns=[tmp_col], inplace=True)
+            self.entity_effects = ent_eff
+            self.time_effects = time_eff
 
         # Compute within and overall R-squared
         y_fitted = self.predict(data)

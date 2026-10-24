@@ -501,7 +501,7 @@ class OSMCorridorExtractor:
 
         if gtfs_dir is None:
             gtfs_dirs = sorted(glob.glob("data/gtfs/202*"))
-            gtfs_dir = gtfs_dirs[-1] if gtfs_dirs else "data/gtfs/2026_10_11"
+            gtfs_dir = "data/gtfs/2026_10_11" if os.path.exists("data/gtfs/2026_10_11/stops.txt") else (gtfs_dirs[-1] if gtfs_dirs else "data/gtfs/2026_10_11")
 
         stops_file = os.path.join(gtfs_dir, "stops.txt")
         stop_times_file = os.path.join(gtfs_dir, "stop_times.txt")
@@ -516,14 +516,22 @@ class OSMCorridorExtractor:
 
         con = duckdb.connect()
         try:
+            stop_cols = [
+                c[0]
+                for c in con.execute(
+                    f"DESCRIBE SELECT * FROM read_csv_auto('{stops_file}') LIMIT 1"
+                ).fetchall()
+            ]
+            street_expr = "COALESCE(street, '')" if "street" in stop_cols else "COALESCE(stop_name, '')"
+            zone_expr = "zone_id" if "zone_id" in stop_cols else "''"
             stops_df = con.execute(f"""
                 SELECT 
-                    stop_id, 
+                    CAST(stop_id AS VARCHAR) as stop_id, 
                     stop_name, 
                     CAST(stop_lat AS DOUBLE) as stop_lat, 
                     CAST(stop_lon AS DOUBLE) as stop_lon,
-                    COALESCE(street, '') as street,
-                    zone_id
+                    {street_expr} as street,
+                    {zone_expr} as zone_id
                 FROM read_csv_auto('{stops_file}')
             """).df().set_index("stop_id")
 
@@ -633,30 +641,35 @@ class OSMCorridorExtractor:
         if not sig_df.empty:
             sig_lats = sig_df["lat"].values
             sig_lons = sig_df["lon"].values
-            buffer_deg = 0.00035
-            buffer_deg_sq = buffer_deg ** 2
+            m_per_deg_lat = 111194.9
+            cos_lat = float(np.cos(np.radians(52.23)))
+            m_per_deg_lon = m_per_deg_lat * cos_lat
+            buffer_m = 35.0
+            buffer_m_sq = buffer_m ** 2
+            buffer_lat_deg = buffer_m / m_per_deg_lat
+            buffer_lon_deg = buffer_m / m_per_deg_lon
 
             for i in range(len(links_df)):
                 lat1, lon1 = s1_lats[i], s1_lons[i]
                 lat2, lon2 = s2_lats[i], s2_lons[i]
-                min_lat, max_lat = min(lat1, lat2) - buffer_deg, max(lat1, lat2) + buffer_deg
-                min_lon, max_lon = min(lon1, lon2) - buffer_deg, max(lon1, lon2) + buffer_deg
+                min_lat, max_lat = min(lat1, lat2) - buffer_lat_deg, max(lat1, lat2) + buffer_lat_deg
+                min_lon, max_lon = min(lon1, lon2) - buffer_lon_deg, max(lon1, lon2) + buffer_lon_deg
                 cand = (sig_lats >= min_lat) & (sig_lats <= max_lat) & (sig_lons >= min_lon) & (sig_lons <= max_lon)
                 if not np.any(cand):
                     continue
                 c_lats, c_lons = sig_lats[cand], sig_lons[cand]
-                p1 = np.array([lon1, lat1])
-                p2 = np.array([lon2, lat2])
+                p1 = np.array([lon1 * m_per_deg_lon, lat1 * m_per_deg_lat])
+                p2 = np.array([lon2 * m_per_deg_lon, lat2 * m_per_deg_lat])
                 v = p2 - p1
                 v_len_sq = np.dot(v, v)
                 if v_len_sq == 0:
                     sig_counts[i] = len(c_lats)
                     continue
-                p = np.column_stack([c_lons, c_lats])
+                p = np.column_stack([c_lons * m_per_deg_lon, c_lats * m_per_deg_lat])
                 t = np.clip(np.dot(p - p1, v) / v_len_sq, 0.0, 1.0)
                 proj = p1 + np.outer(t, v)
                 dist_sq = np.sum((p - proj) ** 2, axis=1)
-                sig_counts[i] = np.sum(dist_sq <= buffer_deg_sq)
+                sig_counts[i] = np.sum(dist_sq <= buffer_m_sq)
 
         links_df["signalized_intersection_count"] = sig_counts
 
@@ -753,7 +766,15 @@ class OSMCorridorExtractor:
             "signalized_intersection_count",
             "lane_capacity",
         ]
-        result_df = links_df[cols]
+        result_df = links_df[cols].copy()
+        if os.path.exists(self.output_parquet):
+            try:
+                old_df = pd.read_parquet(self.output_parquet)
+                if "slug_prev" in old_df.columns and "slug_curr" in old_df.columns:
+                    slug_map = old_df[["edge_id", "slug_prev", "slug_curr"]].drop_duplicates(subset=["edge_id"])
+                    result_df = result_df.merge(slug_map, on="edge_id", how="left")
+            except Exception:
+                pass
         logger.info(
             f"Successfully processed {len(result_df)} citywide network topology segments "
             f"({result_df['is_dedicated_right_of_way'].sum()} dedicated ROW links, "

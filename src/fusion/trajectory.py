@@ -78,16 +78,20 @@ class TrajectoryReconstructor:
         df["prev_stop_delay"] = df.groupby("_trip_instance")["arrival_delay_seconds"].shift(1)
         df["prev2_stop_delay"] = df.groupby("_trip_instance")["arrival_delay_seconds"].shift(2)
 
-        # Running segment delay delta: change in delay from stop s-1 to stop s
-        df["delta_t_run"] = df["arrival_delay_seconds"] - df["prev_stop_delay"]
-
-        # Platform dwell delay delta
+        # Platform dwell delay delta & preceding departure delay
         if "departure_delay_seconds" in df.columns:
             # When departure delay is recorded, dwell delay is the difference
             dep_delay = df["departure_delay_seconds"].fillna(df["arrival_delay_seconds"])
             df["delta_t_dwell"] = dep_delay - df["arrival_delay_seconds"]
+            df["_dep_delay"] = dep_delay
+            prev_dep_delay = df.groupby("_trip_instance")["_dep_delay"].shift(1)
+            df = df.drop(columns=["_dep_delay"])
         else:
             df["delta_t_dwell"] = 0.0
+            prev_dep_delay = df["prev_stop_delay"]
+
+        # Running segment delay delta: change in delay from departure at stop s-1 to arrival at stop s
+        df["delta_t_run"] = df["arrival_delay_seconds"] - prev_dep_delay
 
         # Observed running transit time (seconds between departure of s-1 and arrival of s)
         if "rt_arrival_time" in df.columns:
@@ -206,6 +210,7 @@ class TrajectoryReconstructor:
                     -- Preceding Stop Lags
                     LAG(stop_id) OVER (PARTITION BY trip_instance_key ORDER BY stop_sequence) AS prev_stop_id,
                     LAG(arrival_delay_seconds) OVER (PARTITION BY trip_instance_key ORDER BY stop_sequence) AS prev_stop_delay,
+                    LAG(COALESCE(departure_delay_seconds, arrival_delay_seconds)) OVER (PARTITION BY trip_instance_key ORDER BY stop_sequence) AS prev_departure_delay,
                     LAG(arrival_delay_seconds, 2) OVER (PARTITION BY trip_instance_key ORDER BY stop_sequence) AS prev2_stop_delay,
                     LAG(COALESCE(rt_departure_time, rt_arrival_time)) OVER (PARTITION BY trip_instance_key ORDER BY stop_sequence) AS prev_rt_departure,
                     MAX(stop_sequence) OVER (PARTITION BY trip_instance_key) AS max_sequence,
@@ -229,6 +234,7 @@ class TrajectoryReconstructor:
                     rt_departure_time,
                     -- Running Segment Delay (Delta t_run)
                     CASE
+                        WHEN prev_departure_delay IS NOT NULL THEN (arrival_delay_seconds - prev_departure_delay)
                         WHEN prev_stop_delay IS NOT NULL THEN (arrival_delay_seconds - prev_stop_delay)
                         ELSE 0.0
                     END AS delta_t_run,

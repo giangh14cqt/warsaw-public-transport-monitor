@@ -236,6 +236,7 @@ class GoldStopEventReconstructor:
             sched_max_seq = int(stop_group["stop_sequence"].max())
 
             trip_rows: List[Dict[str, Any]] = []
+            min_allowed_idx = 0
 
             for stop_row in stop_group.itertuples(index=False):
                 seq = int(stop_row.stop_sequence)
@@ -252,10 +253,16 @@ class GoldStopEventReconstructor:
 
                 # Vectorized Euclidean metric distances for this stop
                 dists = np.hypot(fix_xs - s_x, fix_ys - s_y)
-                min_dist = float(dists.min()) if len(dists) > 0 else 99999.0
+                seq_mask = np.arange(len(dists)) >= min_allowed_idx
+                # If both fix_times and sched_arr_utc are valid epoch timestamps, bound within +/- 90 min
+                if sched_arr_utc > 100_000_000 and len(fix_times) > 0 and fix_times[0] > 100_000_000:
+                    seq_mask = seq_mask & (np.abs(fix_times - sched_arr_utc) <= 5400)
 
-                # Detect entry and exit around stop radius (25m)
-                inside_indices = np.where(dists <= self.stop_radius)[0]
+                valid_dists = np.where(seq_mask, dists, 99999.0)
+                min_dist = float(valid_dists.min()) if len(valid_dists) > 0 else 99999.0
+
+                # Detect monotonic entry and contiguous exit around stop radius (25m)
+                inside_indices = np.where((dists <= self.stop_radius) & seq_mask)[0]
 
                 actual_arr_utc = None
                 actual_dep_utc = None
@@ -268,7 +275,13 @@ class GoldStopEventReconstructor:
                 if len(inside_indices) > 0:
                     event_type = "STOPPED"
                     first_in = int(inside_indices[0])
-                    last_in = int(inside_indices[-1])
+                    last_in = first_in
+                    for idx in inside_indices[1:]:
+                        if float(fix_times[idx] - fix_times[last_in]) <= 180.0:
+                            last_in = int(idx)
+                        else:
+                            break
+                    min_allowed_idx = last_in
 
                     # Sub-10s arrival interpolation
                     if first_in > 0:
@@ -310,7 +323,8 @@ class GoldStopEventReconstructor:
                 elif min_dist <= 60.0:
                     event_type = "PASSED"
                     # Vehicle passed near stop without stopping
-                    closest_idx = int(np.argmin(dists))
+                    closest_idx = int(np.argmin(valid_dists))
+                    min_allowed_idx = closest_idx
                     actual_arr_utc = int(fix_times[closest_idx])
                     actual_dep_utc = actual_arr_utc
                     dwell_s = 0
@@ -399,3 +413,5 @@ class GoldStopEventReconstructor:
             f"Gold stop events complete for {date_str}: {len(gold_df):,} events ({stopped_cnt:,} STOPPED) across {retained_trips_cnt:,} complete trips ({dropped_incomplete_cnt:,} incomplete trips dropped) written to {out_file}"
         )
         return out_file
+
+    reconstruct_date = process_date

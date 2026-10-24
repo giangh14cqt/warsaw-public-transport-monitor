@@ -32,6 +32,8 @@ analysis = [
 ]
 modeling = [
     "scikit-learn>=1.4.0",
+    "scipy>=1.12.0",
+    "pyhdfe>=0.2.0",
     "lightgbm>=4.3.0",
     "catboost>=1.2.5",
     "statsmodels>=0.14.0",
@@ -39,6 +41,7 @@ modeling = [
     "shap>=0.45.0",
     "PyALE>=1.1.0",
     "dice-ml>=0.11",
+    "matplotlib>=3.8.0",
 ]
 dev = [
     "pytest>=8.0.0",

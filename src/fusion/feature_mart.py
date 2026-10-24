@@ -289,6 +289,7 @@ class FeatureMartAssembler:
                     *,
                     LAG(stop_id) OVER (PARTITION BY trip_instance_key ORDER BY stop_sequence) AS prev_stop_id,
                     LAG(arrival_delay_seconds) OVER (PARTITION BY trip_instance_key ORDER BY stop_sequence) AS prev_stop_delay,
+                    LAG(COALESCE(departure_delay_seconds, arrival_delay_seconds)) OVER (PARTITION BY trip_instance_key ORDER BY stop_sequence) AS prev_departure_delay,
                     LAG(arrival_delay_seconds, 2) OVER (PARTITION BY trip_instance_key ORDER BY stop_sequence) AS prev2_stop_delay,
                     LAG(actual_departure_utc) OVER (PARTITION BY trip_instance_key ORDER BY stop_sequence) AS prev_actual_dep,
                     LAG(scheduled_departure_utc) OVER (PARTITION BY trip_instance_key ORDER BY stop_sequence) AS prev_sched_dep,
@@ -314,20 +315,25 @@ class FeatureMartAssembler:
                     forecast_error_s,
                     confidence,
                     prev_stop_delay,
+                    prev_departure_delay,
                     prev2_stop_delay,
                     prev_actual_dep,
                     prev_sched_dep,
                     actual_arrival_utc AS rt_arrival_time,
                     actual_departure_utc AS rt_departure_time,
-                    to_timestamp(actual_arrival_utc) AS arrival_ts,
-                    date_trunc('hour', to_timestamp(actual_arrival_utc)) AS timestamp_bucket,
-                    EXTRACT(hour FROM to_timestamp(actual_arrival_utc)) AS hour_of_day,
-                    EXTRACT(dayofweek FROM to_timestamp(actual_arrival_utc)) AS day_of_week,
-                    CASE WHEN EXTRACT(dayofweek FROM to_timestamp(actual_arrival_utc)) IN (0, 6) THEN 1 ELSE 0 END AS is_weekend,
-                    CASE WHEN EXTRACT(hour FROM to_timestamp(actual_arrival_utc)) IN (7, 8, 9, 16, 17, 18) THEN 1 ELSE 0 END AS is_peak_hour,
-                    CASE WHEN EXTRACT(hour FROM to_timestamp(actual_arrival_utc)) IN (7, 8, 9) THEN 1 ELSE 0 END AS is_morning_peak,
-                    CASE WHEN EXTRACT(hour FROM to_timestamp(actual_arrival_utc)) IN (16, 17, 18) THEN 1 ELSE 0 END AS is_evening_peak,
-                    CASE WHEN prev_stop_delay IS NOT NULL THEN (arrival_delay_seconds - prev_stop_delay) ELSE 0.0 END AS delta_t_run,
+                    timezone('Europe/Warsaw', to_timestamp(actual_arrival_utc)) AS arrival_ts,
+                    date_trunc('hour', timezone('Europe/Warsaw', to_timestamp(actual_arrival_utc))) AS timestamp_bucket,
+                    EXTRACT(hour FROM timezone('Europe/Warsaw', to_timestamp(actual_arrival_utc))) AS hour_of_day,
+                    EXTRACT(dayofweek FROM timezone('Europe/Warsaw', to_timestamp(actual_arrival_utc))) AS day_of_week,
+                    CASE WHEN EXTRACT(dayofweek FROM timezone('Europe/Warsaw', to_timestamp(actual_arrival_utc))) IN (0, 6) THEN 1 ELSE 0 END AS is_weekend,
+                    CASE WHEN EXTRACT(hour FROM timezone('Europe/Warsaw', to_timestamp(actual_arrival_utc))) IN (7, 8, 9, 16, 17, 18) THEN 1 ELSE 0 END AS is_peak_hour,
+                    CASE WHEN EXTRACT(hour FROM timezone('Europe/Warsaw', to_timestamp(actual_arrival_utc))) IN (7, 8, 9) THEN 1 ELSE 0 END AS is_morning_peak,
+                    CASE WHEN EXTRACT(hour FROM timezone('Europe/Warsaw', to_timestamp(actual_arrival_utc))) IN (16, 17, 18) THEN 1 ELSE 0 END AS is_evening_peak,
+                    CASE
+                        WHEN prev_departure_delay IS NOT NULL THEN CAST(arrival_delay_seconds - prev_departure_delay AS DOUBLE)
+                        WHEN prev_stop_delay IS NOT NULL THEN CAST(arrival_delay_seconds - prev_stop_delay AS DOUBLE)
+                        ELSE 0.0
+                    END AS delta_t_run,
                     (departure_delay_seconds - arrival_delay_seconds) AS delta_t_dwell,
                     CASE
                         WHEN prev_actual_dep IS NOT NULL AND actual_arrival_utc > prev_actual_dep
@@ -349,15 +355,32 @@ class FeatureMartAssembler:
                     END AS transit_cohort
                 FROM ordered
             ),
-            with_headway AS (
+            with_headway_raw AS (
                 SELECT
                     *,
                     -- Causal upstream departure headway (time gap behind preceding vehicle leaving stop s-1)
                     (prev_actual_dep - LAG(prev_actual_dep) OVER (
                         PARTITION BY route_id, prev_stop_id
                         ORDER BY prev_actual_dep
-                    )) AS headway_actual_s
+                    )) AS raw_headway_actual_s,
+                    (prev_sched_dep - LAG(prev_sched_dep) OVER (
+                        PARTITION BY route_id, prev_stop_id
+                        ORDER BY prev_sched_dep
+                    )) AS raw_headway_sched_s
                 FROM trajectories
+            ),
+            with_headway AS (
+                SELECT
+                    *,
+                    CASE
+                        WHEN raw_headway_actual_s BETWEEN 10 AND 3600 THEN raw_headway_actual_s
+                        ELSE NULL
+                    END AS headway_actual_s,
+                    CASE
+                        WHEN prev_sched_dep > 100000000 AND raw_headway_sched_s BETWEEN 30 AND 3600 THEN raw_headway_sched_s
+                        ELSE NULL
+                    END AS headway_sched_s
+                FROM with_headway_raw
             ),
             v_weather AS ({weather_subquery}),
             v_osm AS ({osm_subquery}),
@@ -399,8 +422,12 @@ class FeatureMartAssembler:
                 COALESCE(cal.is_public_holiday, 0) AS is_public_holiday,
                 t.headway_actual_s,
                 CASE
-                    WHEN t.headway_actual_s >= 10 AND t.headway_actual_s <= 7200
-                    THEN t.headway_actual_s - MEDIAN(t.headway_actual_s) OVER (PARTITION BY t.route_id, t.prev_stop_id)
+                    WHEN t.headway_actual_s IS NOT NULL
+                    THEN CAST(COALESCE(
+                        t.headway_actual_s - t.headway_sched_s,
+                        t.headway_actual_s - MEDIAN(t.headway_actual_s) OVER (PARTITION BY t.route_id, t.prev_stop_id, t.hour_of_day),
+                        0.0
+                    ) AS DOUBLE)
                     ELSE NULL
                 END AS headway_deviation,
                 COALESCE(hub.interchange_line_count, 1) AS interchange_line_count,
@@ -568,6 +595,7 @@ class FeatureMartAssembler:
                     -- Preceding Stop Lags
                     LAG(stop_id) OVER (PARTITION BY trip_instance_key ORDER BY stop_sequence) AS prev_stop_id,
                     LAG(arrival_delay_seconds) OVER (PARTITION BY trip_instance_key ORDER BY stop_sequence) AS prev_stop_delay,
+                    LAG(COALESCE(departure_delay_seconds, arrival_delay_seconds)) OVER (PARTITION BY trip_instance_key ORDER BY stop_sequence) AS prev_departure_delay,
                     LAG(arrival_delay_seconds, 2) OVER (PARTITION BY trip_instance_key ORDER BY stop_sequence) AS prev2_stop_delay,
                     LAG(COALESCE(rt_departure_time, rt_arrival_time)) OVER (PARTITION BY trip_instance_key ORDER BY stop_sequence) AS prev_rt_departure,
                     MAX(stop_sequence) OVER (PARTITION BY trip_instance_key) AS max_seq,
@@ -587,20 +615,25 @@ class FeatureMartAssembler:
                     arrival_delay_seconds,
                     departure_delay_seconds,
                     prev_stop_delay,
+                    prev_departure_delay,
                     prev2_stop_delay,
                     prev_rt_departure,
                     rt_arrival_time,
                     rt_departure_time,
-                    to_timestamp(rt_arrival_time) AS arrival_ts,
-                    date_trunc('hour', to_timestamp(rt_arrival_time)) AS timestamp_bucket,
-                    EXTRACT(hour FROM to_timestamp(rt_arrival_time)) AS hour_of_day,
-                    EXTRACT(dayofweek FROM to_timestamp(rt_arrival_time)) AS day_of_week,
-                    CASE WHEN EXTRACT(dayofweek FROM to_timestamp(rt_arrival_time)) IN (0, 6) THEN 1 ELSE 0 END AS is_weekend,
-                    CASE WHEN EXTRACT(hour FROM to_timestamp(rt_arrival_time)) IN (7, 8, 9, 16, 17, 18) THEN 1 ELSE 0 END AS is_peak_hour,
-                    CASE WHEN EXTRACT(hour FROM to_timestamp(rt_arrival_time)) IN (7, 8, 9) THEN 1 ELSE 0 END AS is_morning_peak,
-                    CASE WHEN EXTRACT(hour FROM to_timestamp(rt_arrival_time)) IN (16, 17, 18) THEN 1 ELSE 0 END AS is_evening_peak,
+                    timezone('Europe/Warsaw', to_timestamp(rt_arrival_time)) AS arrival_ts,
+                    date_trunc('hour', timezone('Europe/Warsaw', to_timestamp(rt_arrival_time))) AS timestamp_bucket,
+                    EXTRACT(hour FROM timezone('Europe/Warsaw', to_timestamp(rt_arrival_time))) AS hour_of_day,
+                    EXTRACT(dayofweek FROM timezone('Europe/Warsaw', to_timestamp(rt_arrival_time))) AS day_of_week,
+                    CASE WHEN EXTRACT(dayofweek FROM timezone('Europe/Warsaw', to_timestamp(rt_arrival_time))) IN (0, 6) THEN 1 ELSE 0 END AS is_weekend,
+                    CASE WHEN EXTRACT(hour FROM timezone('Europe/Warsaw', to_timestamp(rt_arrival_time))) IN (7, 8, 9, 16, 17, 18) THEN 1 ELSE 0 END AS is_peak_hour,
+                    CASE WHEN EXTRACT(hour FROM timezone('Europe/Warsaw', to_timestamp(rt_arrival_time))) IN (7, 8, 9) THEN 1 ELSE 0 END AS is_morning_peak,
+                    CASE WHEN EXTRACT(hour FROM timezone('Europe/Warsaw', to_timestamp(rt_arrival_time))) IN (16, 17, 18) THEN 1 ELSE 0 END AS is_evening_peak,
                     -- Running Delay (Delta t_run) & Dwell Delay (Delta t_dwell)
-                    CASE WHEN prev_stop_delay IS NOT NULL THEN (arrival_delay_seconds - prev_stop_delay) ELSE 0.0 END AS delta_t_run,
+                    CASE
+                        WHEN prev_departure_delay IS NOT NULL THEN CAST(arrival_delay_seconds - prev_departure_delay AS DOUBLE)
+                        WHEN prev_stop_delay IS NOT NULL THEN CAST(arrival_delay_seconds - prev_stop_delay AS DOUBLE)
+                        ELSE 0.0
+                    END AS delta_t_run,
                     (departure_delay_seconds - arrival_delay_seconds) AS delta_t_dwell,
                     -- Observed physical running time in seconds
                     CASE
@@ -624,15 +657,24 @@ class FeatureMartAssembler:
                     END AS transit_cohort
                 FROM ordered
             ),
-            with_headway AS (
+            with_headway_raw AS (
                 SELECT
                     *,
                     -- Causal upstream departure headway (time gap behind preceding vehicle leaving stop s-1)
                     (prev_rt_departure - LAG(prev_rt_departure) OVER (
                         PARTITION BY route_id, prev_stop_id
                         ORDER BY prev_rt_departure
-                    )) AS headway_actual_s
+                    )) AS raw_headway_actual_s
                 FROM trajectories
+            ),
+            with_headway AS (
+                SELECT
+                    *,
+                    CASE
+                        WHEN raw_headway_actual_s BETWEEN 10 AND 3600 THEN raw_headway_actual_s
+                        ELSE NULL
+                    END AS headway_actual_s
+                FROM with_headway_raw
             ),
             v_weather AS ({weather_subquery}),
             v_osm AS ({osm_subquery}),
@@ -669,8 +711,8 @@ class FeatureMartAssembler:
                 COALESCE(cal.is_public_holiday, 0) AS is_public_holiday,
                 t.headway_actual_s,
                 CASE
-                    WHEN t.headway_actual_s >= 10 AND t.headway_actual_s <= 7200
-                    THEN t.headway_actual_s - MEDIAN(t.headway_actual_s) OVER (PARTITION BY t.route_id, t.stop_id)
+                    WHEN t.headway_actual_s IS NOT NULL
+                    THEN CAST(t.headway_actual_s - MEDIAN(t.headway_actual_s) OVER (PARTITION BY t.route_id, t.prev_stop_id, t.hour_of_day) AS DOUBLE)
                     ELSE NULL
                 END AS headway_deviation,
                 -- Transfer Hub Interchange Exogenous Features

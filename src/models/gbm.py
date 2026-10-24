@@ -24,10 +24,10 @@ class GradientBoostingBenchmark:
 
     def __init__(
         self,
-        target_col: str = "arrival_delay_seconds",
+        target_col: str = "delta_t_run",
         model_type: str = "lightgbm",
         objective: str = "regression",
-        huber_delta: float = 60.0,
+        huber_delta: Optional[float] = None,
         quantile_alpha: float = 0.90,
         winsorize: bool = True,
         params: Optional[Dict[str, Any]] = None,
@@ -57,7 +57,10 @@ class GradientBoostingBenchmark:
         self.target_col = target_col
         self.model_type = model_type.lower()
         self.objective = objective.lower()
-        self.huber_delta = float(huber_delta)
+        if huber_delta is None:
+            self.huber_delta = 120.0 if self.target_col == "delta_t_run" else 250.0
+        else:
+            self.huber_delta = float(huber_delta)
         self.quantile_alpha = float(quantile_alpha)
         self.winsorize = winsorize
         self._winsor_bounds: Dict[str, Tuple[float, float]] = {}
@@ -113,8 +116,13 @@ class GradientBoostingBenchmark:
 
                 if self.winsorize and col in WINSOR_CANDIDATES:
                     if is_training:
-                        lower_b = float(X[col].quantile(0.01))
-                        upper_b = float(X[col].quantile(0.99))
+                        if col == "headway_deviation":
+                            lower_b = float(X[col].quantile(0.01))
+                            upper_b = float(X[col].quantile(0.99))
+                        else:
+                            tail_q = max(0.0005, min(0.01, 2.0 / max(len(X), 1)))
+                            lower_b = float(X[col].quantile(tail_q))
+                            upper_b = float(X[col].quantile(1.0 - tail_q))
                         self._winsor_bounds[col] = (lower_b, upper_b)
                     if col in self._winsor_bounds:
                         lb, ub = self._winsor_bounds[col]
@@ -204,6 +212,18 @@ class GradientBoostingBenchmark:
                     default_params["alpha"] = self.quantile_alpha
                 elif self.objective in ("regression", "l2", "mse"):
                     default_params["objective"] = "regression"
+
+                # Enforce domain-consistent physical monotonicity on structural infrastructure
+                mono_map = {
+                    "is_dedicated_right_of_way": -1,
+                    "signalized_intersection_count": 1,
+                }
+                if self.target_col == "arrival_delay_seconds":
+                    mono_map["prev_stop_delay"] = 1
+                if any(c in mono_map for c in X_train.columns) and "monotone_constraints" not in self.params:
+                    default_params["monotone_constraints"] = [
+                        mono_map.get(c, 0) for c in X_train.columns
+                    ]
 
                 default_params.update(self.params)
 

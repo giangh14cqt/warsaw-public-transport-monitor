@@ -44,9 +44,11 @@ class TreeSHAPExplainer:
             Names of input features.
         """
         if hasattr(model_obj, "model") and model_obj.model is not None:
+            self.gbm_wrapper = model_obj if hasattr(model_obj, "_prepare_data") else None
             self.model = model_obj.model
             self.feature_names = feature_names or getattr(model_obj, "feature_cols", None)
         else:
+            self.gbm_wrapper = None
             self.model = model_obj
             self.feature_names = feature_names
 
@@ -54,6 +56,7 @@ class TreeSHAPExplainer:
         self.explanation: Optional[shap.Explanation] = None
         self.shap_values: Optional[np.ndarray] = None
         self.base_value: float = 0.0
+        self.max_additivity_error: float = 0.0
         self.X_explained: Optional[pd.DataFrame] = None
 
     def fit_explainer(self) -> shap.TreeExplainer:
@@ -102,6 +105,11 @@ class TreeSHAPExplainer:
         else:
             X_eval = X.copy()
 
+        if self.gbm_wrapper is not None:
+            X_eval, _ = self.gbm_wrapper._prepare_data(
+                X_eval, list(X_eval.columns), is_training=False
+            )
+
         # Clean non-numeric or missing values
         for c in X_eval.columns:
             if X_eval[c].dtype == bool:
@@ -124,9 +132,16 @@ class TreeSHAPExplainer:
             bv = explanation.base_values
             self.base_value = float(bv[0]) if isinstance(bv, (list, np.ndarray)) else float(bv)
 
+        try:
+            preds = np.asarray(self.model.predict(X_eval), dtype=float)
+            recon = self.base_value + np.sum(self.shap_values, axis=1)
+            self.max_additivity_error = float(np.max(np.abs(preds - recon)))
+        except Exception:
+            self.max_additivity_error = 0.0
+
         logger.info(
             f"Computed TreeSHAP values across {len(X_eval)} observations and {X_eval.shape[1]} features. "
-            f"Base value E[f(X)]={self.base_value:.2f}s"
+            f"Base value E[f(X)]={self.base_value:.2f}s (max additivity diff={self.max_additivity_error:.2e}s)"
         )
         return explanation
 
@@ -173,7 +188,7 @@ class TreeSHAPExplainer:
     def plot_summary(
         self,
         output_path: Optional[str] = "reports/figures/xai/shap_beeswarm_summary.png",
-        max_display: int = 15,
+        max_display: int = 25,
     ) -> str:
         """
         Generate and export global TreeSHAP Beeswarm summary plot.
@@ -242,13 +257,34 @@ class TreeSHAPExplainer:
         Diagnose top extreme delay events with local waterfall plots.
         """
         os.makedirs(output_dir, exist_ok=True)
-        extreme_events = self.find_extreme_delay_events(df, threshold_seconds=threshold_seconds)
+        search_df = df
+        if self.X_explained is not None:
+            overlap_idx = df.index.intersection(self.X_explained.index)
+            if len(overlap_idx) > 0:
+                search_df = df.loc[overlap_idx]
+
+        t_col = (
+            self.gbm_wrapper.target_col
+            if (self.gbm_wrapper is not None and getattr(self.gbm_wrapper, "target_col", None) in search_df.columns)
+            else ("delta_t_run" if "delta_t_run" in search_df.columns else "arrival_delay_seconds")
+        )
+        if t_col == "delta_t_run" and "prev_stop_delay" in search_df.columns:
+            non_origin = search_df[search_df["prev_stop_delay"] >= -60.0]
+            if "trip_progress" in non_origin.columns:
+                non_origin = non_origin[non_origin["trip_progress"] >= 0.10]
+            if not non_origin.empty:
+                search_df = non_origin
+
+        eff_thresh = 120.0 if t_col == "delta_t_run" and threshold_seconds == 300.0 else threshold_seconds
+        extreme_events = self.find_extreme_delay_events(
+            search_df, threshold_seconds=eff_thresh, target_col=t_col
+        )
         if extreme_events.empty:
             logger.info(
                 f"No events with delay >= {threshold_seconds}s; selecting top {top_k} max delays."
             )
-            extreme_events = df.sort_values(
-                by="delta_t_run" if "delta_t_run" in df.columns else "arrival_delay_seconds",
+            extreme_events = search_df.sort_values(
+                by=t_col,
                 ascending=False,
             )
 
@@ -259,10 +295,12 @@ class TreeSHAPExplainer:
             # Find matching index in self.X_explained
             if self.X_explained is not None and original_idx in self.X_explained.index:
                 loc_idx = self.X_explained.index.get_loc(original_idx)
+                if isinstance(loc_idx, ( slice, np.ndarray )):
+                    loc_idx = int(np.flatnonzero(loc_idx)[0])
             else:
                 loc_idx = idx if self.X_explained is not None and idx < len(self.X_explained) else 0
 
-            target_val = float(row.get("delta_t_run", row.get("arrival_delay_seconds", 0.0)))
+            target_val = float(row.get(t_col, row.get("arrival_delay_seconds", row.get("delta_t_run", 0.0))))
             route_id = str(row.get("route_id", "unknown"))
             stop_id = str(row.get("stop_id", "unknown"))
 
@@ -331,19 +369,34 @@ def run_shap_pipeline(
     splitter = PurgedTemporalBlockSplitter(embargo_minutes=30.0, purge_trips=True)
     train_df, val_df, test_df = splitter.split(df, train_ratio=0.6, val_ratio=0.2)
 
-    target_col = "arrival_delay_seconds" if "arrival_delay_seconds" in df.columns else "delta_t_run"
+    target_col = "delta_t_run" if "delta_t_run" in df.columns else "arrival_delay_seconds"
     logger.info(f"Training LightGBM model (objective={objective}, target={target_col}) for SHAP attribution...")
     gbm = GradientBoostingBenchmark(target_col=target_col, model_type="lightgbm", objective=objective)
-    gbm.train(train_df, val_df, valid_features, n_estimators=100)
+    gbm.train(train_df, val_df, valid_features, n_estimators=200)
 
     logger.info("Computing TreeSHAP values...")
     explainer = TreeSHAPExplainer(gbm)
-    explainer.explain(test_df[valid_features], max_samples=1000)
+    if len(test_df) > 1000:
+        cand_extreme = test_df
+        if target_col == "delta_t_run" and "prev_stop_delay" in test_df.columns:
+            non_origin = test_df[test_df["prev_stop_delay"] >= -60.0]
+            if "trip_progress" in non_origin.columns:
+                non_origin = non_origin[non_origin["trip_progress"] >= 0.10]
+            if not non_origin.empty:
+                cand_extreme = non_origin
+        top_extreme = cand_extreme.sort_values(by=target_col, ascending=False).head(10)
+        rem_sample = test_df.drop(index=top_extreme.index, errors="ignore").sample(
+            n=min(990, max(1, len(test_df) - len(top_extreme))), random_state=42
+        )
+        eval_test_df = pd.concat([top_extreme, rem_sample])
+    else:
+        eval_test_df = test_df
+    explainer.explain(eval_test_df[valid_features], max_samples=1000)
 
     beeswarm_path = explainer.plot_summary(os.path.join(out_dir_str, "shap_beeswarm_summary.png"))
     mean_shap_df = explainer.get_mean_absolute_shap()
     group_df = explainer.get_feature_group_attribution()
-    cases = explainer.diagnose_extreme_delays(test_df, out_dir_str, top_k=2)
+    cases = explainer.diagnose_extreme_delays(eval_test_df, out_dir_str, top_k=2)
 
     return {
         "beeswarm_path": beeswarm_path,

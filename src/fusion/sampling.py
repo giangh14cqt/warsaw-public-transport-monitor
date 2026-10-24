@@ -67,6 +67,7 @@ def build_stratified_sampling_sql(
         WITH trip_metrics AS (
             SELECT 
                 trip_id || '_' || CAST(arrival_ts AS DATE)::VARCHAR AS _trip_instance,
+                CAST(MIN(arrival_ts) AS DATE)::VARCHAR AS _service_day,
                 -- 1. Meteorological Regime (Max severity across trip duration)
                 CASE 
                     WHEN MAX(precipitation_mm) > 1.0 THEN 'mod_heavy_rain'
@@ -94,13 +95,15 @@ def build_stratified_sampling_sql(
         strata_trip_ranks AS (
             SELECT 
                 _trip_instance,
+                _service_day,
                 _regime_weather,
                 _regime_infra,
                 _regime_time,
-                COUNT(*) OVER (PARTITION BY _regime_weather, _regime_infra, _regime_time) AS _n_stratum_trips_pop,
-                COUNT(*) OVER () AS _n_total_trips_pop,
+                COUNT(*) OVER (PARTITION BY _service_day, _regime_weather, _regime_infra, _regime_time) AS _n_stratum_trips_pop,
+                COUNT(*) OVER (PARTITION BY _service_day) AS _n_total_trips_pop,
+                COUNT(DISTINCT _service_day) OVER () AS _n_days,
                 ROW_NUMBER() OVER (
-                    PARTITION BY _regime_weather, _regime_infra, _regime_time
+                    PARTITION BY _service_day, _regime_weather, _regime_infra, _regime_time
                     ORDER BY hash(_trip_instance || '_{seed}')
                 ) AS _rank_in_stratum
             FROM trip_metrics
@@ -110,10 +113,10 @@ def build_stratified_sampling_sql(
                 _trip_instance,
                 _n_stratum_trips_pop,
                 _n_total_trips_pop,
-                COUNT(*) OVER (PARTITION BY _regime_weather, _regime_infra, _regime_time) AS _n_stratum_trips_sample,
-                COUNT(*) OVER () AS _n_total_trips_sample
+                COUNT(*) OVER (PARTITION BY _service_day, _regime_weather, _regime_infra, _regime_time) AS _n_stratum_trips_sample,
+                COUNT(*) OVER (PARTITION BY _service_day) AS _n_total_trips_sample
             FROM strata_trip_ranks
-            WHERE _rank_in_stratum <= {quota}
+            WHERE _rank_in_stratum <= GREATEST(1, CAST(CEIL(CAST({quota} AS DOUBLE) / GREATEST(_n_days, 1)) AS BIGINT))
         )
         SELECT 
             b.*,

@@ -205,6 +205,46 @@ def run_stage_exogenous(args: argparse.Namespace) -> Dict[str, Any]:
     }
 
 
+def run_stage_gold(args: argparse.Namespace) -> Dict[str, Any]:
+    """Reconstruct Historian Silver trajectories and Gold stop-event ground truth."""
+    banner("STAGE 2.5: HISTORIAN SILVER & GOLD STOP-EVENT RECONSTRUCTION")
+    from src.historian.config import paths as hist_paths
+    from src.historian.gold import GoldStopEventReconstructor
+    from src.historian.silver import SilverTrajectoryProcessor
+
+    t0 = time.time()
+    force_rebuild = getattr(args, "force_rebuild", False)
+    start_date = getattr(args, "start_date", None)
+    end_date = getattr(args, "end_date", None)
+
+    silver_proc = SilverTrajectoryProcessor()
+    gold_rec = GoldStopEventReconstructor()
+
+    # Discover all bronze date partitions
+    bronze_dates = set()
+    for src_dir in hist_paths.bronze_dir.glob("source=*"):
+        for d_dir in src_dir.glob("date=*"):
+            bronze_dates.add(d_dir.name.split("=", 1)[1])
+    sorted_dates = sorted(bronze_dates)
+    if start_date:
+        sorted_dates = [d for d in sorted_dates if d >= start_date[:10]]
+    if end_date:
+        sorted_dates = [d for d in sorted_dates if d <= end_date[:10]]
+
+    processed_dates = []
+    for d_str in sorted_dates:
+        silver_proc.process_date(d_str, force=force_rebuild)
+        gold_rec.process_date(d_str, force=force_rebuild)
+        processed_dates.append(d_str)
+
+    duration = time.time() - t0
+    return {
+        "status": "success",
+        "duration_seconds": duration,
+        "processed_dates": processed_dates,
+    }
+
+
 def run_stage_fusion(args: argparse.Namespace) -> Dict[str, Any]:
     """Fuse raw telemetry, weather, and road topology into unified feature mart."""
     banner("STAGE 3: SPATIOTEMPORAL FUSION & FEATURE MART ASSEMBLY")
@@ -364,7 +404,7 @@ def run_stage_benchmark(args: argparse.Namespace) -> Dict[str, Any]:
 
     if cohort_arg == "stratified":
         logger.info(
-            f"Executing stratified benchmark across pooled, urban tram, urban bus, and suburban bus cohorts (objective={objective}, target={target_var or 'arrival_delay_seconds'})..."
+            f"Executing stratified benchmark across pooled, urban tram, urban bus, and suburban bus cohorts (objective={objective}, target={target_var or 'delta_t_run'})..."
         )
         cohort_df = run_stratified_benchmark(
             df_sample,
@@ -401,7 +441,7 @@ def run_stage_benchmark(args: argparse.Namespace) -> Dict[str, Any]:
     else:
         target_cohort = None if cohort_arg == "all" else cohort_arg
         logger.info(
-            f"Executing benchmark for cohort '{cohort_arg}' (exclude_terminals={exclude_terminals}, objective={objective}, target={target_var or 'arrival_delay_seconds'})..."
+            f"Executing benchmark for cohort '{cohort_arg}' (exclude_terminals={exclude_terminals}, objective={objective}, target={target_var or 'delta_t_run'})..."
         )
         summary_df = run_benchmark(
             df_sample,

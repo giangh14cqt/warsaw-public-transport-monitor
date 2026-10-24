@@ -128,11 +128,11 @@ def run_benchmark(
         logger.info(f"Subsampling {sample_size} rows from {len(df)} rows for benchmark efficiency.")
         df = df.sample(n=sample_size, random_state=42).copy()
 
-    # Determine primary target variable
+    # Determine primary target variable (default to inter-stop delay diff delta_t_run)
     if target and target in df.columns:
         target_col = target
     else:
-        target_col = "arrival_delay_seconds" if "arrival_delay_seconds" in df.columns else "delta_t_run"
+        target_col = "delta_t_run" if "delta_t_run" in df.columns else "arrival_delay_seconds"
 
     splitter = PurgedTemporalBlockSplitter(embargo_minutes=30.0, purge_trips=True)
     train_df, val_df, test_df = splitter.split(df, train_ratio=0.6, val_ratio=0.2)

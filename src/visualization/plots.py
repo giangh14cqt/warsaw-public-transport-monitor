@@ -28,13 +28,13 @@ def _ensure_dir(path: Union[str, Path]):
 def plot_shap_beeswarm(
     explanation: Any,
     output_path: Union[str, Path],
-    max_display: int = 15,
+    max_display: int = 25,
 ) -> str:
     """Generate and save global TreeSHAP Beeswarm summary plot."""
     _ensure_dir(output_path)
     set_publication_style()
 
-    plt.figure(figsize=(10, 7), dpi=300)
+    plt.figure(figsize=(10, 9), dpi=300)
     shap.plots.beeswarm(explanation, max_display=max_display, show=False)
     plt.title(
         "Warsaw Transit Delay Telemetry: Global TreeSHAP Feature Attribution",
@@ -104,6 +104,7 @@ def plot_ale_curve(
     feature_name: str,
     ale_df: pd.DataFrame,
     tipping_points: Optional[List[Dict[str, Any]]] = None,
+    data_rug: Optional[Union[pd.DataFrame, np.ndarray]] = None,
     output_path: Optional[Union[str, Path]] = None,
 ) -> str:
     """Generate and save a publication-quality 1D ALE diagnostic chart."""
@@ -119,7 +120,15 @@ def plot_ale_curve(
     y = ale_df["ale_centered"].to_numpy()
 
     # Main ALE curve
-    ax_main.plot(x, y, color=COLORS["primary"], lw=2.5, label="1D Accumulated Local Effect (ALE)")
+    ax_main.plot(
+        x,
+        y,
+        color=COLORS["primary"],
+        lw=2.5,
+        marker="o" if len(x) <= 8 else None,
+        markersize=4,
+        label="1D Accumulated Local Effect (ALE)",
+    )
     ax_main.axhline(0, color="gray", linestyle="--", alpha=0.5, lw=1)
 
     # Highlight freezing point for temperature
@@ -129,6 +138,8 @@ def plot_ale_curve(
         )
 
     # Highlight tipping points
+    y_span = max(float(y.max() - y.min()), 0.1)
+    x_span = max(float(x.max() - x.min()), 1e-6)
     if tipping_points:
         for pt in tipping_points:
             tx = pt["threshold_value"]
@@ -144,7 +155,7 @@ def plot_ale_curve(
             ax_main.annotate(
                 f"{pt['threshold_value']:.1f}",
                 xy=(tx, ty),
-                xytext=(tx + 0.05 * (x.max() - x.min()), ty + 1.0),
+                xytext=(tx + 0.05 * x_span, ty + 0.12 * y_span),
                 fontsize=9,
                 fontweight="bold",
                 color="#d95f02",
@@ -160,8 +171,23 @@ def plot_ale_curve(
     ax_main.grid(True, linestyle=":", alpha=0.6)
     ax_main.legend(loc="best", framealpha=0.9, fontsize=9)
 
-    # Density rug
-    ax_rug.hist(x, bins=len(x), color="gray", alpha=0.5, edgecolor="none")
+    # Empirical density rug (uses actual observation distribution when provided)
+    rug_vals = x
+    if data_rug is not None:
+        if isinstance(data_rug, pd.DataFrame) and feature_name in data_rug.columns:
+            raw_rug = pd.to_numeric(data_rug[feature_name], errors="coerce").dropna().to_numpy(dtype=float)
+            if len(raw_rug) > 0:
+                rug_vals = np.clip(raw_rug, float(x.min()), float(x.max()))
+        elif isinstance(data_rug, np.ndarray) and len(data_rug) > 0:
+            rug_vals = np.clip(np.asarray(data_rug, dtype=float), float(x.min()), float(x.max()))
+
+    ax_rug.hist(
+        rug_vals,
+        bins=min(35, max(8, len(x))),
+        color="gray",
+        alpha=0.5,
+        edgecolor="none",
+    )
     ax_rug.set_yticks([])
     ax_rug.set_xlabel(f"{feature_name.replace('_', ' ').title()}", fontsize=11)
     ax_rug.set_ylabel("Density", fontsize=8)

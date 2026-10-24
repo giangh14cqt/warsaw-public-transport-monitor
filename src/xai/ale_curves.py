@@ -38,9 +38,11 @@ class ALENonLinearDetector:
             Feature column names.
         """
         if hasattr(model_obj, "model") and model_obj.model is not None:
+            self.gbm_wrapper = model_obj if hasattr(model_obj, "_prepare_data") else None
             self.model = model_obj.model
             self.feature_cols = feature_cols or getattr(model_obj, "feature_cols", None)
         else:
+            self.gbm_wrapper = None
             self.model = model_obj
             self.feature_cols = feature_cols
 
@@ -75,40 +77,17 @@ class ALENonLinearDetector:
 
         # Ensure X_base and vals share the exact same row index by dropping NaNs in feature_name together
         valid_rows = data[feature_name].notna()
-        vals = data.loc[valid_rows, feature_name].to_numpy(dtype=float)
-        if len(vals) == 0 or np.var(vals) < 1e-9:
-            logger.warning(
-                f"Feature '{feature_name}' has zero or near-zero variance; returning flat ALE."
-            )
-            val_mean = float(np.mean(vals)) if len(vals) > 0 else 0.0
-            return pd.DataFrame(
-                {
-                    "grid_val": [val_mean],
-                    "ale": [0.0],
-                    "ale_centered": [0.0],
-                    "local_slope": [0.0],
-                    "bin_count": [len(vals)],
-                }
-            )
-
-        # Generate grid boundaries
-        if grid_type == "quantile":
-            quantiles = np.linspace(0, 1, n_bins + 1)
-            raw_grid = np.quantile(vals, quantiles)
-            grid = np.unique(raw_grid)
-            if len(grid) < 3:
-                grid = np.linspace(vals.min(), vals.max(), max(n_bins, 5))
-        else:
-            grid = np.linspace(vals.min(), vals.max(), n_bins + 1)
-
-        K = len(grid) - 1
-        ale_diffs = []
-        bin_counts = []
-
-        # Prepare evaluation copy aligned with valid_rows
         eval_cols = self.feature_cols if self.feature_cols else list(data.columns)
         active_cols = [c for c in eval_cols if c in data.columns]
-        X_base = data.loc[valid_rows, active_cols].copy()
+        if feature_name not in active_cols:
+            active_cols = active_cols + [feature_name]
+
+        if self.gbm_wrapper is not None:
+            X_base, _ = self.gbm_wrapper._prepare_data(
+                data.loc[valid_rows, active_cols], active_cols, is_training=False
+            )
+        else:
+            X_base = data.loc[valid_rows, active_cols].copy()
 
         # Handle booleans and categoricals
         for c in X_base.columns:
@@ -118,6 +97,55 @@ class ALENonLinearDetector:
                 X_base[c] = X_base[c].cat.codes.astype(float)
             elif X_base[c].dtype == object:
                 X_base[c] = pd.to_numeric(X_base[c], errors="coerce").fillna(0.0)
+
+        vals = X_base[feature_name].to_numpy(dtype=float)
+        if len(vals) == 0 or np.var(vals) < 1e-9:
+            logger.warning(
+                f"Feature '{feature_name}' has zero or near-zero variance; returning flat ALE."
+            )
+            val_mean = float(np.mean(vals)) if len(vals) > 0 else 0.0
+            return pd.DataFrame(
+                {
+                    "grid_val": [val_mean, val_mean + 1.0],
+                    "ale": [0.0, 0.0],
+                    "ale_centered": [0.0, 0.0],
+                    "local_slope": [0.0, 0.0],
+                    "bin_count": [len(vals), 0],
+                }
+            )
+
+        # Generate grid boundaries with special support for zero-inflated features (e.g. precipitation)
+        zero_frac = float(np.mean(vals == 0.0))
+        pos_vals = vals[vals > 0.0]
+        if grid_type == "quantile" and zero_frac > 0.5 and len(pos_vals) >= 3:
+            n_pos_unique = len(np.unique(pos_vals))
+            if n_pos_unique >= 2:
+                pos_q = np.quantile(
+                    pos_vals, np.linspace(0.0, 0.99, min(n_bins, max(4, n_pos_unique)))
+                )
+                grid = np.unique(np.concatenate([[0.0], pos_q]))
+            else:
+                grid = np.linspace(0.0, float(pos_vals.max()), 5)
+        elif grid_type == "quantile":
+            if len(np.unique(vals)) > 15:
+                p01, p99 = float(np.quantile(vals, 0.01)), float(np.quantile(vals, 0.99))
+                if p99 > p01:
+                    vals_for_grid = np.clip(vals, p01, p99)
+                else:
+                    vals_for_grid = vals
+            else:
+                vals_for_grid = vals
+            quantiles = np.linspace(0, 1, n_bins + 1)
+            raw_grid = np.quantile(vals_for_grid, quantiles)
+            grid = np.unique(raw_grid)
+            if len(grid) < 3 and len(np.unique(vals)) > 2:
+                grid = np.linspace(vals_for_grid.min(), vals_for_grid.max(), max(n_bins, 5))
+        else:
+            grid = np.linspace(vals.min(), vals.max(), n_bins + 1)
+
+        K = len(grid) - 1
+        ale_diffs = []
+        bin_counts = []
 
         for k in range(K):
             z_low, z_high = grid[k], grid[k + 1]
@@ -191,11 +219,26 @@ class ALENonLinearDetector:
         List[Dict[str, Any]]
             Detected tipping points with threshold, slope_before, slope_after, and description.
         """
-        if len(ale_df) < 4:
+        binary_indicators = {
+            "is_dedicated_right_of_way",
+            "is_tram",
+            "is_peak_hour",
+            "is_morning_peak",
+            "is_evening_peak",
+            "is_weekend",
+            "is_school_day",
+            "is_public_holiday",
+            "is_raining",
+            "is_study_corridor",
+            "is_metro_proximity",
+        }
+        if len(ale_df) < 4 or feature_name in binary_indicators or ale_df["grid_val"].nunique() <= 2:
             return []
 
         x = ale_df["grid_val"].to_numpy()
         y = ale_df["ale_centered"].to_numpy()
+        if float(y.max() - y.min()) < max(0.15, min_change_seconds * 0.15):
+            return []
 
         dx = np.diff(x)
         dx[dx == 0] = 1e-9
@@ -261,6 +304,7 @@ class ALENonLinearDetector:
             feature_name=feature_name,
             ale_df=ale_df,
             tipping_points=tipping_points,
+            data_rug=data_rug,
             output_path=output_path,
         )
 
@@ -352,10 +396,10 @@ def run_ale_pipeline(
     splitter = PurgedTemporalBlockSplitter(embargo_minutes=30.0, purge_trips=True)
     train_df, val_df, test_df = splitter.split(df, train_ratio=0.6, val_ratio=0.2)
 
-    target_col = "arrival_delay_seconds" if "arrival_delay_seconds" in df.columns else "delta_t_run"
+    target_col = "delta_t_run" if "delta_t_run" in df.columns else "arrival_delay_seconds"
     logger.info(f"Training gradient boosting model (objective={objective}, target={target_col}) for ALE analysis...")
     gbm = GradientBoostingBenchmark(target_col=target_col, model_type="lightgbm", objective=objective)
-    gbm.train(train_df, val_df, valid_features, n_estimators=80)
+    gbm.train(train_df, val_df, valid_features, n_estimators=200)
 
     ale_target_features = [
         "prev_stop_delay",
@@ -371,9 +415,16 @@ def run_ale_pipeline(
     ]
     active_ale_targets = [c for c in ale_target_features if c in test_df.columns]
 
+    # Use combined out-of-sample (val + test) if test_df has sparse meteorological variance
+    ale_eval_df = test_df[valid_features]
+    if "precipitation_mm" in ale_eval_df.columns and (ale_eval_df["precipitation_mm"] > 0).sum() < 20:
+        ale_eval_df = pd.concat([val_df[valid_features], test_df[valid_features]], ignore_index=True)
+        if (ale_eval_df["precipitation_mm"] > 0).sum() < 20:
+            ale_eval_df = df[valid_features]
+
     detector = ALENonLinearDetector(gbm)
     report = detector.run_suite(
-        test_df[valid_features],
+        ale_eval_df,
         features=active_ale_targets,
         output_dir=out_dir_str,
     )

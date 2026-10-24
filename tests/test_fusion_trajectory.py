@@ -67,8 +67,8 @@ class TestTrajectoryReconstructor(unittest.TestCase):
         # Stop 2 (intermediate)
         self.assertEqual(processed.loc[1, "prev_stop_id"], "1001")
         self.assertEqual(processed.loc[1, "prev_stop_delay"], 30.0)
-        # Delta t_run = 50 - 30 = 20 seconds
-        self.assertEqual(processed.loc[1, "delta_t_run"], 20.0)
+        # Delta t_run = 50 (arrival at stop 2) - 35 (departure from stop 1) = 15 seconds
+        self.assertEqual(processed.loc[1, "delta_t_run"], 15.0)
         self.assertEqual(processed.loc[1, "delta_t_dwell"], 0.0)
         # Observed runtime: 1120 - 1005 = 115 seconds
         self.assertEqual(processed.loc[1, "observed_run_time_s"], 115.0)

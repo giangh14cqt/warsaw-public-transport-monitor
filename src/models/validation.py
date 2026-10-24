@@ -243,6 +243,47 @@ class PurgedTemporalBlockSplitter:
                 )
                 test_mask = test_mask & (~df_sorted[self.trip_col].isin(purged_val_test))
 
+        # Also purge physical vehicles rotating across split boundaries within a 45-min rotation window
+        if self.purge_trips and self.vehicle_col in df_sorted.columns and embargo_mins > 0:
+            rot_win = pd.Timedelta(minutes=max(45.0, embargo_mins * 1.5))
+            tv_pre_vehs = set(
+                df_sorted[
+                    (df_sorted[time_col] >= (t_train_cutoff - rot_win))
+                    & (df_sorted[time_col] <= t_train_cutoff)
+                ][self.vehicle_col].dropna()
+            )
+            tv_post_vehs = set(
+                df_sorted[
+                    (df_sorted[time_col] >= t_val_start)
+                    & (df_sorted[time_col] <= (t_val_start + rot_win))
+                ][self.vehicle_col].dropna()
+            )
+            tv_rot_vehs = tv_pre_vehs & tv_post_vehs
+            if tv_rot_vehs:
+                val_mask = val_mask & ~(
+                    df_sorted[self.vehicle_col].isin(tv_rot_vehs)
+                    & (df_sorted[time_col] <= (t_val_start + rot_win))
+                )
+
+            vt_pre_vehs = set(
+                df_sorted[
+                    (df_sorted[time_col] >= (t_val_cutoff - rot_win))
+                    & (df_sorted[time_col] <= t_val_cutoff)
+                ][self.vehicle_col].dropna()
+            )
+            vt_post_vehs = set(
+                df_sorted[
+                    (df_sorted[time_col] >= t_test_start)
+                    & (df_sorted[time_col] <= (t_test_start + rot_win))
+                ][self.vehicle_col].dropna()
+            )
+            vt_rot_vehs = vt_pre_vehs & vt_post_vehs
+            if vt_rot_vehs:
+                test_mask = test_mask & ~(
+                    df_sorted[self.vehicle_col].isin(vt_rot_vehs)
+                    & (df_sorted[time_col] <= (t_test_start + rot_win))
+                )
+
         train_df = df_sorted[train_mask].copy()
         val_df = df_sorted[val_mask].copy()
         test_df = df_sorted[test_mask].copy()

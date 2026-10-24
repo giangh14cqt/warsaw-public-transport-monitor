@@ -136,7 +136,9 @@ class ParquetPartitionStorage:
         df["record_ingested_at"] = df["record_ingested_at"].astype("string")
 
         table = pa.Table.from_pandas(df, schema=PARQUET_SCHEMA, preserve_index=False)
-        pq.write_table(table, file_path, compression="snappy")
+        tmp_path = f"{file_path}.tmp"
+        pq.write_table(table, tmp_path, compression="snappy")
+        os.replace(tmp_path, file_path)
 
         self._total_flushed_records += len(batch_records)
         self._total_files_written += 1

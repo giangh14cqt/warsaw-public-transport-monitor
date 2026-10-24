@@ -43,9 +43,11 @@ class InteractionQuantifier:
             Ordered list of feature column names.
         """
         if hasattr(model_obj, "model") and model_obj.model is not None:
+            self.gbm_wrapper = model_obj if hasattr(model_obj, "_prepare_data") else None
             self.model = model_obj.model
             self.feature_cols = feature_cols or getattr(model_obj, "feature_cols", None)
         else:
+            self.gbm_wrapper = None
             self.model = model_obj
             self.feature_cols = feature_cols
 
@@ -59,7 +61,10 @@ class InteractionQuantifier:
 
     def _clean_data(self, data: pd.DataFrame, features: List[str]) -> pd.DataFrame:
         """Prepare clean numeric copy of features."""
-        X = data[features].copy()
+        if self.gbm_wrapper is not None:
+            X, _ = self.gbm_wrapper._prepare_data(data[features], features, is_training=False)
+        else:
+            X = data[features].copy()
         for c in X.columns:
             if X[c].dtype == bool:
                 X[c] = X[c].astype(float)
@@ -145,18 +150,26 @@ class InteractionQuantifier:
         X = self._clean_data(data, active_cols)
 
         shock_vals = X[shock_feature].to_numpy()
-        val_shock = float(np.percentile(shock_vals, shock_percentile))
-        val_baseline = float(np.percentile(shock_vals, baseline_percentile))
+        if (shock_vals > 0).mean() < 0.20 and (shock_vals > 0).sum() >= 3:
+            val_baseline = 0.0
+            val_shock = float(np.percentile(shock_vals[shock_vals > 0], shock_percentile))
+        else:
+            val_shock = float(np.percentile(shock_vals, shock_percentile))
+            val_baseline = float(np.percentile(shock_vals, baseline_percentile))
 
         # Counterfactual scenarios across the evaluation sample
         # 1. Mixed traffic (ROW=0) under baseline vs shock
         X_mixed_base = X.copy()
         X_mixed_base[infra_feature] = 0.0
+        if infra_feature == "is_dedicated_right_of_way" and "is_tram" in X_mixed_base.columns:
+            X_mixed_base["is_tram"] = 0.0
         X_mixed_base[shock_feature] = val_baseline
         pred_mixed_base = np.mean(self.model.predict(X_mixed_base))
 
         X_mixed_shock = X.copy()
         X_mixed_shock[infra_feature] = 0.0
+        if infra_feature == "is_dedicated_right_of_way" and "is_tram" in X_mixed_shock.columns:
+            X_mixed_shock["is_tram"] = 0.0
         X_mixed_shock[shock_feature] = val_shock
         pred_mixed_shock = np.mean(self.model.predict(X_mixed_shock))
 
@@ -222,7 +235,10 @@ class InteractionQuantifier:
         X = self._clean_data(data, active_cols)
 
         shock_vals = X[shock_feature].to_numpy()
-        x_grid = np.linspace(np.percentile(shock_vals, 2), np.percentile(shock_vals, 98), n_points)
+        if (shock_vals > 0).mean() < 0.20 and (shock_vals > 0).sum() >= 3:
+            x_grid = np.linspace(0.0, float(np.percentile(shock_vals[shock_vals > 0], 98)), n_points)
+        else:
+            x_grid = np.linspace(np.percentile(shock_vals, 2), np.percentile(shock_vals, 98), n_points)
 
         preds_mixed = []
         preds_dedicated = []
@@ -231,11 +247,15 @@ class InteractionQuantifier:
             X_temp = X.copy()
             X_temp[shock_feature] = val
 
-            X_temp[infra_feature] = 0.0
-            preds_mixed.append(float(np.mean(self.model.predict(X_temp))))
+            X_mixed = X_temp.copy()
+            X_mixed[infra_feature] = 0.0
+            if infra_feature == "is_dedicated_right_of_way" and "is_tram" in X_mixed.columns:
+                X_mixed["is_tram"] = 0.0
+            preds_mixed.append(float(np.mean(self.model.predict(X_mixed))))
 
-            X_temp[infra_feature] = 1.0
-            preds_dedicated.append(float(np.mean(self.model.predict(X_temp))))
+            X_ded = X_temp.copy()
+            X_ded[infra_feature] = 1.0
+            preds_dedicated.append(float(np.mean(self.model.predict(X_ded))))
 
         preds_mixed = np.array(preds_mixed)
         preds_dedicated = np.array(preds_dedicated)
@@ -267,6 +287,7 @@ class InteractionQuantifier:
             "signalized_intersection_count",
             "segment_length_meters",
             "headway_deviation",
+            "precipitation_mm",
         ]
         shocks = shock_features or default_shocks
         results = {}
@@ -333,13 +354,30 @@ def run_interaction_pipeline(
     splitter = PurgedTemporalBlockSplitter(embargo_minutes=30.0, purge_trips=True)
     train_df, val_df, test_df = splitter.split(df, train_ratio=0.6, val_ratio=0.2)
 
-    target_col = "arrival_delay_seconds" if "arrival_delay_seconds" in df.columns else "delta_t_run"
+    target_col = "delta_t_run" if "delta_t_run" in df.columns else "arrival_delay_seconds"
     logger.info(f"Training gradient boosting model (objective={objective}, target={target_col}) for interaction analysis...")
     gbm = GradientBoostingBenchmark(target_col=target_col, model_type="lightgbm", objective=objective)
-    gbm.train(train_df, val_df, valid_features, n_estimators=80)
+    gbm.train(train_df, val_df, valid_features, n_estimators=200)
+
+    eval_df = test_df[valid_features]
+    if "precipitation_mm" in eval_df.columns and (eval_df["precipitation_mm"] > 0).sum() < 20:
+        eval_df = pd.concat([val_df[valid_features], test_df[valid_features]], ignore_index=True)
+        if (eval_df["precipitation_mm"] > 0).sum() < 20:
+            eval_df = df[valid_features]
 
     quantifier = InteractionQuantifier(gbm)
-    suite_res = quantifier.run_suite(test_df[valid_features], output_dir=out_dir_str)
+    suite_res = quantifier.run_suite(eval_df, output_dir=out_dir_str)
+
+    # Also compute exact TreeSHAP interaction matrix and export to reports/tables/xai/
+    try:
+        int_mat, feat_names = quantifier.compute_interaction_matrix(eval_df, max_samples=500)
+        tables_xai_dir = str(paths.tables_dir / "xai")
+        os.makedirs(tables_xai_dir, exist_ok=True)
+        int_df = pd.DataFrame(int_mat, index=feat_names, columns=feat_names)
+        int_df.to_csv(os.path.join(tables_xai_dir, "shap_interaction_matrix.csv"))
+    except Exception as e:
+        logger.warning(f"Could not export SHAP interaction matrix CSV: {e}")
+
     return suite_res
 
 

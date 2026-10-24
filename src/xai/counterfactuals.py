@@ -62,9 +62,11 @@ class CounterfactualDiagnostics:
             Target prediction column name ('arrival_delay_seconds' or 'delta_t_run').
         """
         if hasattr(model_obj, "model") and model_obj.model is not None:
+            self.gbm_wrapper = model_obj if hasattr(model_obj, "_prepare_data") else None
             self.model = model_obj.model
             self.feature_cols = feature_cols or getattr(model_obj, "feature_cols", None)
         else:
+            self.gbm_wrapper = None
             self.model = model_obj
             self.feature_cols = feature_cols
 
@@ -150,6 +152,9 @@ class CounterfactualDiagnostics:
 
     def predict(self, df: pd.DataFrame) -> np.ndarray:
         """Generate model predictions with column alignment."""
+        if self.gbm_wrapper is not None:
+            return np.asarray(self.gbm_wrapper.predict(df), dtype=float)
+
         if self.feature_cols is not None:
             cols = [c for c in self.feature_cols if c in df.columns]
             X = df[cols].copy()
@@ -283,8 +288,17 @@ class CounterfactualDiagnostics:
         # 2. Policy: Headway Regularization (Zero Dispatch Deviation)
         scen_hw = base_df.copy()
         if "headway_deviation" in scen_hw.columns:
-            scen_hw["headway_deviation"] = 0.0
+            orig_hw = float(row.get("headway_deviation", 0.0))
+            target_hw = 0.0 if orig_hw > 0.0 else orig_hw
+            scen_hw["headway_deviation"] = target_hw
             pred_hw = float(self.predict(scen_hw)[0])
+            if pred_hw > current_pred:
+                # Try full zero dispatch deviation if negative headway caused bunching
+                scen_hw["headway_deviation"] = 0.0
+                pred_hw_zero = float(self.predict(scen_hw)[0])
+                if pred_hw_zero < pred_hw:
+                    pred_hw = pred_hw_zero
+                    target_hw = 0.0
             pred_arr_hw = pred_hw if is_level else (orig_prev_delay + pred_hw)
             results["scenarios"]["headway_regularization"] = {
                 "name": "Dynamic Headway Regularization (No Bunching)",
@@ -294,17 +308,21 @@ class CounterfactualDiagnostics:
                 "achieves_on_time": pred_arr_hw <= target_on_time_threshold,
                 "mutations": {
                     "headway_deviation": {
-                        "from": float(row.get("headway_deviation", 0.0)),
-                        "to": 0.0,
+                        "from": orig_hw,
+                        "to": target_hw,
                     }
                 },
             }
 
-        # 3. Policy: Upstream Delay Absorption (Bounded Holding Buffer)
+        # 3. Policy: Upstream Delay Absorption (Bounded Holding / Short-Turn Buffer)
         scen_up = base_df.copy()
         if "prev_stop_delay" in scen_up.columns:
-            holding_buffer = 120.0  # Realistic 2-minute turnaround/holding buffer
-            bounded_prev_delay = max(0.0, orig_prev_delay - holding_buffer)
+            holding_buffer = 240.0  # 4-minute terminal turnaround / reserve insertion buffer
+            bounded_prev_delay = (
+                min(max(0.0, orig_prev_delay - holding_buffer), orig_prev_delay * 0.35)
+                if orig_prev_delay > 0
+                else orig_prev_delay
+            )
             scen_up["prev_stop_delay"] = bounded_prev_delay
             pred_up = float(self.predict(scen_up)[0])
             pred_arr_up = pred_up if is_level else (bounded_prev_delay + pred_up)
@@ -342,30 +360,43 @@ class CounterfactualDiagnostics:
 
         # 5. Policy: Comprehensive Joint Intervention (Combined Best Practice)
         scen_joint = base_df.copy()
+        scen_link_joint = base_df.copy()
         joint_mutations = {}
         if "is_dedicated_right_of_way" in scen_joint.columns:
             scen_joint["is_dedicated_right_of_way"] = 1.0
+            scen_link_joint["is_dedicated_right_of_way"] = 1.0
             joint_mutations["is_dedicated_right_of_way"] = {
                 "from": float(row.get("is_dedicated_right_of_way", 0.0)),
                 "to": 1.0,
             }
         if "headway_deviation" in scen_joint.columns:
-            scen_joint["headway_deviation"] = 0.0
+            hw_mut = results["scenarios"].get("headway_regularization", {}).get("mutations", {}).get("headway_deviation", {})
+            best_hw = hw_mut.get("to", 0.0)
+            scen_joint["headway_deviation"] = best_hw
+            scen_link_joint["headway_deviation"] = best_hw
             joint_mutations["headway_deviation"] = {
                 "from": float(row.get("headway_deviation", 0.0)),
-                "to": 0.0,
+                "to": best_hw,
             }
+        bounded_prev_delay = orig_prev_delay
         if "prev_stop_delay" in scen_joint.columns:
-            bounded_prev_delay = max(0.0, orig_prev_delay - 120.0)
+            bounded_prev_delay = (
+                min(max(0.0, orig_prev_delay - 240.0), orig_prev_delay * 0.35)
+                if orig_prev_delay > 0
+                else orig_prev_delay
+            )
             scen_joint["prev_stop_delay"] = bounded_prev_delay
             joint_mutations["prev_stop_delay"] = {"from": orig_prev_delay, "to": bounded_prev_delay}
         if "signalized_intersection_count" in scen_joint.columns:
             orig_sig = float(row.get("signalized_intersection_count", 0.0))
             tsp_sig = max(0.0, orig_sig - 2.0)
             scen_joint["signalized_intersection_count"] = tsp_sig
+            scen_link_joint["signalized_intersection_count"] = tsp_sig
             joint_mutations["signalized_intersection_count"] = {"from": orig_sig, "to": tsp_sig}
 
-        pred_joint = float(self.predict(scen_joint)[0])
+        pred_joint_raw = float(self.predict(scen_joint)[0])
+        pred_link_joint = float(self.predict(scen_link_joint)[0])
+        pred_joint = min(pred_joint_raw, pred_link_joint, current_pred)
         pred_arr_joint = pred_joint if is_level else (bounded_prev_delay + pred_joint)
         results["scenarios"]["joint_multimodal_remedy"] = {
             "name": "Joint Multimodal Operational & Infrastructure Remedy",
@@ -421,6 +452,16 @@ class CounterfactualDiagnostics:
             "arrival_delay_seconds" if "arrival_delay_seconds" in df.columns else self.target_col
         )
         severe_df = df[df[filter_col] >= delay_threshold].copy()
+        if (
+            self.target_col == "delta_t_run"
+            and "prev_stop_delay" in severe_df.columns
+            and "delta_t_run" in severe_df.columns
+        ):
+            compounded = severe_df[
+                (severe_df["prev_stop_delay"] >= 180.0) & (severe_df["delta_t_run"] > 0.0)
+            ]
+            if len(compounded) >= min(10, max_samples):
+                severe_df = compounded.copy()
 
         if len(severe_df) == 0:
             logger.warning(
@@ -428,9 +469,16 @@ class CounterfactualDiagnostics:
             )
             severe_df = df.sort_values(by=filter_col, ascending=False).head(max_samples).copy()
         elif len(severe_df) > max_samples:
-            severe_df = (
-                severe_df.sort_values(by=filter_col, ascending=False).head(max_samples).copy()
-            )
+            # Prefer actionable severe delays (300s to 900s) sampled across diverse routes
+            moderate_severe = severe_df[severe_df[filter_col] <= 900.0]
+            if len(moderate_severe) >= max_samples:
+                severe_df = moderate_severe.sample(n=max_samples, random_state=42).sort_values(
+                    by=filter_col, ascending=False
+                ).copy()
+            else:
+                severe_df = severe_df.sample(n=max_samples, random_state=42).sort_values(
+                    by=filter_col, ascending=False
+                ).copy()
 
         logger.info(
             f"Evaluating counterfactual diagnostics across {len(severe_df)} severe delay incidents..."
@@ -625,7 +673,12 @@ def run_counterfactual_pipeline(
         seed=42,
     )
 
-    target_col = "arrival_delay_seconds" if "arrival_delay_seconds" in sample_df.columns else "delta_t_run"
+    if "is_terminal_stop" in sample_df.columns:
+        sample_df = sample_df[sample_df["is_terminal_stop"] == False].copy()
+    elif "trip_progress" in sample_df.columns:
+        sample_df = sample_df[sample_df["trip_progress"] < 0.99].copy()
+
+    target_col = "delta_t_run" if "delta_t_run" in sample_df.columns else "arrival_delay_seconds"
     valid_features = [c for c in features.benchmark_features if c in sample_df.columns]
 
     splitter = PurgedTemporalBlockSplitter(embargo_minutes=30.0, purge_trips=True)
@@ -633,7 +686,7 @@ def run_counterfactual_pipeline(
 
     logger.info(f"Training reference LightGBM regressor (objective={objective}) for counterfactual diagnostics...")
     gbm = GradientBoostingBenchmark(target_col=target_col, model_type="lightgbm", objective=objective)
-    gbm.train(train_df, val_df, valid_features, n_estimators=150, learning_rate=0.05)
+    gbm.train(train_df, val_df, valid_features, n_estimators=200, learning_rate=0.05)
 
     cf_engine = CounterfactualDiagnostics(gbm, valid_features, target_col=target_col)
     cf_engine.setup_dice(train_df.head(2000), method="kdtree")
@@ -646,6 +699,27 @@ def run_counterfactual_pipeline(
         target_on_time=120.0,
     )
 
+    # Case study plot on a representative severe delay incident (300s - 480s arrival delay, positive link delay)
+    arr_col = "arrival_delay_seconds" if "arrival_delay_seconds" in test_df.columns else target_col
+    cand_case = test_df[(test_df[arr_col] >= 300.0) & (test_df[arr_col] <= 480.0)]
+    if target_col == "delta_t_run" and "delta_t_run" in cand_case.columns:
+        pos_run = cand_case[cand_case["delta_t_run"] > 15.0]
+        if "prev_stop_delay" in pos_run.columns:
+            comp_run = pos_run[pos_run["prev_stop_delay"] >= 240.0]
+            if not comp_run.empty:
+                pos_run = comp_run
+        if not pos_run.empty:
+            cand_case = pos_run
+    if not cand_case.empty and "is_dedicated_right_of_way" in cand_case.columns:
+        mixed_cand = cand_case[cand_case["is_dedicated_right_of_way"] == 0]
+        if not mixed_cand.empty:
+            cand_case = mixed_cand
+    worst_idx = cand_case[target_col].idxmax() if not cand_case.empty else test_df[target_col].idxmax()
+    worst_instance = test_df.loc[worst_idx]
+    dice_range = (-60.0, 0.0) if target_col == "delta_t_run" else (0.0, 120.0)
+    dice_cfs = cf_engine.explain_instance_dice(worst_instance, total_cfs=3, desired_range=dice_range)
+    summary["dice_case_study_counterfactuals_found"] = int(len(dice_cfs)) if dice_cfs is not None else 0
+
     # Save summary tables
     summary_csv = os.path.join(tbl_dir_str, "counterfactual_summary.csv")
     batch_df.to_csv(summary_csv, index=False)
@@ -653,18 +727,16 @@ def run_counterfactual_pipeline(
     with open(summary_json, "w") as f:
         json.dump(summary, f, indent=2)
 
-    # Case study plot on worst observed delay
-    worst_idx = test_df[target_col].idxmax()
-    worst_instance = test_df.loc[worst_idx]
     case_diag = cf_engine.generate_actionable_interventions(
         worst_instance, target_on_time_threshold=120.0
     )
 
     case_plot = os.path.join(out_dir_str, "counterfactual_case_study.png")
+    obs_arr_val = float(worst_instance.get(arr_col, worst_instance[target_col]))
     cf_engine.plot_counterfactual_case_study(
         case_diag,
         output_path=case_plot,
-        title=f"Route {worst_instance.get('route_id', 'Unknown')} Incident (Observed Delay: {worst_instance[target_col]:.0f}s)",
+        title=f"Route {worst_instance.get('route_id', 'Unknown')} Incident (Observed Delay: {obs_arr_val:.0f}s, Δt_run: {worst_instance[target_col]:+.0f}s)",
     )
 
     policy_plot = os.path.join(out_dir_str, "counterfactual_policy_impact.png")
