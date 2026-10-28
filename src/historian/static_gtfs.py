@@ -275,9 +275,6 @@ class HistorianGTFSVersioner:
         candidate_dirs = []
         if self.gtfs_dir.exists():
             candidate_dirs.append(self.gtfs_dir)
-        fallback_dir = paths.root / "data" / "gtfs"
-        if fallback_dir.exists() and fallback_dir not in candidate_dirs:
-            candidate_dirs.append(fallback_dir)
 
         duckdb_candidates = []
         for cdir in candidate_dirs:
@@ -296,6 +293,12 @@ class HistorianGTFSVersioner:
 
             for db_path in sorted(cdir.glob("*/schedule_index.duckdb")):
                 duckdb_candidates.append(db_path)
+
+        if not duckdb_candidates and self.gtfs_dir == paths.gtfs_dir:
+            fallback_dir = paths.root / "data" / "gtfs"
+            if fallback_dir.exists():
+                for db_path in sorted(fallback_dir.glob("*/schedule_index.duckdb")):
+                    duckdb_candidates.append(db_path)
 
         if not duckdb_candidates:
             return None
@@ -323,26 +326,33 @@ class HistorianGTFSVersioner:
                 except Exception:
                     pass
 
-            has_date = False
+            n_date_services = 0
             if cal_dates_file.exists():
                 try:
                     cd = pd.read_csv(cal_dates_file, dtype=str)
-                    has_date = (cd["date"] == target_compact).any()
+                    n_date_services = int((cd["date"] == target_compact).sum())
                 except Exception:
                     pass
 
             matches.append(
                 {
                     "path": db_path,
-                    "has_date": has_date,
+                    "has_date": n_date_services > 0,
+                    "has_full_date": n_date_services >= 10,
+                    "n_services": n_date_services,
                     "feed_start": feed_start,
                     "mtime": db_path.stat().st_mtime,
                 }
             )
 
+        full_matches = [m for m in matches if m["has_full_date"]]
+        if full_matches:
+            full_matches.sort(key=lambda m: (m["feed_start"], m["mtime"]), reverse=True)
+            return full_matches[0]["path"]
+
         date_matches = [m for m in matches if m["has_date"]]
         if date_matches:
-            date_matches.sort(key=lambda m: (m["feed_start"], m["mtime"]), reverse=True)
+            date_matches.sort(key=lambda m: (m["n_services"], m["feed_start"], m["mtime"]), reverse=True)
             return date_matches[0]["path"]
 
         matches.sort(key=lambda m: (m["feed_start"], m["mtime"]), reverse=True)

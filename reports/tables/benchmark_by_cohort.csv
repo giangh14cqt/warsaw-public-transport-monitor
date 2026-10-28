@@ -1,13 +1,13 @@
 cohort,model,val_mae,val_rmse,val_medae,val_wape,val_r2,val_mae_dry,val_mae_rain,val_mae_peak,val_mae_offpeak
-pooled,TWFE Panel Regression,25.1009,39.3619,17.2973,77.0105,0.0284,25.09,26.04,25.52,24.81
-pooled,LightGBM Regressor,22.2715,35.5439,14.0339,68.3297,0.2077,22.29,20.78,22.48,22.12
-pooled,CatBoost Regressor,23.0857,36.8453,14.6221,70.8278,0.1486,23.1,22.01,23.39,22.88
-urban_tram,TWFE Panel Regression,21.4221,33.5962,14.9824,61.1386,0.0699,21.47,9.84,21.12,21.63
-urban_tram,LightGBM Regressor,15.5937,26.2143,10.0821,44.5043,0.4337,15.61,10.57,15.14,15.91
-urban_tram,CatBoost Regressor,18.0303,29.1067,11.968,51.4582,0.3019,18.06,9.31,17.67,18.28
-urban_bus,TWFE Panel Regression,27.5087,43.2724,18.9965,87.5399,-0.0163,27.51,28.0,28.39,26.82
-urban_bus,LightGBM Regressor,25.3418,40.9023,15.5348,80.644,0.092,25.36,20.28,25.88,24.92
-urban_bus,CatBoost Regressor,25.6327,41.635,15.6277,81.5699,0.0592,25.66,20.57,26.26,25.14
-suburban_bus,TWFE Panel Regression,27.1794,38.5118,20.3717,95.9828,-0.0905,27.2,26.89,28.66,26.64
-suburban_bus,LightGBM Regressor,23.9428,35.6684,16.2874,84.5529,0.0646,23.77,25.91,24.16,23.86
-suburban_bus,CatBoost Regressor,24.0845,35.8673,15.4792,85.0533,0.0542,23.94,25.7,24.0,24.11
+pooled,TWFE Panel Regression,25.5153,41.508,16.9626,77.9559,0.0371,25.66,24.4,27.44,24.4
+pooled,LightGBM Regressor,23.0441,38.8439,14.0784,70.4057,0.1567,23.17,22.1,24.78,22.04
+pooled,CatBoost Regressor,23.7656,39.4222,14.5485,72.6101,0.1314,23.9,22.74,25.61,22.7
+urban_tram,TWFE Panel Regression,22.3905,34.4978,15.5343,63.338,0.051,22.49,21.82,22.62,22.21
+urban_tram,LightGBM Regressor,15.283,26.0997,9.182,43.2323,0.4568,15.32,15.05,15.67,14.97
+urban_tram,CatBoost Regressor,17.6828,28.4759,11.373,50.021,0.3534,17.73,17.38,18.09,17.36
+urban_bus,TWFE Panel Regression,26.4491,42.8313,17.3146,83.2098,0.0158,26.62,25.05,29.58,24.9
+urban_bus,LightGBM Regressor,24.3416,40.3792,14.596,76.5796,0.1253,24.48,23.16,27.36,22.84
+urban_bus,CatBoost Regressor,24.9134,41.014,14.9652,78.3784,0.0976,25.08,23.56,27.95,23.41
+suburban_bus,TWFE Panel Regression,27.9386,50.1954,18.8478,88.5047,0.03,27.76,31.1,31.9,25.62
+suburban_bus,LightGBM Regressor,24.5101,46.0674,15.8145,77.6439,0.183,24.37,26.96,27.75,22.61
+suburban_bus,CatBoost Regressor,25.6863,47.4204,16.8064,81.3697,0.1343,25.54,28.28,29.0,23.75

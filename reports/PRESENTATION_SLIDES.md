@@ -31,10 +31,10 @@
 [Bronze Verbatim Store]                    [Raw Hive Parquet Partitions]
   ▼                                           │
 [Silver Kinematic Trajectories]               │
-  │ (38.2M GPS fixes, velocity, accel)        │
+  │ (83.4M GPS fixes, velocity, accel)        │
   ▼                                           │
 [Gold Reconstructed Stop Events] ─────────────┘
-  │ (2.64M arrival/departure events across 103,450 trips)
+  │ (5.04M arrival/departure events across 195,582 trips)
   ▼
 [Embedded Zero-Lock DuckDB Streaming Fusion]
    ├── IMGW-PIB Synoptic Weather (is_raining, rain categories, 1h/3h lags)
@@ -42,11 +42,11 @@
    ├── Polish School & Holiday Calendar (Mazowieckie academic schedule)
    └── Metro M1/M2 Station Buffers & Transfer Hub Centrality
   ▼
-[Multi-Dimensional Stratified Sampling & Normalized IPS Weighting]
-   └── 12-cell stratification: Weather x ROW x Peak (unbiased population estimates)
+[Full-Dataset & Multi-Dimensional Stratified IPS Weighting]
+   └── 4.33M fused observations (plus 12-cell Weather x ROW x Peak IPS weighting)
   ▼
 [Purged Temporal Block Validation (30m Embargo + Winsorization + Huber Loss)]
-   ├── Econometric TWFE Baseline (Weighted Least Squares + Standardized β*)
+   ├── Econometric TWFE Baseline (Weighted Least Squares + Route-Clustered CRVE)
    ├── Non-Linear Gradient Boosters (LightGBM & CatBoost with Huber Loss δ=60s)
    └── xAI Suite (TreeSHAP, ALE Curves, 2D Interactions, DiCE Counterfactuals)
 ```
@@ -55,10 +55,10 @@
 
 ## Slide 3: Telemetry & Feature Engineering Scale
 
-- **Observed Ground-Truth Tier (Track B Historian)**:
-  - **Silver Trajectories**: **38,214,890 GPS fixes** deduplicated, localized, with kinematic acceleration.
-  - **Gold Stop Events**: **2,639,240 reconstructed stop arrival/departure events** across **103,450 complete trips** with sub-10s linear interpolation and 100% active calendar compliance.
-- **Multi-Source Spatiotemporal Feature Mart (`feature_mart_observed.parquet`)**:
+- **Observed Ground-Truth Tier (Track B Historian, Oct 18–27, 2026)**:
+  - **Silver Trajectories**: **83,428,962 GPS fixes** deduplicated, localized, with kinematic acceleration.
+  - **Gold Stop Events**: **5,041,712 reconstructed stop arrival/departure events** across **195,582 complete trips** with sub-10s linear interpolation and 100% active calendar compliance.
+- **Multi-Source Spatiotemporal Feature Mart (`feature_mart_observed.parquet`, 4,331,687 rows)**:
   - Operational: `prev_stop_delay`, `prev2_stop_delay`, `headway_deviation`, `trip_progress`.
   - Infrastructure: `lane_capacity`, `signalized_intersection_count`, `actual_path_length_meters`, `tortuosity_ratio`, `is_dedicated_right_of_way`.
   - Transfer Hubs: `interchange_line_count`, `is_metro_proximity` (300m buffer to 39 M1/M2 stations).
@@ -69,71 +69,63 @@
 
 ## Slide 4: Validation Strategy: Zero Data Leakage & Debiasing
 
-### 1. Multi-Dimensional Stratified Sampling & IPS Weights
-- **Weather & Peak Imbalance**: Rain occurs during a minority of hours, causing severe sample imbalance.
-- **12-Cell Orthogonal Sampling**: Stratifies across $\text{Weather} \times \text{ROW} \times \text{Peak}$ without stratifying on the target variable (no selection bias).
+### 1. Full-Dataset & Multi-Dimensional Stratified IPS Weighting
+- **Full-Scale Evaluation**: Evaluated across all **4,331,687** fused records (`Train = 2,503,755`, `Val = 808,538`, `Test = 836,236`), alongside 12-cell orthogonal stratified sampling ($\text{Weather} \times \text{ROW} \times \text{Peak}$).
 - **Normalized Inverse Probability of Sampling (IPS) Weights**:
   $$w_i = \frac{N_{\text{pop}, k} / N_{\text{pop}, \text{total}}}{N_{\text{sample}, k} / N_{\text{sample}, \text{total}}}$$
   Applied in Weighted Least Squares (WLS) TWFE regression and gradient boosting.
 
 ### 2. Purged Temporal Block Splitting
-- **Trip Boundary Purging**: Vehicle trips crossing split boundaries are completely dropped.
+- **Trip Boundary Purging**: Vehicle trips crossing split boundaries (`Train–Val = 990`, `Val–Test = 1,046`) are completely dropped.
 - **Embargo Buffering**: 30-minute blackout window between train, validation, and test sets.
-- **In-Fold Winsorization & Huber Loss**: Features winsorized at $[p_{01}, p_{99}]$ bounds; Huber loss ($\delta=60.0\text{s}$) prevents quadratic penalty blowups on extreme delay shocks.
+- **In-Fold Winsorization & Huber Loss**: Features and training targets winsorized strictly on training folds; Huber loss ($\delta=60.0\text{s}$) prevents quadratic penalty blowups on extreme delay shocks.
 
 ---
 
 ## Slide 5: Model Benchmark Performance
 
-### Hold-Out Validation Results (=100,000$ Stratified Sample, Cleaned Layovers)
+### Hold-Out Test Results ($N_{\text{test}}=836{,}236$ Full Dataset, Target: $\Delta t_{\text{run}}$, Cleaned Layovers)
 
-| Transit Cohort | Model Architecture | Val MAE | Val RMSE | Median AE | WAPE | Val ^2$ | Dry MAE | Rain MAE | Peak MAE | Off-Peak MAE |
-| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Pooled** *(All)* | **TWFE Panel (WLS)** | 68.33s | 129.44s | 38.77s | 46.40% | +0.6351 | 54.35s | 68.33s | 84.42s | 60.81s |
-| | **LightGBM (Huber)** | 44.44s | 128.43s | **18.31s** | 30.18% | +0.6408 | **30.03s** | 44.44s | 56.16s | 38.97s |
-| | **CatBoost (Huber)** | **42.69s** | **122.17s** | 19.37s | **29.00%** | **+0.6750** | 30.16s | **42.69s** | **52.73s** | **38.01s** |
-| **Urban Tram** | **TWFE Panel (WLS)** | 52.45s | 94.32s | 32.37s | 51.34% | +0.5994 | 46.84s | 52.45s | 56.68s | 51.57s |
-| | **LightGBM (Huber)** | **28.91s** | **72.87s** | **14.41s** | **28.30%** | **+0.7609** | **21.05s** | **28.91s** | **31.19s** | **28.44s** |
-| | **CatBoost (Huber)** | 33.14s | 75.71s | 17.33s | 32.45% | +0.7420 | 23.19s | 33.14s | 36.71s | 32.40s |
-| **Urban Bus** | **TWFE Panel (WLS)** | 80.49s | 148.88s | 49.14s | 45.28% | +0.6463 | 63.50s | 80.49s | 92.45s | 74.06s |
-| | **CatBoost (Huber)** | **53.77s** | **153.92s** | **22.30s** | **30.25%** | **+0.6220** | **34.78s** | **53.77s** | **64.55s** | **47.98s** |
-| **Suburban Bus** | **LightGBM (Huber)** | **45.01s** | **102.68s** | **22.98s** | **26.70%** | **+0.7773** | **41.23s** | **45.01s** | **76.46s** | **28.94s** |
-| | **CatBoost (Huber)** | 55.16s | 109.40s | 29.47s | 32.71% | +0.7471 | 41.60s | 55.16s | 91.73s | 36.47s |
+| Transit Cohort | Model Architecture | Test MAE | Test RMSE | Median AE | WAPE | Test $R^2$ | Dry MAE | Rain MAE | Peak MAE | Off-Peak MAE |
+| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **Pooled** *(All, $836\text{k}$)* | **TWFE Panel (WLS)** | 25.52s | 41.51s | 16.96s | 77.96% | +0.0371 | 25.66s | 24.40s | 27.44s | 24.40s |
+| | **LightGBM (Huber)** | **23.04s** | **38.84s** | **14.08s** | **70.41%** | **+0.1567** | **23.17s** | **22.10s** | **24.78s** | **22.04s** |
+| | **CatBoost (Huber)** | 23.77s | 39.42s | 14.55s | 72.61% | +0.1314 | 23.90s | 22.74s | 25.61s | 22.70s |
+| **Urban Tram** *($234\text{k}$)* | **TWFE Panel (WLS)** | 22.39s | 34.50s | 15.53s | 63.34% | +0.0510 | 22.49s | 21.82s | 22.62s | 22.21s |
+| | **LightGBM (Huber)** | **15.28s** | **26.10s** | **9.18s** | **43.23%** | **+0.4568** | **15.32s** | **15.05s** | **15.67s** | **14.97s** |
+| | **CatBoost (Huber)** | 17.68s | 28.48s | 11.37s | 50.02% | +0.3534 | 17.73s | 17.38s | 18.09s | 17.36s |
+| **Urban Bus** *($539\text{k}$)* | **TWFE Panel (WLS)** | 26.45s | 42.83s | 17.31s | 83.21% | +0.0158 | 26.62s | 25.05s | 29.58s | 24.90s |
+| | **LightGBM (Huber)** | **24.34s** | **40.38s** | **14.60s** | **76.58%** | **+0.1253** | **24.48s** | **23.16s** | **27.36s** | **22.84s** |
+| | **CatBoost (Huber)** | 24.91s | 41.01s | 14.97s | 78.38% | +0.0976 | 25.08s | 23.56s | 27.95s | 23.41s |
+| **Suburban Bus** *($64\text{k}$)* | **TWFE Panel (WLS)** | 27.94s | 50.20s | 18.85s | 88.50% | +0.0300 | 27.76s | 31.10s | 31.90s | 25.62s |
+| | **LightGBM (Huber)** | **24.51s** | **46.07s** | **15.81s** | **77.64%** | **+0.1830** | **24.37s** | **26.96s** | **27.75s** | **22.61s** |
+| | **CatBoost (Huber)** | 25.69s | 47.42s | 16.81s | 81.37% | +0.1343 | 25.54s | 28.28s | 29.00s | 23.75s |
 
 ### Key Empirical Findings:
-1. **TWFE Positive ^2$ Baseline**: Collinearity rectification and weighted baseline recovery yield strictly positive TWFE panel performance across all cohorts (**^2 = +0.5994* for Trams, **^2 = +0.6463* for Urban Bus).
-2. **Infrastructure Isolation Advantage**: Urban trams operating on dedicated tracks achieve lowest errors (**LightGBM MAE = 28.91s**, **MedAE = 14.41s**, **^2 = 0.7609*)—confirming dedicated ROW protects transit from traffic volatility.
-3. **Meteorological Disparity**: Rain consistently elevates pooled MAE by **+14.4s** (30.03s $	o$ 44.44s), and peak congestion adds another **+17.2s** over off-peak.
+1. **Non-Linear Boost over Linear TWFE**: On first-differenced link running delay ($\Delta t_{\text{run}}$), LightGBM increases out-of-sample $R^2$ by **4.2x to 9.0x** over TWFE ($+0.1567$ vs $+0.0371$ pooled; $+0.4568$ vs $+0.0510$ on Urban Trams).
+2. **Infrastructure Isolation Advantage**: Urban trams on dedicated tracks achieve the lowest errors (**LightGBM MAE = 15.28s**, **MedAE = 9.18s**, **$R^2 = 0.4568$**)—confirming physical segregation insulates transit from traffic volatility.
+3. **Peak & Weather Disparity**: Rush hour increases Urban Bus MAE by **+4.52s/stop** (22.84s $\to$ 27.36s) vs only **+0.70s/stop** on Trams; rain elevates Suburban Bus MAE by **+2.59s/stop** (24.37s $\to$ 26.96s).
 
 ---
 
-## Slide 6: Econometric Elasticities (TWFE Panel with WLS)
+## Slide 6: Econometric Panel Specification (TWFE with WLS & CRVE)
 
 ### Model Specification
-$$y_{ist} = \alpha_i + \lambda_t + \beta_1 \text{Signals}_{is} + \beta_2 \text{Lanes}_{is} + \beta_3 \text{Length}_{is} + \beta_4 \text{Progress}_{ist} + \epsilon_{ist}$$
-- Estimated via **Weighted Least Squares (WLS)** with normalized IPS weights and Huber-White HC1 route-clustered errors.
-
-### Elasticity & Standardized Coefficients ($\beta^*_k$)
-- **Traffic Signal Density**:
-  - Coefficient: $\beta = +0.5753\text{s}$ per signal head ($p < 0.0001, t = 5.00$).
-  - Elasticity: $\varepsilon = +0.2146$ (A 10% increase in signal density increases incremental delay by +2.15%).
-- **Lane Capacity**:
-  - Coefficient: $\beta = -6.0846\text{s}$ per additional lane ($p < 0.0001, t = -5.93$).
-  - Elasticity: $\varepsilon = -2.28$ (Substantial delay reduction on wide arterials).
-- **Physical Link Distance**:
-  - Coefficient: $\beta = +0.0029\text{s}$ per meter ($+2.9\text{s}$ running delay per kilometer, $p = 0.09$).
-- **Non-Linear Advantage of Tree Boosters**: Linear TWFE assumes additive shocks. Gradient boosting captures threshold inflection points and achieves $R^2 = 0.7921$ on trams and $0.4561$ pooled.
+$$\Delta t_{\text{run}, ist} = \alpha_i + \lambda_t + \beta_1 \text{Signals}_{is} + \beta_2 \text{Lanes}_{is} + \beta_3 \text{Length}_{is} + \beta_4 \text{Progress}_{ist} + \epsilon_{ist}$$
+- Estimated via **Weighted Least Squares (WLS)** with iterative multi-way fixed-effects demeaning (`route_id` $\times$ `hour_of_day`, $N = 2{,}503{,}755$ training rows) and route-clustered CRVE standard errors.
+- **Variance Decomposition**:
+  - Pooled TWFE: Overall $R^2 = 0.0440$, Within-$R^2 = 0.0162$ (Hold-out Test $R^2 = 0.0371$).
+  - Urban Tram TWFE: Overall $R^2 = 0.0555$, Within-$R^2 = 0.0485$ (Hold-out Test $R^2 = 0.0510$).
+- **Non-Linear Advantage of Tree Boosters**: Linear TWFE assumes additive shocks across heterogeneous road links. Gradient boosting captures non-linear signal, tortuosity, and upstream recovery thresholds, reaching $R^2 = 0.4568$ on trams and $0.1830$ on suburban buses.
 
 ---
 
 ## Slide 7: Global Delay Attribution (TreeSHAP)
 
 ### Decomposing Delay Drivers Across Operational Domains
-- **Upstream Delay Propagation (`prev_stop_delay`)**: Primary positive driver of downstream delay compounding.
-- **Dispatch Headway Regularity (`headway_deviation`)**: Irregular spacing (vehicle bunching) triggers sharp delay spikes.
-- **Route Progress Dynamics (`trip_progress`)**: Non-linear accumulation peaking near central transfer nodes.
-- **Fleet Dynamics (`is_tram`)**: Tram rail operations provide structural stability over buses.
-- **Decomposed Weather Dynamics**: Onset of rain (`is_raining`) and 3h rainfall accumulation shift baseline running friction.
+- **Fleet & Corridor Topology (`is_tram`, `actual_path_length_meters`, `segment_length_meters`, `tortuosity_ratio`, `signalized_intersection_count`)**: Primary structural determinants of inter-stop running time variance.
+- **Upstream Delay & Recovery (`prev_stop_delay`, `trip_progress`, `headway_deviation`)**: Captures schedule slack absorption, upstream delay carryover, and vehicle bunching dynamics.
+- **Exact Additivity**: Verified across 24 features ($E[f(X)] = -20.01\text{s}$, $\max |\Delta| = 9.95 \times 10^{-14}\text{s}$).
 
 *Exhibit*: `reports/figures/xai/shap_beeswarm_summary.png`
 
@@ -142,12 +134,12 @@ $$y_{ist} = \alpha_i + \lambda_t + \beta_1 \text{Signals}_{is} + \beta_2 \text{L
 ## Slide 8: Non-Linear Threshold Detection (ALE Curves)
 
 ### Identifying Operational Tipping Points
-1. **Upstream Delay Saturation**:
-   - Delay compounds linearly up to $+300$ seconds, then plateaus as dispatch pacing and layover buffering take effect.
-2. **Route Progress Congestion Cliffs**:
-   - Sharp jumps occur at **74%** and **94%** route completion, pinpointing congestion near central transfer hubs and terminal approach loops.
-3. **Dedicated Right-of-Way (ROW) Protection**:
-   - Provides a discrete step-function reduction in running delay across all operating conditions.
+1. **Upstream Delay Recovery vs. Saturation (`prev_stop_delay`)**:
+   - Moderate upstream delays trigger active inter-stop schedule recovery, whereas severe congestion saturates link-level recovery slack.
+2. **Route Progress Congestion Transitions (`trip_progress`)**:
+   - Distinct regime transitions across central transfer corridors and terminal approach segments.
+3. **Dedicated Right-of-Way (ROW) Protection (`is_dedicated_right_of_way`)**:
+   - Provides a negative step-function reduction in link delay escalation across operating conditions.
 
 *Exhibit*: `reports/figures/xai/ale_trip_progress.png`, `reports/figures/xai/ale_prev_stop_delay.png`
 
@@ -156,11 +148,10 @@ $$y_{ist} = \alpha_i + \lambda_t + \beta_1 \text{Signals}_{is} + \beta_2 \text{L
 ## Slide 9: Infrastructure Buffering & 2D Interactions
 
 ### Does Dedicated Infrastructure Protect Against Operational Shocks?
-- **Pairwise SHAP Interaction Matrix**: $\Phi_{\text{headway}, \text{ROW}}(x)$.
-- **Empirical Buffering Metric**:
-  - In mixed traffic: Each second of headway deviation adds $+0.042$s of downstream delay.
-  - On dedicated ROW: Downstream delay escalation is reduced to $+0.026$s per second.
-  - **Buffering Benefit**: Dedicated infrastructure provides a **~39% reduction in delay escalation** against vehicle bunching.
+- **Pairwise SHAP Interaction Matrix**: $\Phi_{i, j}(x)$ exported to `reports/tables/xai/shap_interaction_matrix.csv`.
+- **Empirical Buffering Metrics**:
+  - **Headway Deviation (`headway_deviation`)**: Dedicated ROW mitigates **43.0% of delay escalation** caused by vehicle bunching and irregular headways.
+  - **Upstream Delay (`prev_stop_delay`)**: Dedicated ROW mitigates **0.47s per stop link** of upstream delay escalation compared to mixed traffic.
 
 *Exhibit*: `reports/figures/xai/interaction_headway_deviation_vs_dedicated_row.png`
 
@@ -168,16 +159,16 @@ $$y_{ist} = \alpha_i + \lambda_t + \beta_1 \text{Signals}_{is} + \beta_2 \text{L
 
 ## Slide 10: Actionable Counterfactual Remedies (DiCE)
 
-### Operational Remedies for Delayed Vehicles (50 Severe Incident Case Studies)
+### Operational Remedies for Delayed Vehicles (50 Severe Incident Case Studies, Mean Delay 464.4s)
 
-| Operational Remedy | Delay Mitigation Impact | On-Time Restoration Rate ($\le 120$s) |
+| Operational Remedy | Mean Delay Reduction | On-Time Restoration Rate ($\le 120$s) |
 | :--- | :--- | :--- |
-| **Dedicated ROW Upgrade ($ROW \to 1$)** | **+5.16s / stop** running delay saved | **0.0%** (alone cannot erase 8 min of prior delay) |
-| **Headway Regularization ($dev \to 0$)** | **+45.24s / incident** delay saved | **0.0%** (prevents downstream vehicle bunching) |
-| **Upstream Schedule Holding / Reset** | **Timetable reset to scheduled slot** | **100.0%** (restores on-time arrival) |
-| **Joint Multimodal Remedy** | **Holding + Pacing + Dedicated ROW** | **100.0%** (full timetable adherence + resilience) |
+| **Dedicated ROW Upgrade ($ROW \to 1$)** | **+1.53s / stop link** saved | **0.0%** (single link cannot erase 7.7 min of prior delay) |
+| **Transit Signal Priority ($TSP$)** | **+0.71s / stop link** saved | **0.0%** (cumulative corridor savings ~18–38s per trip) |
+| **Upstream Delay Absorption (Turnaround Recovery)** | **+284.49s / incident** saved | **58.0%** (restores majority of delayed trips to on-time) |
+| **Joint Multimodal Remedy** | **+286.81s / incident** saved | **60.0%** (highest recovery + downstream link resilience) |
 
-- **Key Policy Takeaway**: Single-segment infrastructure upgrades prevent running delay escalation (+5.16s/stop) but cannot erase 8 minutes of accumulated upstream backlog over 400 meters. Fully restoring on-time status requires upstream dispatch holding and schedule recovery resets.
+- **Key Policy Takeaway**: Link-level physical upgrades (dedicated ROW + TSP) prevent incremental delay accumulation along a 25-stop corridor (~38–55s total trip savings) and buffer against headway bunching (43.0% reduction), while turnaround schedule recovery absorption is essential to clear large pre-existing upstream backlogs.
 
 *Exhibit*: `reports/figures/xai/counterfactual_policy_impact.png`
 
