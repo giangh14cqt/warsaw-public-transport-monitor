@@ -1,4 +1,4 @@
 model,val_mae,val_rmse,val_medae,val_wape,val_r2,val_mae_dry,val_mae_rain,val_mae_peak,val_mae_offpeak
-TWFE Panel Regression,25.5153,41.508,16.9626,77.9559,0.0371,25.66,24.4,27.44,24.4
-LightGBM Regressor,23.0441,38.8439,14.0784,70.4057,0.1567,23.17,22.1,24.78,22.04
-CatBoost Regressor,23.7656,39.4222,14.5485,72.6101,0.1314,23.9,22.74,25.61,22.7
+TWFE Panel Regression,28.8422,45.1271,19.2778,99.0356,0.0261,28.76,30.32,32.14,26.25
+LightGBM Regressor,26.7344,42.7041,17.2422,91.798,0.1279,26.67,27.87,29.89,24.25
+CatBoost Regressor,27.5636,43.605,17.9343,94.6453,0.0907,27.5,28.71,30.88,24.95

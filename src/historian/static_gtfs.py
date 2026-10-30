@@ -143,9 +143,19 @@ class HistorianGTFSVersioner:
 
         if db_path.exists():
             try:
-                con = duckdb.connect(str(db_path))
-                existing_tables = set(t[0] for t in con.execute("SHOW TABLES").fetchall())
+                con_ro = duckdb.connect(str(db_path), read_only=True)
+                existing_tables = set(t[0] for t in con_ro.execute("SHOW TABLES").fetchall())
+                con_ro.close()
                 if "trips" in existing_tables and "stop_times" in existing_tables:
+                    need_write = (
+                        (calendar_dates_csv.exists() and "calendar_dates" not in existing_tables)
+                        or (calendar_csv.exists() and "calendar" not in existing_tables)
+                        or (stops_csv.exists() and "stops" not in existing_tables)
+                        or (shapes_csv.exists() and "shapes" not in existing_tables)
+                    )
+                    if not need_write:
+                        return
+                    con = duckdb.connect(str(db_path))
                     if calendar_dates_csv.exists() and "calendar_dates" not in existing_tables:
                         con.execute(f"""
                             CREATE TABLE calendar_dates AS
@@ -181,9 +191,9 @@ class HistorianGTFSVersioner:
                         """)
                     con.close()
                     return
-                con.close()
             except Exception as e:
                 logger.warning(f"Error inspecting or updating existing DuckDB tables in {db_path}: {e}")
+                return
 
         logger.info(f"Building DuckDB index at {db_path}...")
         con = duckdb.connect(str(db_path))

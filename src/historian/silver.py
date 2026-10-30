@@ -52,11 +52,14 @@ SILVER_SCHEMA = pa.schema(
 
 
 def _parse_warsaw_time_to_utc(time_str: str, tick_ts: int) -> int:
-    """Parses Warsaw local datetime string 'YYYY-MM-DD HH:MM:SS' into UTC epoch seconds."""
+    """Parses Warsaw local datetime string 'YYYY-MM-DD HH:MM:SS' into UTC epoch seconds, resolving DST fold."""
     try:
         naive_dt = datetime.datetime.strptime(time_str.strip(), "%Y-%m-%d %H:%M:%S")
-        local_dt = naive_dt.replace(tzinfo=WARSAW_TZ)
-        return int(local_dt.astimezone(UTC_TZ).timestamp())
+        ts0 = int(naive_dt.replace(tzinfo=WARSAW_TZ, fold=0).astimezone(UTC_TZ).timestamp())
+        ts1 = int(naive_dt.replace(tzinfo=WARSAW_TZ, fold=1).astimezone(UTC_TZ).timestamp())
+        if ts0 != ts1 and tick_ts > 100_000_000:
+            return ts0 if abs(ts0 - tick_ts) <= abs(ts1 - tick_ts) else ts1
+        return ts0
     except Exception:
         return tick_ts
 
@@ -90,6 +93,8 @@ def _extract_single_hour_fixes(task_args: Tuple[str, str, str, str, str]) -> Lis
                 continue
 
             gps_ts = _parse_warsaw_time_to_utc(time_str, tick_ts)
+            if tick_ts > 100_000_000 and (tick_ts - gps_ts > 300 or gps_ts - tick_ts > 120):
+                continue
             hour_fixes.append(
                 {
                     "service_date": date_str,
@@ -415,7 +420,8 @@ class SilverTrajectoryProcessor:
                                 if s_start <= eff_sec <= s_end:
                                     dist = 0
                                 elif eff_sec < s_start:
-                                    dist = s_start - eff_sec
+                                    # Penalize pre-departure buffer relative to active post-arrival delay tail
+                                    dist = (s_start - eff_sec) + 900
                                 else:
                                     dist = eff_sec - s_end
                                 valid_candidates.append((dist, tid))
@@ -481,6 +487,18 @@ class SilverTrajectoryProcessor:
 
         logger.info(f"Re-matching GTFS trips for {date_str} on {out_file}...")
         df = pd.read_parquet(out_file)
+        if "tick_ts" in df.columns and "gps_timestamp_utc" in df.columns:
+            dst_fold_mask = (df["tick_ts"] > 100_000_000) & (
+                (df["tick_ts"] - df["gps_timestamp_utc"]).between(3400, 3800)
+            )
+            if dst_fold_mask.any():
+                df.loc[dst_fold_mask, "gps_timestamp_utc"] += 3600
+            real_ts_mask = df["tick_ts"] > 100_000_000
+            valid_age_mask = (~real_ts_mask) | (
+                ((df["tick_ts"] - df["gps_timestamp_utc"]) <= 300)
+                & ((df["gps_timestamp_utc"] - df["tick_ts"]) <= 120)
+            )
+            df = df[valid_age_mask].reset_index(drop=True)
         matched_df = self.match_trips_using_gtfs(df, date_str)
 
         table = pa.Table.from_pandas(matched_df, schema=SILVER_SCHEMA, preserve_index=False)

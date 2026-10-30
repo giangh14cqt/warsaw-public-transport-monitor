@@ -206,6 +206,7 @@ class TreeSHAPExplainer:
         sample_idx: int,
         output_path: Optional[str] = None,
         max_display: int = 10,
+        title: Optional[str] = None,
     ) -> str:
         """
         Generate and export local TreeSHAP Waterfall plot for observation sample_idx.
@@ -226,6 +227,7 @@ class TreeSHAPExplainer:
             output_path,
             sample_idx=sample_idx,
             max_display=max_display,
+            title=title,
         )
 
     def find_extreme_delay_events(
@@ -272,6 +274,10 @@ class TreeSHAPExplainer:
             non_origin = search_df[search_df["prev_stop_delay"] >= -60.0]
             if "trip_progress" in non_origin.columns:
                 non_origin = non_origin[non_origin["trip_progress"] >= 0.10]
+            if "segment_length_meters" in non_origin.columns:
+                real_geom = non_origin[non_origin["segment_length_meters"] != 500.0]
+                if not real_geom.empty:
+                    non_origin = real_geom
             if not non_origin.empty:
                 search_df = non_origin
 
@@ -287,6 +293,21 @@ class TreeSHAPExplainer:
                 by=t_col,
                 ascending=False,
             )
+
+        # Rank extreme events by model-predicted delay surge when SHAP values are available
+        # so waterfall plots highlight genuine model-attributed surges rather than unpredicted sensor outliers
+        if self.X_explained is not None and self.shap_values is not None:
+            pred_map = pd.Series(
+                self.base_value + np.sum(self.shap_values, axis=1),
+                index=self.X_explained.index,
+            )
+            common_idx = extreme_events.index.intersection(pred_map.index)
+            if len(common_idx) >= top_k:
+                extreme_events = extreme_events.loc[common_idx].copy()
+                extreme_events["_shap_pred"] = pred_map.loc[common_idx]
+                extreme_events = extreme_events.sort_values(
+                    by=["_shap_pred", t_col], ascending=False
+                ).drop(columns=["_shap_pred"])
 
         top_events = extreme_events.head(top_k)
         case_studies = []
@@ -304,8 +325,13 @@ class TreeSHAPExplainer:
             route_id = str(row.get("route_id", "unknown"))
             stop_id = str(row.get("stop_id", "unknown"))
 
+            wf_title = (
+                f"Local Delay Decomposition: Route {route_id} (Observed {t_col}: {target_val:+.0f}s)"
+                if route_id != "unknown"
+                else None
+            )
             plot_file = os.path.join(output_dir, f"shap_waterfall_extreme_case_{idx + 1}.png")
-            self.plot_waterfall(loc_idx, output_path=plot_file)
+            self.plot_waterfall(loc_idx, output_path=plot_file, title=wf_title)
 
             case_studies.append(
                 {
@@ -382,9 +408,22 @@ def run_shap_pipeline(
             non_origin = test_df[test_df["prev_stop_delay"] >= -60.0]
             if "trip_progress" in non_origin.columns:
                 non_origin = non_origin[non_origin["trip_progress"] >= 0.10]
+            if "segment_length_meters" in non_origin.columns:
+                real_geom = non_origin[non_origin["segment_length_meters"] != 500.0]
+                if not real_geom.empty:
+                    non_origin = real_geom
             if not non_origin.empty:
                 cand_extreme = non_origin
-        top_extreme = cand_extreme.sort_values(by=target_col, ascending=False).head(10)
+        try:
+            cand_with_pred = cand_extreme.copy()
+            cand_with_pred["_pred"] = gbm.predict(cand_with_pred)
+            surge_df = cand_with_pred[cand_with_pred[target_col] >= 120.0]
+            if len(surge_df) >= 10:
+                top_extreme = surge_df.sort_values(by="_pred", ascending=False).head(10).drop(columns=["_pred"])
+            else:
+                top_extreme = cand_with_pred.sort_values(by="_pred", ascending=False).head(10).drop(columns=["_pred"])
+        except Exception:
+            top_extreme = cand_extreme.sort_values(by=target_col, ascending=False).head(10)
         rem_sample = test_df.drop(index=top_extreme.index, errors="ignore").sample(
             n=min(990, max(1, len(test_df) - len(top_extreme))), random_state=42
         )

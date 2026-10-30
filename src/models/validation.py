@@ -229,19 +229,24 @@ class PurgedTemporalBlockSplitter:
         val_mask = (df_sorted[time_col] >= t_val_start) & (df_sorted[time_col] <= t_val_cutoff)
         test_mask = df_sorted[time_col] >= t_test_start
 
-        # Filter according to purging strategy
+        # Filter according to purging strategy (scoped to +/- 4h around each boundary so
+        # recurring daily schedule trip_ids on other service dates are not falsely dropped)
         if self.purge_trips and self.trip_col in df_sorted.columns:
+            tv_win_mask = (df_sorted[time_col] >= (t_train_cutoff - pd.Timedelta(hours=4))) & (
+                df_sorted[time_col] <= (t_val_start + pd.Timedelta(hours=4))
+            )
+            vt_win_mask = (df_sorted[time_col] >= (t_val_cutoff - pd.Timedelta(hours=4))) & (
+                df_sorted[time_col] <= (t_test_start + pd.Timedelta(hours=4))
+            )
+            in_purged_tv = tv_win_mask & df_sorted[self.trip_col].isin(purged_train_val)
+            in_purged_vt = vt_win_mask & df_sorted[self.trip_col].isin(purged_val_test)
             if self.purge_mode == "drop_both":
-                train_mask = train_mask & (~df_sorted[self.trip_col].isin(purged_train_val))
-                val_mask = val_mask & (
-                    ~df_sorted[self.trip_col].isin(purged_train_val | purged_val_test)
-                )
-                test_mask = test_mask & (~df_sorted[self.trip_col].isin(purged_val_test))
+                train_mask = train_mask & (~in_purged_tv)
+                val_mask = val_mask & (~(in_purged_tv | in_purged_vt))
+                test_mask = test_mask & (~in_purged_vt)
             else:  # drop_from_eval only
-                val_mask = val_mask & (
-                    ~df_sorted[self.trip_col].isin(purged_train_val | purged_val_test)
-                )
-                test_mask = test_mask & (~df_sorted[self.trip_col].isin(purged_val_test))
+                val_mask = val_mask & (~(in_purged_tv | in_purged_vt))
+                test_mask = test_mask & (~in_purged_vt)
 
         # Also purge physical vehicles rotating across split boundaries within a 45-min rotation window
         if self.purge_trips and self.vehicle_col in df_sorted.columns and embargo_mins > 0:
@@ -383,9 +388,13 @@ class PurgedTemporalBlockSplitter:
             val_mask = (df_sorted[time_col] >= t_val_start) & (df_sorted[time_col] <= t_val_cutoff)
 
             if self.purge_trips and self.trip_col in df_sorted.columns:
+                fold_win_mask = (
+                    df_sorted[time_col] >= (t_train_cutoff - pd.Timedelta(hours=4))
+                ) & (df_sorted[time_col] <= (t_val_start + pd.Timedelta(hours=4)))
+                in_purged_fold = fold_win_mask & df_sorted[self.trip_col].isin(purged_crossing)
                 if self.purge_mode == "drop_both":
-                    train_mask = train_mask & (~df_sorted[self.trip_col].isin(purged_crossing))
-                val_mask = val_mask & (~df_sorted[self.trip_col].isin(purged_crossing))
+                    train_mask = train_mask & (~in_purged_fold)
+                val_mask = val_mask & (~in_purged_fold)
 
             train_fold = df_sorted[train_mask].copy()
             val_fold = df_sorted[val_mask].copy()

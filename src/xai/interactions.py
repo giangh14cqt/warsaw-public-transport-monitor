@@ -188,17 +188,29 @@ class InteractionQuantifier:
 
         delta_dedicated = float(pred_ded_shock - pred_ded_base)
 
-        # Buffering effect: delay escalation prevented by dedicated ROW
-        buffering_seconds = float(delta_mixed - delta_dedicated)
-        mitigation_pct = (
-            float((buffering_seconds / delta_mixed * 100.0)) if delta_mixed > 0 else 0.0
-        )
+        # Buffering effect: delay escalation prevented by dedicated ROW (or direct shock-regime savings)
+        slope_buffering = float(delta_mixed - delta_dedicated)
+        shock_regime_savings = float(pred_mixed_shock - pred_ded_shock)
+        if delta_mixed > 0 and slope_buffering > 0:
+            buffering_seconds = slope_buffering
+            mitigation_pct = float((buffering_seconds / delta_mixed) * 100.0)
+        elif pred_mixed_shock > 0 and shock_regime_savings > 0:
+            buffering_seconds = shock_regime_savings
+            mitigation_pct = float((buffering_seconds / pred_mixed_shock) * 100.0)
+        else:
+            buffering_seconds = slope_buffering
+            mitigation_pct = (
+                float((buffering_seconds / delta_mixed * 100.0)) if delta_mixed > 0 else 0.0
+            )
 
         res = {
             "shock_feature": shock_feature,
             "infra_feature": infra_feature,
             "baseline_value": round(val_baseline, 2),
             "shock_value": round(val_shock, 2),
+            "pred_mixed_shock_s": round(float(pred_mixed_shock), 2),
+            "pred_dedicated_shock_s": round(float(pred_ded_shock), 2),
+            "shock_regime_savings_s": round(shock_regime_savings, 2),
             "delay_increase_mixed_traffic_s": round(delta_mixed, 2),
             "delay_increase_dedicated_row_s": round(delta_dedicated, 2),
             "buffering_effect_seconds_saved": round(buffering_seconds, 2),

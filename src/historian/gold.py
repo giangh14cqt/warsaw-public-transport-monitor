@@ -173,6 +173,23 @@ class GoldStopEventReconstructor:
 
         logger.info(f"Reconstructing Gold stop events for {date_str} from {silver_file}...")
         silver_df = pd.read_parquet(silver_file)
+        if "tick_ts" in silver_df.columns and "gps_timestamp_utc" in silver_df.columns:
+            # Repair 1-hour autumn DST fold offset if present on raw cached Silver timestamps
+            dst_fold_mask = (silver_df["tick_ts"] > 100_000_000) & (
+                (silver_df["tick_ts"] - silver_df["gps_timestamp_utc"]).between(3400, 3800)
+            )
+            if dst_fold_mask.any():
+                silver_df = silver_df.copy()
+                silver_df.loc[dst_fold_mask, "gps_timestamp_utc"] += 3600
+
+            # Filter out stale cached onboard timestamps (>5m behind poll tick or >2m in future)
+            real_ts_mask = silver_df["tick_ts"] > 100_000_000
+            valid_age_mask = (~real_ts_mask) | (
+                ((silver_df["tick_ts"] - silver_df["gps_timestamp_utc"]) <= 300)
+                & ((silver_df["gps_timestamp_utc"] - silver_df["tick_ts"]) <= 120)
+            )
+            silver_df = silver_df[valid_age_mask]
+
         # Keep only fixes that matched a GTFS trip
         matched_df = silver_df[silver_df["matched_trip_id"].notna()].copy()
         if matched_df.empty:
@@ -219,7 +236,14 @@ class GoldStopEventReconstructor:
                 continue
 
             trip_fixes = fixes_by_trip[trip_id]
-            vehicle_num = str(trip_fixes.iloc[0]["vehicle_number"])
+            # Enforce single physical vehicle per trip instance (select dominant vehicle by fix count)
+            if trip_fixes["vehicle_number"].nunique() > 1:
+                dominant_veh = str(trip_fixes["vehicle_number"].value_counts().index[0])
+                trip_fixes = trip_fixes[trip_fixes["vehicle_number"].astype(str) == dominant_veh]
+            else:
+                dominant_veh = str(trip_fixes.iloc[0]["vehicle_number"])
+
+            vehicle_num = dominant_veh
             vehicle_type = str(trip_fixes.iloc[0]["vehicle_type"])
             route_id = str(trip_fixes.iloc[0]["route_id"])
             brigade = str(trip_fixes.iloc[0]["brigade"])
@@ -277,7 +301,8 @@ class GoldStopEventReconstructor:
                     first_in = int(inside_indices[0])
                     last_in = first_in
                     for idx in inside_indices[1:]:
-                        if float(fix_times[idx] - fix_times[last_in]) <= 180.0:
+                        dt_in = float(fix_times[idx] - fix_times[last_in])
+                        if dt_in <= 180.0 or (int(idx) == last_in + 1 and dt_in <= 1200.0):
                             last_in = int(idx)
                         else:
                             break
@@ -382,12 +407,14 @@ class GoldStopEventReconstructor:
             if not trip_rows:
                 continue
 
-            # Ensure only complete trips from starting stop to terminal stop are kept
+            # Ensure complete or majority-observed trips are kept while dropping tiny fragments
             if self.require_complete_trips:
                 obs_seqs = {r["stop_sequence"] for r in trip_rows}
                 has_start = sched_min_seq in obs_seqs
                 has_terminal = sched_max_seq in obs_seqs
-                if not (has_start and has_terminal):
+                n_sched = len(stop_group)
+                has_majority_coverage = (n_sched >= 6) and (len(obs_seqs) >= max(5, int(0.6 * n_sched)))
+                if not ((has_start and has_terminal) or has_majority_coverage):
                     dropped_incomplete_cnt += 1
                     continue
 

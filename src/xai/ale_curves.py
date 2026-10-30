@@ -285,9 +285,19 @@ class ALENonLinearDetector:
                     }
                 )
 
-        # Sort by magnitude of curvature change
+        # Sort by magnitude of curvature change and enforce minimum horizontal separation (12% of x-span)
         tipping_points.sort(key=lambda t: abs(t["slope_change"]), reverse=True)
-        return tipping_points[:3]
+        x_span = max(float(x.max() - x.min()), 1e-6)
+        selected_points: List[Dict[str, Any]] = []
+        for tp in tipping_points:
+            if all(
+                abs(tp["threshold_value"] - s["threshold_value"]) >= 0.12 * x_span
+                for s in selected_points
+            ):
+                selected_points.append(tp)
+            if len(selected_points) >= 3:
+                break
+        return selected_points or tipping_points[:1]
 
     def plot_ale(
         self,

@@ -53,14 +53,26 @@ def plot_shap_waterfall(
     output_path: Union[str, Path],
     sample_idx: int = 0,
     max_display: int = 10,
+    title: Optional[str] = None,
 ) -> str:
     """Generate and save local TreeSHAP Waterfall plot for an individual observation."""
     _ensure_dir(output_path)
     set_publication_style()
 
-    plt.figure(figsize=(9, 6), dpi=300)
+    plt.figure(figsize=(10.5, 6), dpi=300)
     shap.plots.waterfall(explanation_row, max_display=max_display, show=False)
-    plt.title(f"Local Delay Decomposition (Observation #{sample_idx})", fontsize=12, pad=12)
+    fig = plt.gcf()
+    fig.set_size_inches(11.0, 6.5)
+    if fig.axes:
+        ax = fig.axes[0]
+        xmin, xmax = ax.get_xlim()
+        if xmax > xmin:
+            ax.set_xlim(xmin - 0.14 * (xmax - xmin), xmax + 0.05 * (xmax - xmin))
+    plt.title(
+        title or f"Local Delay Decomposition (Observation #{sample_idx})",
+        fontsize=12,
+        pad=12,
+    )
     plt.tight_layout()
     plt.savefig(str(output_path), bbox_inches="tight")
     plt.close("all")

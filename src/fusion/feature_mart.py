@@ -276,9 +276,10 @@ class FeatureMartAssembler:
                     dwell_seconds,
                     zbk_forecast_delay_s,
                     forecast_error_s,
+                    event_type,
                     confidence
                 FROM read_parquet('{gold_pattern}')
-                WHERE event_type = 'STOPPED'
+                WHERE event_type IN ('STOPPED', 'PASSED')
                   AND actual_arrival_utc IS NOT NULL
                   AND ABS(arrival_delay_seconds) <= {max_delay_seconds}
                   {date_filter_clause}
@@ -287,11 +288,13 @@ class FeatureMartAssembler:
             ordered AS (
                 SELECT
                     *,
+                    LAG(stop_sequence) OVER (PARTITION BY trip_instance_key ORDER BY stop_sequence) AS prev_stop_seq,
                     LAG(stop_id) OVER (PARTITION BY trip_instance_key ORDER BY stop_sequence) AS prev_stop_id,
-                    LAG(arrival_delay_seconds) OVER (PARTITION BY trip_instance_key ORDER BY stop_sequence) AS prev_stop_delay,
+                    LAG(arrival_delay_seconds) OVER (PARTITION BY trip_instance_key ORDER BY stop_sequence) AS raw_prev_stop_delay,
                     LAG(COALESCE(departure_delay_seconds, arrival_delay_seconds)) OVER (PARTITION BY trip_instance_key ORDER BY stop_sequence) AS prev_departure_delay,
                     LAG(arrival_delay_seconds, 2) OVER (PARTITION BY trip_instance_key ORDER BY stop_sequence) AS prev2_stop_delay,
                     LAG(actual_departure_utc) OVER (PARTITION BY trip_instance_key ORDER BY stop_sequence) AS prev_actual_dep,
+                    LAG(scheduled_arrival_utc) OVER (PARTITION BY trip_instance_key ORDER BY stop_sequence) AS prev_sched_arr,
                     LAG(scheduled_departure_utc) OVER (PARTITION BY trip_instance_key ORDER BY stop_sequence) AS prev_sched_dep,
                     MAX(stop_sequence) OVER (PARTITION BY trip_instance_key) AS max_seq,
                     MIN(stop_sequence) OVER (PARTITION BY trip_instance_key) AS min_seq
@@ -305,19 +308,26 @@ class FeatureMartAssembler:
                     route_id,
                     vehicle_id,
                     stop_sequence,
+                    prev_stop_seq,
                     stop_id,
                     stop_name,
                     prev_stop_id,
+                    event_type,
                     arrival_delay_seconds,
                     departure_delay_seconds,
                     dwell_seconds,
                     zbk_forecast_delay_s,
                     forecast_error_s,
                     confidence,
-                    prev_stop_delay,
+                    CASE
+                        WHEN prev_stop_seq = min_seq AND raw_prev_stop_delay < -60
+                        THEN GREATEST(COALESCE(prev_departure_delay, raw_prev_stop_delay), -60)
+                        ELSE raw_prev_stop_delay
+                    END AS prev_stop_delay,
                     prev_departure_delay,
                     prev2_stop_delay,
                     prev_actual_dep,
+                    prev_sched_arr,
                     prev_sched_dep,
                     actual_arrival_utc AS rt_arrival_time,
                     actual_departure_utc AS rt_departure_time,
@@ -330,8 +340,13 @@ class FeatureMartAssembler:
                     CASE WHEN EXTRACT(hour FROM timezone('Europe/Warsaw', to_timestamp(actual_arrival_utc))) IN (7, 8, 9) THEN 1 ELSE 0 END AS is_morning_peak,
                     CASE WHEN EXTRACT(hour FROM timezone('Europe/Warsaw', to_timestamp(actual_arrival_utc))) IN (16, 17, 18) THEN 1 ELSE 0 END AS is_evening_peak,
                     CASE
-                        WHEN prev_departure_delay IS NOT NULL THEN CAST(arrival_delay_seconds - prev_departure_delay AS DOUBLE)
-                        WHEN prev_stop_delay IS NOT NULL THEN CAST(arrival_delay_seconds - prev_stop_delay AS DOUBLE)
+                        WHEN prev_sched_dep IS NOT NULL AND prev_sched_arr IS NOT NULL AND prev_sched_dep > prev_sched_arr
+                             AND prev_departure_delay IS NOT NULL
+                        THEN CAST(arrival_delay_seconds - prev_departure_delay AS DOUBLE)
+                        WHEN prev_stop_seq = min_seq AND raw_prev_stop_delay < -60
+                        THEN CAST(arrival_delay_seconds - GREATEST(COALESCE(prev_departure_delay, raw_prev_stop_delay), -60) AS DOUBLE)
+                        WHEN raw_prev_stop_delay IS NOT NULL
+                        THEN CAST(arrival_delay_seconds - raw_prev_stop_delay AS DOUBLE)
                         ELSE 0.0
                     END AS delta_t_run,
                     (departure_delay_seconds - arrival_delay_seconds) AS delta_t_dwell,
@@ -358,14 +373,14 @@ class FeatureMartAssembler:
             with_headway_raw AS (
                 SELECT
                     *,
-                    -- Causal upstream departure headway (time gap behind preceding vehicle leaving stop s-1)
+                    -- Causal upstream departure headway (time gap behind preceding vehicle leaving stop s-1 on same service date)
                     (prev_actual_dep - LAG(prev_actual_dep) OVER (
-                        PARTITION BY route_id, prev_stop_id
-                        ORDER BY prev_actual_dep
+                        PARTITION BY start_date, route_id, prev_stop_id
+                        ORDER BY prev_actual_dep, trip_id, stop_sequence
                     )) AS raw_headway_actual_s,
                     (prev_sched_dep - LAG(prev_sched_dep) OVER (
-                        PARTITION BY route_id, prev_stop_id
-                        ORDER BY prev_sched_dep
+                        PARTITION BY start_date, route_id, prev_stop_id
+                        ORDER BY prev_sched_dep, trip_id, stop_sequence
                     )) AS raw_headway_sched_s
                 FROM trajectories
             ),
@@ -383,9 +398,25 @@ class FeatureMartAssembler:
                 FROM with_headway_raw
             ),
             v_weather AS ({weather_subquery}),
-            v_osm AS ({osm_subquery}),
+            v_osm_raw AS ({osm_subquery}),
+            v_osm AS (
+                SELECT * FROM (
+                    SELECT slug_prev AS join_prev, slug_curr AS join_curr, 1 AS prio, * FROM v_osm_raw WHERE slug_prev IS NOT NULL AND slug_prev != ''
+                    UNION ALL
+                    SELECT stop_id_prev AS join_prev, stop_id_curr AS join_curr, 0 AS prio, * FROM v_osm_raw WHERE stop_id_prev IS NOT NULL AND stop_id_prev != ''
+                )
+                QUALIFY ROW_NUMBER() OVER (PARTITION BY join_prev, join_curr ORDER BY prio DESC) = 1
+            ),
             v_calendar AS ({calendar_subquery}),
-            v_interchange AS ({interchange_subquery})
+            v_interchange_raw AS ({interchange_subquery}),
+            v_interchange AS (
+                SELECT * FROM (
+                    SELECT zbk_slug AS join_stop_id, 1 AS prio, * FROM v_interchange_raw WHERE zbk_slug IS NOT NULL AND zbk_slug != ''
+                    UNION ALL
+                    SELECT stop_id AS join_stop_id, 0 AS prio, * FROM v_interchange_raw WHERE stop_id IS NOT NULL AND stop_id != ''
+                )
+                QUALIFY ROW_NUMBER() OVER (PARTITION BY join_stop_id ORDER BY prio DESC) = 1
+            )
             SELECT
                 t.trip_id,
                 t.route_id,
@@ -425,7 +456,7 @@ class FeatureMartAssembler:
                     WHEN t.headway_actual_s IS NOT NULL
                     THEN CAST(COALESCE(
                         t.headway_actual_s - t.headway_sched_s,
-                        t.headway_actual_s - MEDIAN(t.headway_actual_s) OVER (PARTITION BY t.route_id, t.prev_stop_id, t.hour_of_day),
+                        t.headway_actual_s - MEDIAN(t.headway_actual_s) OVER (PARTITION BY t.start_date, t.route_id, t.prev_stop_id, t.hour_of_day),
                         0.0
                     ) AS DOUBLE)
                     ELSE NULL
@@ -452,18 +483,18 @@ class FeatureMartAssembler:
             FROM with_headway t
             LEFT JOIN v_weather w ON t.timestamp_bucket = w.timestamp::TIMESTAMP
             LEFT JOIN v_osm osm ON (
-                (t.prev_stop_id = osm.slug_prev AND t.stop_id = osm.slug_curr)
-                OR (t.prev_stop_id = osm.stop_id_prev AND t.stop_id = osm.stop_id_curr)
+                t.prev_stop_id = osm.join_prev AND t.stop_id = osm.join_curr
             )
             LEFT JOIN v_calendar cal ON CAST(t.arrival_ts AS DATE)::VARCHAR = cal.calendar_date
             LEFT JOIN v_interchange hub ON (
-                t.stop_id = hub.zbk_slug
-                OR t.stop_id = hub.stop_id
+                t.stop_id = hub.join_stop_id
             )
             WHERE t.prev_stop_id IS NOT NULL
+              AND t.event_type = 'STOPPED'
+              AND t.stop_sequence = t.prev_stop_seq + 1
               {terminal_filter_clause}
-              AND ABS(t.delta_t_run) <= 1800
-            ORDER BY t.arrival_ts
+              AND ABS(t.delta_t_run) <= 600
+            ORDER BY t.arrival_ts, t.trip_id, t.stop_sequence
         """
 
     def build_fusion_sql(

@@ -714,7 +714,14 @@ def run_counterfactual_pipeline(
         mixed_cand = cand_case[cand_case["is_dedicated_right_of_way"] == 0]
         if not mixed_cand.empty:
             cand_case = mixed_cand
-    worst_idx = cand_case[target_col].idxmax() if not cand_case.empty else test_df[target_col].idxmax()
+    if not cand_case.empty:
+        try:
+            cand_preds = pd.Series(cf_engine.predict(cand_case), index=cand_case.index)
+            worst_idx = cand_preds.idxmax()
+        except Exception:
+            worst_idx = cand_case[target_col].idxmax()
+    else:
+        worst_idx = test_df[target_col].idxmax()
     worst_instance = test_df.loc[worst_idx]
     dice_range = (-60.0, 0.0) if target_col == "delta_t_run" else (0.0, 120.0)
     dice_cfs = cf_engine.explain_instance_dice(worst_instance, total_cfs=3, desired_range=dice_range)

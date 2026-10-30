@@ -345,7 +345,7 @@ def run_stage_benchmark(args: argparse.Namespace) -> Dict[str, Any]:
         raise FileNotFoundError(f"Feature mart [{datasource}] not found at {mart_path}. Run --stage fusion --datasource {datasource} first.")
 
     sample_size = getattr(args, "sample_size", 100000)
-    if sample_size is None or sample_size <= 0:
+    if sample_size is None:
         sample_size = 100000
     exclude_terminals = not getattr(args, "include_terminals", False)
     cohort_arg = getattr(args, "cohort", "stratified")
