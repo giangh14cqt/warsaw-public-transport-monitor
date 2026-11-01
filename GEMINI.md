@@ -11,47 +11,113 @@
 - **Primary Ingestion Targets**:
   - `dane.um.warszawa.pl`: Warsaw City API GPS feeds for buses (`um_bus`) and trams (`um_tram`) polled on a strict 10-second wall-clock grid.
   - `api.zbiorkom.live`: GTFS-RT Warsaw endpoint (`zbk_rt`) polled every 30 seconds for TripUpdates and Service Alerts.
-- **Legacy Daemon Process**: Continuous GTFS-RT ingestion daemon running via Docker Compose (`container_name: warsaw_telemetry_daemon` using `docker-compose.yml`) or `python3 collector_daemon.py` (maintained frozen as Track A comparative reference baseline).
-- **Dead Man's Switch**: Sends periodic heartbeats and failure alerts to [Healthchecks.io](https://healthchecks.io) (`HISTORIAN_HEARTBEAT_URL` every 5 min; legacy `HEARTBEAT_URL` every 15 min).
-- **Code Stability Constraint**: Any refactoring or code pushed to `main` must maintain 100% backward compatibility with `historian_daemon.py`, `collector_daemon.py`, `run_preflight.py`, `Dockerfile`, `docker-compose.historian.yml`, `docker-compose.yml`, and `src/` root module proxies (`src/fetcher.py`, `src/gtfs_manager.py`, `src/storage.py`) so remote `git pull` operations never disrupt running daemons.
+- **Dead Man's Switch**: Sends periodic heartbeats and failure alerts to [Healthchecks.io](https://healthchecks.io) (`HISTORIAN_HEARTBEAT_URL` every 5 min).
+- **Code Stability Constraint**: Any refactoring or code pushed to `main` must maintain 100% backward compatibility with `historian_daemon.py`, `run_preflight.py`, `Dockerfile`, `docker-compose.historian.yml`, and `src/` root module proxies so remote `git pull` operations never disrupt running daemons.
 
-### 2. Daily Google Drive Backup
+### 2. Automated Google Drive Backup
 - **Tool**: `rclone`
 - **Configured Remote**: `${RCLONE_REMOTE:-gdrive}` (configured in `.env` or `LOCAL_DEPLOYMENT.md`)
-- **Automated Schedules**:
-  - **Legacy Ingestion (`data/raw/`)**: Cron job daily at 03:00 UTC via [`backup_to_gdrive.sh`](backup_to_gdrive.sh) -> `${RCLONE_REMOTE}:${DEST_FOLDER}` (default `gdrive:WarsawDelayTelemetry/data/raw`).
-  - **Observed Historian (`data/historian/`)**: Cron job every 6 hours at minute 30 (`30 */6 * * *`) via [`backup_historian_to_gdrive.sh`](backup_historian_to_gdrive.sh) -> `${RCLONE_REMOTE}:${HISTORIAN_DEST_FOLDER}` (default `gdrive:WarsawDelayTelemetry/data/historian`).
-- **Audit Logs**: `logs/backup.log`, `logs/backup_historian.log`
+- **Automated Schedule**:
+  - **Historian Telemetry (`data/historian/`)**: Cron job every 6 hours at minute 30 (`30 */6 * * *`) via [`backup_historian_to_gdrive.sh`](backup_historian_to_gdrive.sh) -> `${RCLONE_REMOTE}:${HISTORIAN_DEST_FOLDER}` (default `gdrive:WarsawDelayTelemetry/data/historian`).
+- **Audit Logs**: `logs/backup_historian.log`
 
-### 3. Local Analytics & Google Drive Pull Workflow
-- **Purpose**: When performing local analysis, feature mart fusion, or training models on your workstation, pull the latest Parquet partitions down from Google Drive without touching the remote server.
-- **Pull Scripts**:
-  - Legacy Telemetry: [`pull_from_gdrive.sh`](pull_from_gdrive.sh) (`./pull_from_gdrive.sh` -> syncs into `data/raw/`).
-  - Observed Historian: [`pull_historian_from_gdrive.sh`](pull_historian_from_gdrive.sh) (`./pull_historian_from_gdrive.sh` -> syncs into `data/historian/`).
-- **Sync Behavior**: Runs `rclone copy` with `--update`, fetching only new/updated daily partitions while preserving existing local files.
-- **Audit Logs**: `logs/pull_gdrive.log`, `logs/pull_historian_gdrive.log`
+---
 
-### 4. Architecture & Data Flow
-0. **Core**: `src/core/` (centralized configuration, project paths, feature registry, and domain constants).
-1. **Ingestion (Track A Reference Baseline - Frozen)**: `src/ingestion/` (GTFS-RT protobuf poller + weekly static GTFS archiver + partitioned Parquet writer; frozen for comparative thesis benchmarking and remote server backward compatibility).
-2. **Historian (Track B Primary - Observed Ground Truth)**: `src/historian/` (10s wall-clock aligned poller of `dane.um.warszawa.pl` + bronze verbatim store + silver deduplicated trajectories + gold stop events; default datasource across `run_pipeline.py`).
-3. **Exogenous**: `src/exogenous/` (IMGW-PIB weather telemetry + OSMnx road corridor topology).
-4. **Fusion**: `src/fusion/` (trajectory delay decomposition + multi-source feature mart assembly; dual-datasource support).
-5. **Modeling**: `src/models/` (purged temporal block splitting + TWFE panel regression + LightGBM/CatBoost).
-6. **xAI**: `src/xai/` (TreeSHAP global/local attribution + ALE threshold detection + DiCE counterfactuals).
-7. **Visualization**: `src/visualization/` (academic publication styling, beeswarm, waterfall, ALE, interaction, and counterfactual plot generators).
-8. **Pipeline Orchestrator**: `src/pipeline/` (`stages.py` stage runners + `run_pipeline.py` CLI dispatcher).
+## Standard Operating Procedure: Pulling Latest Data & Running Pipeline
 
-### 5. Project Tracking & GitHub Projects Integration
-- **Active Project Board**: [GitHub Project #1](https://github.com/users/giangh14cqt/projects/1)
-- **Repository**: [`giangh14cqt/warsaw-public-transport-monitor`](https://github.com/giangh14cqt/warsaw-public-transport-monitor)
-- **GitHub Milestones**: [Milestones View](https://github.com/giangh14cqt/warsaw-public-transport-monitor/milestones)
-  - **M1: Ingestion Engine** (Issues #1, #2, #3)
-  - **M2: Exogenous Feature Mart** (Issues #4, #5)
-  - **M3: Merged Feature Store** (Issues #6, #7)
-  - **M4: Benchmark Models POC** (Issues #8, #9, #10)
-  - **M5: xAI Diagnostics POC** (Issues #11, #12, #13, #14)
-  - **M6: Final Deliverables & POC Report** (Issues #15, #16)
-- **Task Delivery Protocol**:
-  - All engineering tasks, subtasks, equations, and acceptance criteria are tracked directly in the GitHub Issues above.
-  - When completing work in new sessions, reference the relevant issue number (`#N`), verify its acceptance criteria, and update the issue status on GitHub Project 1.
+When pulling newer telemetry down from Google Drive and retraining downstream models on this workstation, follow this exact step-by-step protocol. Future agents and researchers do not need to inspect code details—execute these commands in order:
+
+```mermaid
+flowchart TD
+    S1["Step 1: Pull New Partitions<br/>./pull_historian_from_gdrive.sh"] --> S2["Step 2: Inspect Date Ranges<br/>python run_pipeline.py --check-ranges"]
+    S2 --> S3["Step 3: Update Exogenous Weather<br/>python run_pipeline.py --stage exogenous --start-date ... --end-date ..."]
+    S3 --> S4["Step 4: Reconstruct Silver & Gold<br/>python run_pipeline.py --stage gold --start-date ... --end-date ..."]
+    S4 --> S5["Step 5: Reassemble Feature Mart<br/>python run_pipeline.py --stage fusion --datasource historian --force-rebuild"]
+    S5 --> S6["Step 6: Train & Benchmark Models<br/>python run_pipeline.py --stage benchmark --sampling-strategy none --sample-size 0"]
+    S6 --> S7["Step 7: Refresh xAI Diagnostics<br/>python run_pipeline.py --stage xai --sample-size 50000"]
+    S7 --> S8["Step 8: Output Verification<br/>Inspect tables & plots in reports/"]
+```
+
+### Step 1: Pull Latest Telemetry Partitions from Google Drive
+Runs `rclone copy` with `--update`, fetching only newly uploaded hourly and daily partitions while preserving existing local files:
+```bash
+./pull_historian_from_gdrive.sh
+```
+*Note: To exclude loose raw tick files and only fetch hourly archives, pass `--compacted-only`.*
+*Audit log: `logs/pull_historian_gdrive.log`.*
+
+### Step 2: Audit Temporal Bounds
+Check the date boundaries across Bronze, Gold, Weather, GTFS, and OSM sources:
+```bash
+.venv/bin/python run_pipeline.py --check-ranges
+```
+Take note of the newly added dates (e.g., from `2026-10-28` to `2026-10-30`).
+
+### Step 3: Update Exogenous Weather Telemetry
+Harvest IMGW-PIB hourly synoptic observations covering the expanded calendar window:
+```bash
+.venv/bin/python run_pipeline.py --stage exogenous --start-date <START_DATE> --end-date <END_DATE>
+```
+*Example: `.venv/bin/python run_pipeline.py --stage exogenous --start-date 2026-10-18 --end-date 2026-10-30`.*
+
+### Step 4: Reconstruct Silver Trajectories & Gold Stop Events for New Dates
+> **CRITICAL**: The gold reconstructor processes Bronze GPS points into Silver clean trajectories and then into Gold stop arrival/departure events. It automatically caches and reuses existing dates instantaneously, running only the newly acquired dates:
+```bash
+.venv/bin/python run_pipeline.py --stage gold --start-date <NEW_START_DATE> --end-date <NEW_END_DATE>
+```
+*Example: `.venv/bin/python run_pipeline.py --stage gold --start-date 2026-10-28 --end-date 2026-10-30`.*
+*(Note: `--stage all` does not re-run `--stage gold` by default; always run `--stage gold` when new raw partitions are synced).*
+
+### Step 5: Rebuild the Unified Fused Feature Mart
+Fuse all Gold stop events across all available dates with hourly weather, OSMnx corridor topology, school/holiday calendars, and Metro transfer hubs into `data/historian/processed/feature_mart_observed.parquet`:
+```bash
+.venv/bin/python run_pipeline.py --stage fusion --datasource historian --force-rebuild
+```
+*Execution takes ~30 seconds for 7+ million rows using DuckDB priority deduplication views.*
+
+### Step 6: Train & Benchmark Econometric Baseline and Gradient Boosters
+Train the TWFE panel regression baseline, LightGBM, and CatBoost models across Pooled, Urban Tram, Urban Bus, and Suburban Bus cohorts using zero-leakage purged temporal block cross-validation:
+
+- **Full-Population Benchmark (All Records, Exact Thesis Evaluation)**:
+  ```bash
+  .venv/bin/python run_pipeline.py --stage benchmark --datasource historian --sampling-strategy none --sample-size 0 --objective huber
+  ```
+- **Fast Stratified Subsample Benchmark (~50,000 observations with normalized IPS weights)**:
+  ```bash
+  .venv/bin/python run_pipeline.py --stage benchmark --datasource historian --sampling-strategy stratified --sample-size 50000 --objective huber
+  ```
+
+### Step 7: Refresh Explainable AI (xAI) Suite
+Generate TreeSHAP beeswarm distributions, local waterfall plots, ALE response curves, 2D Dedicated ROW shock buffering interactions, and DiCE counterfactuals:
+```bash
+.venv/bin/python run_pipeline.py --stage xai --datasource historian --sampling-strategy stratified --sample-size 50000 --objective huber
+```
+
+### Step 8: Verify Output Deliverables in `reports/`
+All outputs are centralized in `reports/`:
+- **Benchmark Tables**:
+  - `reports/tables/benchmark_comparison.csv` (Primary pooled model comparison)
+  - `reports/tables/benchmark_by_cohort.csv` (Stratified cohort breakdown)
+- **xAI Diagnostics & Counterfactuals**:
+  - `reports/tables/xai/shap_interaction_matrix.csv`
+  - `reports/tables/xai/counterfactual_summary.csv`
+  - `reports/tables/xai/counterfactual_policy_metrics.json`
+  - `reports/figures/xai/` (17 publication-quality visual exhibits: beeswarm, waterfall, ALE, 2D interactions, policy impacts)
+- **Executive Deliverables**:
+  - `reports/EXECUTIVE_REPORT.md` (Comprehensive thesis findings & policy guidance)
+  - `reports/PRESENTATION_SLIDES.md` (12 Marp defense presentation slides)
+
+---
+
+## Architecture & Codebase Map
+
+0. **Core (`src/core/`)**: Centralized paths (`DataPaths`), configuration (`IngestionConfig`), feature schemas (`FeatureRegistry`), and Polish academic/holiday calendar utilities.
+1. **Historian Telemetry (`src/historian/`)**: 10s wall-clock aligned poller of `dane.um.warszawa.pl` (`poller.py`), bronze raw storage (`bronze.py`), silver trajectory kinematics (`silver.py`), weekly content-addressed static GTFS versioner (`static_gtfs.py`), and gold stop-event reconstructor (`gold.py`).
+2. **Exogenous Enrichment (`src/exogenous/`)**: IMGW-PIB hourly synoptic weather telemetry harvester (`imgw.py`), OpenStreetMap corridor road network topology (`osm.py`), and transfer hub centrality (`interchange.py`).
+3. **Spatiotemporal Fusion (`src/fusion/`)**: Multi-source DuckDB feature mart assembler (`feature_mart.py`), trajectory autoregressive lags (`trajectory.py`), and 12-cell stratified sampling engine with IPS weighting (`sampling.py`).
+4. **Econometric & ML Modeling (`src/models/`)**: Purged temporal block splitter with 30-min blackout embargo and boundary trajectory purging (`validation.py`), TWFE panel regression baseline (`twfe.py`), LightGBM & CatBoost gradient boosters with Huber loss (`gbm.py`), and comparative benchmark runner (`benchmark.py`).
+5. **Explainable AI (`src/xai/`)**: Global and local TreeSHAP attribution (`shap_explainer.py`), Accumulated Local Effects curves (`ale_curves.py`), 2D Dedicated ROW shock buffering interactions (`interactions.py`), and Diverse Counterfactual Explanations (`counterfactuals.py`).
+6. **Publication Visualizations (`src/visualization/`)**: Reusable publication styling and standalone figure generators (`plots.py`).
+7. **Pipeline Orchestrator (`src/pipeline/`)**: Modular stage runners (`stages.py`), temporal bounds checker (`ranges.py`), and CLI dispatcher (`run_pipeline.py`).
+
+

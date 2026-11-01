@@ -22,6 +22,18 @@ This directory contains Jupyter notebooks for exploratory data analysis (EDA), v
 - **Infrastructure Metrics**: Measures stop spacing, traffic signal density (signals per kilometer), mixed-traffic lane count, and dedicated right-of-way segregation.
 - **Multi-Source Data Fusion**: Demonstrates how transit delays, weather records, and road corridor geometries are joined together.
 
+### 3. [`03_feature_mart_overview.ipynb`](03_feature_mart_overview.ipynb)
+**Focus**: *Master Modeling Feature Mart Exploration & Econometric Analysis*
+- **Dual-Track Comparative Inventory**: Audits both Track B Observed Ground Truth (5.61M rows, 54 columns) and Track A GTFS-RT Reference Baseline (8.83M rows, 45 columns).
+- **Target Variable ($\Delta t$) Distribution & Decomposition**: Evaluates operational arrival delays within the $\pm 30$-minute operational envelope, segment running delay ($\Delta t_{run}$), and physical passenger dwell standstills.
+- **Modal Buffer Effect**: Empirically demonstrates the punctuality advantage of 100% dedicated tram rails (median delay 35s, 87.4% punctual) over mixed-traffic buses (median delay 79s, 69.6% punctual).
+- **Autoregressive Shock Transmission ($\rho$)**: Quantifies delay persistence ($\Delta t_s$ vs. $\Delta t_{s-1}$), proving that bus delays compound upstream ($\rho = 1.010 > 1.0$) while tram delays dampen ($\rho = 0.984 < 1.0$).
+- **Exogenous Meteorological Shocks**: Measures the +32% rain delay penalty for road buses vs. +17% for segregated rail trams, and charts non-linear delay escalation under heavy rainfall (> 2.0 mm/h).
+- **Corridor Bottlenecks & Right-of-Way**: Evaluates peak vs. off-peak congestion across Warsaw's 12 major transit arteries, contrasting fully mixed traffic (*Wisłostrada*) against dedicated right-of-way (*Towarowa / Okopowa*).
+- **Network Centrality & Headway Irregularity**: Examines +22% longer dwell times at Metro M1/M2 interchange stops and the 5x delay spike under vehicle headway gapping.
+- **GTFS-RT Forecast Fidelity**: Benchmarks public real-time delay predictions against observed physical ground truth (MAE $\approx 23$s, $r = 0.91$).
+- **Multi-Collinearity & Readiness Matrix**: Generates the 14-feature correlation heatmap and descriptive statistics table for econometric TWFE and machine learning.
+
 ---
 
 ## How to Run
