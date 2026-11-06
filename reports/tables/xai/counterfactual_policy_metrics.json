@@ -1,21 +1,21 @@
 {
   "total_incidents_analyzed": 50,
-  "mean_observed_delay": 449.14,
-  "mean_predicted_delay": 12.07084404132704,
-  "mean_predicted_arrival_delay": 422.650844041327,
+  "mean_observed_delay": 528.96,
+  "mean_predicted_delay": 12.175639920667525,
+  "mean_predicted_arrival_delay": 497.17563992066755,
   "on_time_recovery_rates": {
     "dedicated_row_upgrade": 0.0,
     "headway_regularization": 0.0,
-    "upstream_delay_absorption": 0.48,
+    "upstream_delay_absorption": 0.3,
     "transit_signal_priority": 0.0,
-    "joint_multimodal_remedy": 0.48
+    "joint_multimodal_remedy": 0.3
   },
   "mean_delay_reduction_seconds": {
-    "dedicated_row_upgrade": 0.9788767869338261,
-    "headway_regularization": 0.7407862900519921,
-    "upstream_delay_absorption": 291.6706287673326,
-    "transit_signal_priority": 2.002992209289184,
-    "joint_multimodal_remedy": 297.7141030690148
+    "dedicated_row_upgrade": 0.7156079357865519,
+    "headway_regularization": 0.38337456317637814,
+    "upstream_delay_absorption": 330.9961965065256,
+    "transit_signal_priority": 3.450961260113059,
+    "joint_multimodal_remedy": 337.97210823177954
   },
   "dice_case_study_counterfactuals_found": 0
 }
