@@ -16,12 +16,17 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 from zoneinfo import ZoneInfo
 
 import duckdb
+import numpy as np
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 
 from src.historian.config import paths
-from src.historian.matching.geometry import metric_distance
+from src.historian.matching.geometry import (
+    METERS_PER_DEG_LAT,
+    METERS_PER_DEG_LON,
+    metric_distance,
+)
 from src.historian.static_gtfs import HistorianGTFSVersioner
 
 logger = logging.getLogger(__name__)
@@ -246,7 +251,7 @@ class SilverTrajectoryProcessor:
     ) -> pd.DataFrame:
         """
         Sorts fixes chronologically by vehicle, collapses repeated identical pings,
-        and computes inter-fix delta distance, delta time, and speed.
+        and computes inter-fix delta distance, delta time, and speed using vectorized NumPy arrays.
         """
         if isinstance(raw_fixes, pd.DataFrame):
             if raw_fixes.empty:
@@ -264,66 +269,68 @@ class SilverTrajectoryProcessor:
         )
         df.reset_index(drop=True, inplace=True)
 
-        processed_rows = []
-        grouped = df.groupby(["vehicle_type", "vehicle_number"], sort=False)
+        n = len(df)
+        v_type_arr = df["vehicle_type"].to_numpy()
+        v_num_arr = df["vehicle_number"].to_numpy()
+        lat_arr = df["lat"].to_numpy(dtype=np.float64)
+        lon_arr = df["lon"].to_numpy(dtype=np.float64)
+        time_str_arr = df["gps_time_str"].to_numpy()
 
-        for (v_type, v_num), group in grouped:
-            prev_lat: Optional[float] = None
-            prev_lon: Optional[float] = None
-            prev_ts: Optional[int] = None
-            prev_time_str: Optional[str] = None
+        same_veh = np.zeros(n, dtype=bool)
+        if n > 1:
+            same_veh[1:] = (v_type_arr[1:] == v_type_arr[:-1]) & (v_num_arr[1:] == v_num_arr[:-1])
 
-            for row in group.itertuples(index=False):
-                lat = row.lat
-                lon = row.lon
-                ts = row.gps_timestamp_utc
-                time_str = row.gps_time_str
+        is_dup = np.zeros(n, dtype=bool)
+        if n > 1:
+            is_dup[1:] = (
+                same_veh[1:]
+                & (time_str_arr[1:] == time_str_arr[:-1])
+                & (lat_arr[1:] == lat_arr[:-1])
+                & (lon_arr[1:] == lon_arr[:-1])
+            )
 
-                # If exact same GPS timestamp or coordinates, collapse into previous row
-                if prev_time_str == time_str and prev_lat == lat and prev_lon == lon:
-                    if processed_rows:
-                        processed_rows[-1]["n_ticks_seen"] += 1
-                    continue
+        keep_mask = ~is_dup
+        keep_idx = np.flatnonzero(keep_mask)
+        n_ticks = np.diff(np.append(keep_idx, n)).astype(np.int64)
 
-                if prev_ts is not None and ts > prev_ts:
-                    dt = float(ts - prev_ts)
-                    dd = metric_distance(prev_lat, prev_lon, lat, lon)
-                    speed = dd / dt if dt > 0 else 0.0
-                else:
-                    dt = 0.0
-                    dd = 0.0
-                    speed = 0.0
+        res = df.iloc[keep_idx].copy().reset_index(drop=True)
+        m = len(res)
 
-                is_static = bool(speed < 0.5 and dd < 5.0)
+        v_type_r = res["vehicle_type"].to_numpy()
+        v_num_r = res["vehicle_number"].to_numpy()
+        lat_r = res["lat"].to_numpy(dtype=np.float64)
+        lon_r = res["lon"].to_numpy(dtype=np.float64)
+        ts_r = res["gps_timestamp_utc"].to_numpy(dtype=np.int64)
 
-                processed_rows.append(
-                    {
-                        "service_date": row.service_date,
-                        "vehicle_type": v_type,
-                        "vehicle_number": v_num,
-                        "route_id": row.route_id,
-                        "brigade": row.brigade,
-                        "lat": lat,
-                        "lon": lon,
-                        "gps_timestamp_utc": ts,
-                        "gps_time_str": time_str,
-                        "tick_ts": row.tick_ts,
-                        "delta_t_s": round(dt, 2),
-                        "delta_d_m": round(dd, 2),
-                        "speed_mps": round(speed, 2),
-                        "is_static": is_static,
-                        "n_ticks_seen": 1,
-                        "matched_trip_id": None,
-                    }
-                )
+        same_veh_r = np.zeros(m, dtype=bool)
+        if m > 1:
+            same_veh_r[1:] = (v_type_r[1:] == v_type_r[:-1]) & (v_num_r[1:] == v_num_r[:-1])
 
-                prev_lat = lat
-                prev_lon = lon
-                prev_ts = ts
-                prev_time_str = time_str
+        dt = np.zeros(m, dtype=np.float64)
+        dd = np.zeros(m, dtype=np.float64)
+        speed = np.zeros(m, dtype=np.float64)
 
-        result_df = pd.DataFrame(processed_rows)
-        return result_df
+        if m > 1:
+            valid_dt = same_veh_r[1:] & (ts_r[1:] > ts_r[:-1])
+            dt_step = (ts_r[1:] - ts_r[:-1]).astype(np.float64)
+            dt[1:] = np.where(valid_dt, dt_step, 0.0)
+
+            dx = (lon_r[1:] - lon_r[:-1]) * METERS_PER_DEG_LON
+            dy = (lat_r[1:] - lat_r[:-1]) * METERS_PER_DEG_LAT
+            dd_step = np.hypot(dx, dy)
+            dd[1:] = np.where(valid_dt, dd_step, 0.0)
+
+            np.divide(dd[1:], dt[1:], out=speed[1:], where=dt[1:] > 0)
+
+        res["delta_t_s"] = np.round(dt, 2)
+        res["delta_d_m"] = np.round(dd, 2)
+        res["speed_mps"] = np.round(speed, 2)
+        res["is_static"] = (speed < 0.5) & (dd < 5.0)
+        res["n_ticks_seen"] = n_ticks
+        res["matched_trip_id"] = None
+
+        ordered_cols = [f.name for f in SILVER_SCHEMA]
+        return res[ordered_cols]
 
     def match_trips_using_gtfs(self, df: pd.DataFrame, date_str: str) -> pd.DataFrame:
         """
@@ -399,7 +406,7 @@ class SilverTrajectoryProcessor:
                     JOIN active_services act ON t.service_id = act.service_id
                     WHERE t.brigade IS NOT NULL
                     GROUP BY t.trip_id, t.route_id, t.brigade
-                    ORDER BY trip_start
+                    ORDER BY trip_start, t.trip_id
                 """
             else:
                 query = """
@@ -413,7 +420,7 @@ class SilverTrajectoryProcessor:
                     JOIN stop_times st ON t.trip_id = st.trip_id
                     WHERE t.brigade IS NOT NULL
                     GROUP BY t.trip_id, t.route_id, t.brigade
-                    ORDER BY trip_start
+                    ORDER BY trip_start, t.trip_id
                 """
 
             trip_spans = con.execute(query).df()
@@ -432,7 +439,7 @@ class SilverTrajectoryProcessor:
                     JOIN stop_times st ON t.trip_id = st.trip_id
                     WHERE t.brigade IS NOT NULL
                     GROUP BY t.trip_id, t.route_id, t.brigade
-                    ORDER BY trip_start
+                    ORDER BY trip_start, t.trip_id
                 """
                 trip_spans = con.execute(fallback_query).df()
 
@@ -448,58 +455,88 @@ class SilverTrajectoryProcessor:
                     return int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
                 return 0
 
-            trip_spans["start_sec"] = trip_spans["trip_start"].apply(time_to_seconds)
-            trip_spans["end_sec"] = trip_spans["trip_end"].apply(time_to_seconds)
+            trip_spans["start_sec"] = [time_to_seconds(x) for x in trip_spans["trip_start"]]
+            trip_spans["end_sec"] = [time_to_seconds(x) for x in trip_spans["trip_end"]]
 
-            # Map time of day for vehicle fixes
+            # Map time of day for vehicle fixes via unique string dictionary lookup
             def extract_sec_of_day(time_str: str) -> int:
                 try:
-                    parts = time_str.rsplit(" ", maxsplit=1)[-1].split(":")
+                    parts = str(time_str).rsplit(" ", maxsplit=1)[-1].split(":")
                     return int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
                 except Exception:
                     return 0
 
-            df["sec_of_day"] = df["gps_time_str"].apply(extract_sec_of_day)
+            unique_tstrs = df["gps_time_str"].unique()
+            tstr_map = {s: extract_sec_of_day(s) for s in unique_tstrs}
+            sec_of_day_arr = df["gps_time_str"].map(tstr_map).to_numpy(dtype=np.int64)
 
-            # Build in-memory lookup map: (route_id, brigade) -> list of (trip_id, start_sec, end_sec)
-            trip_map: Dict[tuple, list] = {}
+            # Build in-memory lookup map: (route_id, brigade) -> (t_ids, t_starts, t_ends)
+            raw_trip_map: Dict[tuple, list] = {}
             for r in trip_spans[["route_id", "brigade", "trip_id", "start_sec", "end_sec"]].itertuples(index=False):
                 key = (str(r.route_id), str(r.brigade))
-                if key not in trip_map:
-                    trip_map[key] = []
-                trip_map[key].append((r.trip_id, r.start_sec, r.end_sec))
+                if key not in raw_trip_map:
+                    raw_trip_map[key] = []
+                raw_trip_map[key].append((r.trip_id, int(r.start_sec), int(r.end_sec)))
+
+            trip_map_np = {}
+            for k, v in raw_trip_map.items():
+                t_ids = np.array([x[0] for x in v], dtype=object)
+                t_starts = np.array([x[1] for x in v], dtype=np.int64)
+                t_ends = np.array([x[2] for x in v], dtype=np.int64)
+                trip_map_np[k] = (t_ids, t_starts, t_ends)
 
             # Match each fix to active trip with a 45-minute buffer (preventing severe delay censoring),
-            # supporting GTFS 24:00+ midnight schedule conventions.
-            matched_trips = []
-            for r in df[["route_id", "brigade", "sec_of_day"]].itertuples(index=False):
-                key = (str(r.route_id), str(r.brigade))
-                sec = r.sec_of_day
-                candidate_id = None
-                if key in trip_map:
-                    valid_candidates = []
-                    # Evaluate both standard sec and next-day midnight continuation (sec + 86400) for late-night trips
-                    candidate_secs = [sec, sec + 86400] if sec < 18000 else [sec]
-                    for tid, s_start, s_end in trip_map[key]:
-                        for eff_sec in candidate_secs:
-                            # 15m pre-departure to 45m post-arrival tolerance
-                            if (s_start - 900) <= eff_sec <= (s_end + 2700):
-                                if s_start <= eff_sec <= s_end:
-                                    dist = 0
-                                elif eff_sec < s_start:
-                                    # Penalize pre-departure buffer relative to active post-arrival delay tail
-                                    dist = (s_start - eff_sec) + 900
-                                else:
-                                    dist = eff_sec - s_end
-                                valid_candidates.append((dist, tid))
-                    if valid_candidates:
-                        valid_candidates.sort(key=lambda x: x[0])
-                        candidate_id = valid_candidates[0][1]
+            # supporting GTFS 24:00+ midnight schedule conventions via vectorized NumPy broadcasting per brigade.
+            matched_arr = np.full(len(df), None, dtype=object)
+            INF = 10**9
 
-                matched_trips.append(candidate_id)
+            for (r_id, brig), idx_arr in df.groupby(["route_id", "brigade"], sort=False).indices.items():
+                key = (str(r_id), str(brig))
+                if key not in trip_map_np:
+                    continue
+                t_ids, t_starts, t_ends = trip_map_np[key]
+                secs = sec_of_day_arr[idx_arr]
 
-            df["matched_trip_id"] = matched_trips
-            df.drop(columns=["sec_of_day"], inplace=True)
+                # Standard sec evaluation: shape (N_fixes, K_trips)
+                s = secs[:, None]
+                st = t_starts[None, :]
+                en = t_ends[None, :]
+                in_win1 = (s >= (st - 900)) & (s <= (en + 2700))
+                dist1 = np.where(
+                    ~in_win1,
+                    INF,
+                    np.where(
+                        s < st,
+                        (st - s) + 900,
+                        np.where(s <= en, 0, s - en),
+                    ),
+                )
+
+                # Midnight continuation (sec + 86400) for late-night trips (sec < 18000)
+                is_late = secs < 18000
+                if np.any(is_late):
+                    s2 = (secs + 86400)[:, None]
+                    in_win2 = is_late[:, None] & (s2 >= (st - 900)) & (s2 <= (en + 2700))
+                    dist2 = np.where(
+                        ~in_win2,
+                        INF,
+                        np.where(
+                            s2 < st,
+                            (st - s2) + 900,
+                            np.where(s2 <= en, 0, s2 - en),
+                        ),
+                    )
+                    best_per_trip = np.minimum(dist1, dist2)
+                else:
+                    best_per_trip = dist1
+
+                min_dist = best_per_trip.min(axis=1)
+                best_k = best_per_trip.argmin(axis=1)
+                valid = min_dist < INF
+                if np.any(valid):
+                    matched_arr[idx_arr[valid]] = t_ids[best_k[valid]]
+
+            df["matched_trip_id"] = matched_arr
 
         except Exception as e:
             logger.warning(f"Error during GTFS trip matching: {e}")

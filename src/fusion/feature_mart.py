@@ -241,7 +241,7 @@ class FeatureMartAssembler:
         )
 
         terminal_filter_clause = (
-            "AND (t.is_terminal_stop = false OR t.max_seq <= t.min_seq + 1)"
+            "AND (is_terminal_stop = false OR max_seq <= min_seq + 1)"
             if exclude_terminals
             else ""
         )
@@ -280,9 +280,9 @@ class FeatureMartAssembler:
                     confidence
                 FROM read_parquet('{gold_pattern}')
                 WHERE event_type IN ('STOPPED', 'PASSED')
-                  AND actual_arrival_utc IS NOT NULL
-                  AND ABS(arrival_delay_seconds) <= {max_delay_seconds}
-                  {date_filter_clause}
+                   AND actual_arrival_utc IS NOT NULL
+                   AND ABS(arrival_delay_seconds) <= {max_delay_seconds}
+                   {date_filter_clause}
                 {limit_clause}
             ),
             ordered AS (
@@ -336,9 +336,9 @@ class FeatureMartAssembler:
                     EXTRACT(hour FROM timezone('Europe/Warsaw', to_timestamp(actual_arrival_utc))) AS hour_of_day,
                     EXTRACT(dayofweek FROM timezone('Europe/Warsaw', to_timestamp(actual_arrival_utc))) AS day_of_week,
                     CASE WHEN EXTRACT(dayofweek FROM timezone('Europe/Warsaw', to_timestamp(actual_arrival_utc))) IN (0, 6) THEN 1 ELSE 0 END AS is_weekend,
-                    CASE WHEN EXTRACT(hour FROM timezone('Europe/Warsaw', to_timestamp(actual_arrival_utc))) IN (7, 8, 9, 16, 17, 18) THEN 1 ELSE 0 END AS is_peak_hour,
-                    CASE WHEN EXTRACT(hour FROM timezone('Europe/Warsaw', to_timestamp(actual_arrival_utc))) IN (7, 8, 9) THEN 1 ELSE 0 END AS is_morning_peak,
-                    CASE WHEN EXTRACT(hour FROM timezone('Europe/Warsaw', to_timestamp(actual_arrival_utc))) IN (16, 17, 18) THEN 1 ELSE 0 END AS is_evening_peak,
+                    CASE WHEN (EXTRACT(hour FROM timezone('Europe/Warsaw', to_timestamp(actual_arrival_utc))) BETWEEN 7 AND 9) OR (EXTRACT(hour FROM timezone('Europe/Warsaw', to_timestamp(actual_arrival_utc))) BETWEEN 16 AND 18) THEN 1 ELSE 0 END AS is_peak_hour,
+                    CASE WHEN EXTRACT(hour FROM timezone('Europe/Warsaw', to_timestamp(actual_arrival_utc))) BETWEEN 7 AND 9 THEN 1 ELSE 0 END AS is_morning_peak,
+                    CASE WHEN EXTRACT(hour FROM timezone('Europe/Warsaw', to_timestamp(actual_arrival_utc))) BETWEEN 16 AND 18 THEN 1 ELSE 0 END AS is_evening_peak,
                     CASE
                         WHEN prev_sched_dep IS NOT NULL AND prev_sched_arr IS NOT NULL AND prev_sched_dep > prev_sched_arr
                              AND prev_departure_delay IS NOT NULL
@@ -369,6 +369,7 @@ class FeatureMartAssembler:
                         ELSE 'other'
                     END AS transit_cohort
                 FROM ordered
+                WHERE prev_stop_id IS NOT NULL
             ),
             with_headway_raw AS (
                 SELECT
@@ -384,7 +385,7 @@ class FeatureMartAssembler:
                     )) AS raw_headway_sched_s
                 FROM trajectories
             ),
-            with_headway AS (
+            with_headway AS MATERIALIZED (
                 SELECT
                     *,
                     CASE
@@ -396,6 +397,30 @@ class FeatureMartAssembler:
                         ELSE NULL
                     END AS headway_sched_s
                 FROM with_headway_raw
+                WHERE event_type = 'STOPPED'
+                  AND stop_sequence = prev_stop_seq + 1
+                  {terminal_filter_clause}
+                  AND ABS(delta_t_run) <= 600
+            ),
+            v_need_med_keys AS (
+                SELECT DISTINCT start_date, route_id, prev_stop_id, hour_of_day
+                FROM with_headway
+                WHERE headway_actual_s IS NOT NULL AND headway_sched_s IS NULL
+            ),
+            v_headway_med AS (
+                SELECT
+                    w.start_date,
+                    w.route_id,
+                    w.prev_stop_id,
+                    w.hour_of_day,
+                    MEDIAN(w.headway_actual_s) AS med_headway_s
+                FROM with_headway w
+                SEMI JOIN v_need_med_keys k
+                  ON w.start_date = k.start_date
+                 AND w.route_id = k.route_id
+                 AND w.prev_stop_id = k.prev_stop_id
+                 AND w.hour_of_day = k.hour_of_day
+                GROUP BY w.start_date, w.route_id, w.prev_stop_id, w.hour_of_day
             ),
             v_weather AS ({weather_subquery}),
             v_osm_raw AS ({osm_subquery}),
@@ -456,7 +481,7 @@ class FeatureMartAssembler:
                     WHEN t.headway_actual_s IS NOT NULL
                     THEN CAST(COALESCE(
                         t.headway_actual_s - t.headway_sched_s,
-                        t.headway_actual_s - MEDIAN(t.headway_actual_s) OVER (PARTITION BY t.start_date, t.route_id, t.prev_stop_id, t.hour_of_day),
+                        t.headway_actual_s - hm.med_headway_s,
                         0.0
                     ) AS DOUBLE)
                     ELSE NULL
@@ -481,6 +506,12 @@ class FeatureMartAssembler:
                 COALESCE(osm.lane_capacity, 3) AS lane_capacity,
                 CASE WHEN osm.corridor_name IS NOT NULL THEN 1 ELSE 0 END AS is_study_corridor
             FROM with_headway t
+            LEFT JOIN v_headway_med hm ON (
+                t.start_date = hm.start_date
+                AND t.route_id = hm.route_id
+                AND t.prev_stop_id = hm.prev_stop_id
+                AND t.hour_of_day = hm.hour_of_day
+            )
             LEFT JOIN v_weather w ON t.timestamp_bucket = w.timestamp::TIMESTAMP
             LEFT JOIN v_osm osm ON (
                 t.prev_stop_id = osm.join_prev AND t.stop_id = osm.join_curr
@@ -489,11 +520,6 @@ class FeatureMartAssembler:
             LEFT JOIN v_interchange hub ON (
                 t.stop_id = hub.join_stop_id
             )
-            WHERE t.prev_stop_id IS NOT NULL
-              AND t.event_type = 'STOPPED'
-              AND t.stop_sequence = t.prev_stop_seq + 1
-              {terminal_filter_clause}
-              AND ABS(t.delta_t_run) <= 600
             ORDER BY t.arrival_ts, t.trip_id, t.stop_sequence
         """
 

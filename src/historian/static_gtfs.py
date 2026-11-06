@@ -31,6 +31,9 @@ VERSIONS_SCHEMA = pa.schema(
     ]
 )
 
+_INDEX_VERIFIED_CACHE: set = set()
+_SNAPSHOT_META_CACHE: dict = {}
+
 
 class HistorianGTFSVersioner:
     """Manages daily content-addressed static GTFS schedule archives and DuckDB indices."""
@@ -313,9 +316,12 @@ class HistorianGTFSVersioner:
         if not duckdb_candidates:
             return None
 
-        # Ensure all candidate duckdbs have complete tables indexed
+        # Ensure all candidate duckdbs have complete tables indexed (cached by path + mtime)
         for db_path in duckdb_candidates:
-            self._build_duckdb_index(db_path.parent)
+            cache_key = (str(db_path), db_path.stat().st_mtime)
+            if cache_key not in _INDEX_VERIFIED_CACHE:
+                self._build_duckdb_index(db_path.parent)
+                _INDEX_VERIFIED_CACHE.add((str(db_path), db_path.stat().st_mtime))
 
         if not date_str:
             return duckdb_candidates[-1]
@@ -323,26 +329,38 @@ class HistorianGTFSVersioner:
         target_compact = date_str.replace("-", "")
         matches = []
         for db_path in duckdb_candidates:
-            parent = db_path.parent
-            cal_dates_file = parent / "calendar_dates.txt"
-            feed_info_file = parent / "feed_info.txt"
+            mtime = db_path.stat().st_mtime
+            meta_key = (str(db_path), mtime)
+            if meta_key not in _SNAPSHOT_META_CACHE:
+                parent = db_path.parent
+                cal_dates_file = parent / "calendar_dates.txt"
+                feed_info_file = parent / "feed_info.txt"
 
-            feed_start = ""
-            if feed_info_file.exists():
-                try:
-                    fi = pd.read_csv(feed_info_file, dtype=str)
-                    if "feed_start_date" in fi.columns:
-                        feed_start = str(fi["feed_start_date"].iloc[0]).strip()
-                except Exception:
-                    pass
+                feed_start = ""
+                if feed_info_file.exists():
+                    try:
+                        fi = pd.read_csv(feed_info_file, dtype=str)
+                        if "feed_start_date" in fi.columns:
+                            feed_start = str(fi["feed_start_date"].iloc[0]).strip()
+                    except Exception:
+                        pass
 
-            n_date_services = 0
-            if cal_dates_file.exists():
-                try:
-                    cd = pd.read_csv(cal_dates_file, dtype=str)
-                    n_date_services = int((cd["date"] == target_compact).sum())
-                except Exception:
-                    pass
+                date_counts: dict = {}
+                if cal_dates_file.exists():
+                    try:
+                        cd = pd.read_csv(cal_dates_file, usecols=["date"], dtype=str)
+                        date_counts = cd["date"].value_counts().to_dict()
+                    except Exception:
+                        pass
+
+                _SNAPSHOT_META_CACHE[meta_key] = {
+                    "feed_start": feed_start,
+                    "date_counts": date_counts,
+                }
+
+            meta = _SNAPSHOT_META_CACHE[meta_key]
+            feed_start = meta["feed_start"]
+            n_date_services = int(meta["date_counts"].get(target_compact, 0))
 
             matches.append(
                 {
@@ -351,7 +369,7 @@ class HistorianGTFSVersioner:
                     "has_full_date": n_date_services >= 10,
                     "n_services": n_date_services,
                     "feed_start": feed_start,
-                    "mtime": db_path.stat().st_mtime,
+                    "mtime": mtime,
                 }
             )
 

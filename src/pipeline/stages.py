@@ -205,9 +205,24 @@ def run_stage_exogenous(args: argparse.Namespace) -> Dict[str, Any]:
     }
 
 
+def _reconstruct_single_date_worker(task: tuple) -> str:
+    """Worker function for parallel multi-date Silver and Gold reconstruction."""
+    d_str, force_rebuild, use_raw_bronze = task
+    from src.historian.gold import GoldStopEventReconstructor
+    from src.historian.silver import SilverTrajectoryProcessor
+
+    silver_proc = SilverTrajectoryProcessor()
+    gold_rec = GoldStopEventReconstructor()
+    silver_proc.process_date(d_str, force=force_rebuild, use_raw_bronze=use_raw_bronze)
+    gold_rec.process_date(d_str, force=force_rebuild, use_raw_bronze=use_raw_bronze)
+    return d_str
+
+
 def run_stage_gold(args: argparse.Namespace) -> Dict[str, Any]:
     """Reconstruct Historian Silver trajectories and Gold stop-event ground truth."""
     banner("STAGE 2.5: HISTORIAN SILVER & GOLD STOP-EVENT RECONSTRUCTION")
+    from concurrent.futures import ProcessPoolExecutor
+
     from src.historian.config import paths as hist_paths
     from src.historian.gold import GoldStopEventReconstructor
     from src.historian.silver import SilverTrajectoryProcessor
@@ -217,6 +232,7 @@ def run_stage_gold(args: argparse.Namespace) -> Dict[str, Any]:
     use_raw_bronze = getattr(args, "use_raw_bronze", False)
     start_date = getattr(args, "start_date", None)
     end_date = getattr(args, "end_date", None)
+    req_workers = getattr(args, "workers", None)
 
     silver_proc = SilverTrajectoryProcessor()
     gold_rec = GoldStopEventReconstructor()
@@ -236,12 +252,48 @@ def run_stage_gold(args: argparse.Namespace) -> Dict[str, Any]:
     if end_date:
         sorted_dates = [d for d in sorted_dates if d <= end_date[:10]]
 
-    processed_dates = []
+    cached_dates = []
+    dates_to_build = []
     for d_str in sorted_dates:
-        silver_proc.process_date(d_str, force=force_rebuild, use_raw_bronze=use_raw_bronze)
-        gold_rec.process_date(d_str, force=force_rebuild, use_raw_bronze=use_raw_bronze)
-        processed_dates.append(d_str)
+        s_file = silver_proc.silver_dir / f"date={d_str}" / "trajectories.parquet"
+        g_file = gold_rec.gold_dir / "stop_events" / f"date={d_str}" / "stop_events.parquet"
+        if (
+            not force_rebuild
+            and s_file.exists()
+            and s_file.stat().st_size > 0
+            and g_file.exists()
+            and g_file.stat().st_size > 0
+        ):
+            cached_dates.append(d_str)
+        else:
+            dates_to_build.append(d_str)
 
+    for d_str in cached_dates:
+        silver_proc.process_date(d_str, force=False, use_raw_bronze=use_raw_bronze)
+        gold_rec.process_date(d_str, force=False, use_raw_bronze=use_raw_bronze)
+
+    if dates_to_build:
+        # Pre-warm GTFS DuckDB indices in the parent process to prevent concurrent write locks
+        for d_str in dates_to_build:
+            silver_proc.gtfs_versioner.get_active_duckdb(d_str)
+
+        default_workers = min(4, max(1, (os.cpu_count() or 4) // 2))
+        max_workers = req_workers if (req_workers and req_workers > 0) else default_workers
+        workers = min(len(dates_to_build), max_workers)
+
+        if workers <= 1:
+            for d_str in dates_to_build:
+                silver_proc.process_date(d_str, force=force_rebuild, use_raw_bronze=use_raw_bronze)
+                gold_rec.process_date(d_str, force=force_rebuild, use_raw_bronze=use_raw_bronze)
+        else:
+            logger.info(
+                f"Reconstructing {len(dates_to_build)} date(s) in parallel across {workers} worker processes: {dates_to_build}"
+            )
+            tasks = [(d_str, force_rebuild, use_raw_bronze) for d_str in dates_to_build]
+            with ProcessPoolExecutor(max_workers=workers) as executor:
+                list(executor.map(_reconstruct_single_date_worker, tasks))
+
+    processed_dates = sorted_dates
     duration = time.time() - t0
     return {
         "status": "success",

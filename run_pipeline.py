@@ -134,6 +134,12 @@ def main():
         help="Force Silver/Gold reconstruction to read cold raw Bronze .tar.zst/.gz archives instead of daily bronze_parquet.",
     )
     parser.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        help="Max parallel worker processes for multi-date Silver/Gold reconstruction (default: auto up to 4).",
+    )
+    parser.add_argument(
         "--cohort",
         type=str,
         default="stratified",

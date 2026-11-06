@@ -5,6 +5,7 @@ calculates exact arrival/departure delays and dwell times, and cross-validates a
 zbiorkom GTFS-RT forecasts to quantify forecast error.
 """
 
+from collections import Counter
 import datetime
 import glob
 import gzip
@@ -81,7 +82,11 @@ class GoldStopEventReconstructor:
             self.bronze_parquet_dir = bronze_parquet_dir
         elif bronze_dir is not None and bronze_dir != paths.bronze_dir:
             self.bronze_parquet_dir = bronze_dir.parent / "bronze_parquet"
-        elif gold_dir is not None and gold_dir != paths.gold_dir:
+        elif (
+            gold_dir is not None
+            and gold_dir != paths.gold_dir
+            and (gold_dir.parent / "bronze_parquet").exists()
+        ):
             self.bronze_parquet_dir = gold_dir.parent / "bronze_parquet"
         else:
             self.bronze_parquet_dir = paths.bronze_parquet_dir
@@ -92,7 +97,11 @@ class GoldStopEventReconstructor:
     def _get_active_duckdb(self, date_str: Optional[str] = None) -> str:
         from src.historian.static_gtfs import HistorianGTFSVersioner
 
-        gtfs_parent = self.gold_dir.parent / "gtfs" if self.gold_dir else None
+        gtfs_parent = (
+            self.gold_dir.parent / "gtfs"
+            if (self.gold_dir and (self.gold_dir.parent / "gtfs").exists())
+            else None
+        )
         versioner = HistorianGTFSVersioner(gtfs_dir=gtfs_parent)
         active_db = versioner.get_active_duckdb(date_str)
         if active_db and Path(active_db).exists():
@@ -228,7 +237,7 @@ class GoldStopEventReconstructor:
             silver_df = silver_df[valid_age_mask]
 
         # Keep only fixes that matched a GTFS trip
-        matched_df = silver_df[silver_df["matched_trip_id"].notna()].copy()
+        matched_df = silver_df[silver_df["matched_trip_id"].notna()].reset_index(drop=True)
         if matched_df.empty:
             logger.warning("No matched trips in Silver trajectories.")
             return None
@@ -257,119 +266,194 @@ class GoldStopEventReconstructor:
         trip_stops_df = con.execute(stops_query, unique_trips).df()
         con.close()
 
+        if trip_stops_df.empty:
+            logger.warning(f"No matching GTFS stop_times found for {date_str}.")
+            return None
+
         # Load zbiorkom benchmark forecasts
         zbk_forecasts = self.load_zbk_forecast_delays(date_str, use_raw_bronze=use_raw_bronze)
 
-        # Group fixes by trip_id
-        fixes_by_trip = {tid: grp.sort_values("gps_timestamp_utc") for tid, grp in matched_df.groupby("matched_trip_id")}
+        # Pre-cache unique HH:MM:SS timetable strings -> UTC epoch timestamps
+        unique_times = pd.unique(
+            np.concatenate(
+                [
+                    trip_stops_df["arrival_time"].to_numpy(),
+                    trip_stops_df["departure_time"].to_numpy(),
+                ]
+            )
+        )
+        t_cache = {t: self._parse_hhmmss_to_utc(date_str, t) for t in unique_times}
+
+        st_arr_utc_arr = np.array(
+            [t_cache[t] for t in trip_stops_df["arrival_time"].to_numpy()], dtype=np.int64
+        )
+        st_arr_utc_list = st_arr_utc_arr.tolist()
+        st_dep_utc_list = [t_cache[t] for t in trip_stops_df["departure_time"].tolist()]
+        st_seq_list = [int(x) for x in trip_stops_df["stop_sequence"].tolist()]
+        st_stop_id_list = [str(x) for x in trip_stops_df["stop_id"].tolist()]
+        st_stop_name_list = [str(x) for x in trip_stops_df["stop_name"].tolist()]
+        st_lat_all = trip_stops_df["stop_lat"].to_numpy(dtype=np.float64)
+        st_lon_all = trip_stops_df["stop_lon"].to_numpy(dtype=np.float64)
+        st_sx_all = (st_lon_all - LON_0_DEG) * METERS_PER_DEG_LON
+        st_sy_all = (st_lat_all - LAT_0_DEG) * METERS_PER_DEG_LAT
+
+        # Pre-extract matched trajectory arrays and Warsaw metric projections
+        m_veh_num = matched_df["vehicle_number"].astype(str).to_numpy()
+        m_veh_type_list = [str(x) for x in matched_df["vehicle_type"].tolist()]
+        m_route_id_list = [str(x) for x in matched_df["route_id"].tolist()]
+        m_brigade_list = [str(x) for x in matched_df["brigade"].tolist()]
+        m_lat = matched_df["lat"].to_numpy(dtype=np.float64)
+        m_lon = matched_df["lon"].to_numpy(dtype=np.float64)
+        m_ts = matched_df["gps_timestamp_utc"].to_numpy(dtype=np.int64)
+        m_fx_all = (m_lon - LON_0_DEG) * METERS_PER_DEG_LON
+        m_fy_all = (m_lat - LAT_0_DEG) * METERS_PER_DEG_LAT
+
+        fix_groups = matched_df.groupby("matched_trip_id", sort=False).indices
+        stop_groups = trip_stops_df.groupby("trip_id", sort=True).indices
 
         gold_rows: List[Dict[str, Any]] = []
         retained_trips_cnt = 0
         dropped_incomplete_cnt = 0
+        radius = self.stop_radius
 
-        # Process each trip's scheduled stops
-        for trip_id, stop_group in trip_stops_df.groupby("trip_id"):
-            if trip_id not in fixes_by_trip:
+        # Process each trip's scheduled stops using 2D vectorized Euclidean distance matrices
+        for trip_id, s_idx in stop_groups.items():
+            if trip_id not in fix_groups:
                 continue
 
-            trip_fixes = fixes_by_trip[trip_id]
+            f_idx = fix_groups[trip_id]
+            if len(f_idx) > 1:
+                f_idx = f_idx[np.argsort(m_ts[f_idx], kind="quicksort")]
+
             # Enforce single physical vehicle per trip instance (select dominant vehicle by fix count)
-            if trip_fixes["vehicle_number"].nunique() > 1:
-                dominant_veh = str(trip_fixes["vehicle_number"].value_counts().index[0])
-                trip_fixes = trip_fixes[trip_fixes["vehicle_number"].astype(str) == dominant_veh]
+            v_nums = m_veh_num[f_idx]
+            first_v = str(v_nums[0])
+            if not np.all(v_nums == first_v):
+                dominant_veh = str(Counter(v_nums).most_common(1)[0][0])
+                f_idx = f_idx[v_nums == dominant_veh]
+                vehicle_num = dominant_veh
             else:
-                dominant_veh = str(trip_fixes.iloc[0]["vehicle_number"])
+                vehicle_num = first_v
 
-            vehicle_num = dominant_veh
-            vehicle_type = str(trip_fixes.iloc[0]["vehicle_type"])
-            route_id = str(trip_fixes.iloc[0]["route_id"])
-            brigade = str(trip_fixes.iloc[0]["brigade"])
+            idx0 = int(f_idx[0])
+            vehicle_type = m_veh_type_list[idx0]
+            route_id = m_route_id_list[idx0]
+            brigade = m_brigade_list[idx0]
 
-            fix_lats = trip_fixes["lat"].values
-            fix_lons = trip_fixes["lon"].values
-            fix_times = trip_fixes["gps_timestamp_utc"].values
+            fix_times = m_ts[f_idx]
+            fix_times_list = fix_times.tolist()
+            fix_xs = m_fx_all[f_idx]
+            fix_ys = m_fy_all[f_idx]
+            n_fixes = len(fix_times_list)
+            if n_fixes == 0:
+                continue
+            first_fix_valid = fix_times_list[0] > 100_000_000
 
-            # Pre-project fixes of this trip to Warsaw Euclidean metric coordinates
-            fix_xs = (fix_lons - LON_0_DEG) * METERS_PER_DEG_LON
-            fix_ys = (fix_lats - LAT_0_DEG) * METERS_PER_DEG_LAT
+            s_idx_list = s_idx.tolist()
+            sched_min_seq = st_seq_list[s_idx_list[0]]
+            sched_max_seq = st_seq_list[s_idx_list[-1]]
+            for si in s_idx_list:
+                sq = st_seq_list[si]
+                if sq < sched_min_seq:
+                    sched_min_seq = sq
+                if sq > sched_max_seq:
+                    sched_max_seq = sq
 
-            sched_min_seq = int(stop_group["stop_sequence"].min())
-            sched_max_seq = int(stop_group["stop_sequence"].max())
+            # Compute full 2D (n_stops x n_fixes) distance matrix and +/- 90 min temporal window
+            s_xs = st_sx_all[s_idx]
+            s_ys = st_sy_all[s_idx]
+            s_arrs = st_arr_utc_arr[s_idx]
+            dists_mat = np.hypot(fix_xs[None, :] - s_xs[:, None], fix_ys[None, :] - s_ys[:, None])
+            if first_fix_valid:
+                time_ok = (s_arrs[:, None] <= 100_000_000) | (
+                    np.abs(fix_times[None, :] - s_arrs[:, None]) <= 5400
+                )
+                masked_dists_mat = np.where(time_ok, dists_mat, 99999.0)
+            else:
+                masked_dists_mat = dists_mat
+
+            row_min_all = masked_dists_mat.min(axis=1).tolist()
+            row_argmin_all = masked_dists_mat.argmin(axis=1).tolist()
+
+            in_rows, in_cols = np.nonzero(masked_dists_mat <= radius)
+            in_by_k: Dict[int, List[int]] = {}
+            if len(in_rows) > 0:
+                for r_k, c_idx in zip(in_rows.tolist(), in_cols.tolist()):
+                    if r_k not in in_by_k:
+                        in_by_k[r_k] = [c_idx]
+                    else:
+                        in_by_k[r_k].append(c_idx)
 
             trip_rows: List[Dict[str, Any]] = []
             min_allowed_idx = 0
 
-            for stop_row in stop_group.itertuples(index=False):
-                seq = int(stop_row.stop_sequence)
-                stop_id = str(stop_row.stop_id)
-                stop_name = str(stop_row.stop_name)
-                s_lat = float(stop_row.stop_lat)
-                s_lon = float(stop_row.stop_lon)
+            for k, si in enumerate(s_idx_list):
+                g_min = row_min_all[k]
+                if g_min > 60.0:
+                    continue
+                g_idx = row_argmin_all[k]
+                if g_idx >= min_allowed_idx:
+                    min_dist = g_min
+                    closest_idx_cached = g_idx
+                else:
+                    sl = masked_dists_mat[k, min_allowed_idx:]
+                    if len(sl) == 0:
+                        continue
+                    min_dist = float(sl.min())
+                    if min_dist > 60.0:
+                        continue
+                    closest_idx_cached = min_allowed_idx + int(sl.argmin())
 
-                sched_arr_utc = self._parse_hhmmss_to_utc(date_str, stop_row.arrival_time)
-                sched_dep_utc = self._parse_hhmmss_to_utc(date_str, stop_row.departure_time)
+                seq = st_seq_list[si]
+                stop_id = st_stop_id_list[si]
+                stop_name = st_stop_name_list[si]
+                sched_arr_utc = st_arr_utc_list[si]
+                sched_dep_utc = st_dep_utc_list[si]
 
-                s_x = (s_lon - LON_0_DEG) * METERS_PER_DEG_LON
-                s_y = (s_lat - LAT_0_DEG) * METERS_PER_DEG_LAT
-
-                # Vectorized Euclidean metric distances for this stop
-                dists = np.hypot(fix_xs - s_x, fix_ys - s_y)
-                seq_mask = np.arange(len(dists)) >= min_allowed_idx
-                # If both fix_times and sched_arr_utc are valid epoch timestamps, bound within +/- 90 min
-                if sched_arr_utc > 100_000_000 and len(fix_times) > 0 and fix_times[0] > 100_000_000:
-                    seq_mask = seq_mask & (np.abs(fix_times - sched_arr_utc) <= 5400)
-
-                valid_dists = np.where(seq_mask, dists, 99999.0)
-                min_dist = float(valid_dists.min()) if len(valid_dists) > 0 else 99999.0
-
-                # Detect monotonic entry and contiguous exit around stop radius (25m)
-                inside_indices = np.where((dists <= self.stop_radius) & seq_mask)[0]
-
-                actual_arr_utc = None
-                actual_dep_utc = None
-                event_type = "SKIPPED"
-                confidence = "LOW"
-                arr_delay_s = None
-                dep_delay_s = None
-                dwell_s = None
-
-                if len(inside_indices) > 0:
+                if min_dist <= radius:
                     event_type = "STOPPED"
-                    first_in = int(inside_indices[0])
+                    raw_in = in_by_k[k]
+                    inside_indices = (
+                        [ix for ix in raw_in if ix >= min_allowed_idx]
+                        if raw_in[0] < min_allowed_idx
+                        else raw_in
+                    )
+                    first_in = inside_indices[0]
                     last_in = first_in
                     for idx in inside_indices[1:]:
-                        dt_in = float(fix_times[idx] - fix_times[last_in])
-                        if dt_in <= 180.0 or (int(idx) == last_in + 1 and dt_in <= 1200.0):
-                            last_in = int(idx)
+                        dt_in = float(fix_times_list[idx] - fix_times_list[last_in])
+                        if dt_in <= 180.0 or (idx == last_in + 1 and dt_in <= 1200.0):
+                            last_in = idx
                         else:
                             break
                     min_allowed_idx = last_in
 
+                    dists_k = dists_mat[k]
                     # Sub-10s arrival interpolation
                     if first_in > 0:
                         t_arr = interpolate_stop_boundary_timestamp(
-                            t_outside=float(fix_times[first_in - 1]),
-                            d_outside=float(dists[first_in - 1]),
-                            t_inside=float(fix_times[first_in]),
-                            d_inside=float(dists[first_in]),
-                            radius_meters=self.stop_radius,
+                            t_outside=float(fix_times_list[first_in - 1]),
+                            d_outside=float(dists_k[first_in - 1]),
+                            t_inside=float(fix_times_list[first_in]),
+                            d_inside=float(dists_k[first_in]),
+                            radius_meters=radius,
                         )
-                        bracket = fix_times[first_in] - fix_times[first_in - 1]
+                        bracket = fix_times_list[first_in] - fix_times_list[first_in - 1]
                     else:
-                        t_arr = float(fix_times[first_in])
+                        t_arr = float(fix_times_list[first_in])
                         bracket = 10.0
 
                     # Sub-10s departure interpolation
-                    if last_in < len(fix_times) - 1:
+                    if last_in < n_fixes - 1:
                         t_dep = interpolate_stop_boundary_timestamp(
-                            t_outside=float(fix_times[last_in + 1]),
-                            d_outside=float(dists[last_in + 1]),
-                            t_inside=float(fix_times[last_in]),
-                            d_inside=float(dists[last_in]),
-                            radius_meters=self.stop_radius,
+                            t_outside=float(fix_times_list[last_in + 1]),
+                            d_outside=float(dists_k[last_in + 1]),
+                            t_inside=float(fix_times_list[last_in]),
+                            d_inside=float(dists_k[last_in]),
+                            radius_meters=radius,
                         )
                     else:
-                        t_dep = float(fix_times[last_in])
+                        t_dep = float(fix_times_list[last_in])
 
                     actual_arr_utc = int(round(t_arr))
                     actual_dep_utc = int(round(t_dep))
@@ -377,27 +461,19 @@ class GoldStopEventReconstructor:
 
                     confidence = "HIGH" if bracket <= 12.0 else ("MEDIUM" if bracket <= 25.0 else "LOW")
 
-                    if sched_arr_utc > 0:
-                        arr_delay_s = actual_arr_utc - sched_arr_utc
-                    if sched_dep_utc > 0:
-                        dep_delay_s = actual_dep_utc - sched_dep_utc
+                    arr_delay_s = (actual_arr_utc - sched_arr_utc) if sched_arr_utc > 0 else None
+                    dep_delay_s = (actual_dep_utc - sched_dep_utc) if sched_dep_utc > 0 else None
 
-                elif min_dist <= 60.0:
+                else:
                     event_type = "PASSED"
-                    # Vehicle passed near stop without stopping
-                    closest_idx = int(np.argmin(valid_dists))
-                    min_allowed_idx = closest_idx
-                    actual_arr_utc = int(fix_times[closest_idx])
+                    # Vehicle passed near stop without stopping (radius < min_dist <= 60.0)
+                    min_allowed_idx = closest_idx_cached
+                    actual_arr_utc = fix_times_list[closest_idx_cached]
                     actual_dep_utc = actual_arr_utc
                     dwell_s = 0
                     confidence = "MEDIUM"
-                    if sched_arr_utc > 0:
-                        arr_delay_s = actual_arr_utc - sched_arr_utc
-                    if sched_dep_utc > 0:
-                        dep_delay_s = actual_dep_utc - sched_dep_utc
-                else:
-                    # Vehicle never approached stop (min_dist > 60m); drop unobserved non-event
-                    continue
+                    arr_delay_s = (actual_arr_utc - sched_arr_utc) if sched_arr_utc > 0 else None
+                    dep_delay_s = (actual_dep_utc - sched_dep_utc) if sched_dep_utc > 0 else None
 
                 # Forecast comparison
                 zbk_val = zbk_forecasts.get((trip_id, seq))
@@ -449,7 +525,7 @@ class GoldStopEventReconstructor:
                 obs_seqs = {r["stop_sequence"] for r in trip_rows}
                 has_start = sched_min_seq in obs_seqs
                 has_terminal = sched_max_seq in obs_seqs
-                n_sched = len(stop_group)
+                n_sched = len(s_idx_list)
                 has_majority_coverage = (n_sched >= 6) and (len(obs_seqs) >= max(5, int(0.6 * n_sched)))
                 if not ((has_start and has_terminal) or has_majority_coverage):
                     dropped_incomplete_cnt += 1
