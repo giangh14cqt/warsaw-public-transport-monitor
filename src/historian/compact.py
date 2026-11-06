@@ -13,15 +13,21 @@ import logging
 import os
 import shutil
 import subprocess
+import sys
 import tarfile
 import time
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
-import pandas as pd
-import pyarrow as pa
-import pyarrow.parquet as pq
+try:
+    import pandas as pd
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+except ImportError:
+    pd = None  # type: ignore[assignment]
+    pa = None  # type: ignore[assignment]
+    pq = None  # type: ignore[assignment]
 
 try:
     import zstandard as zstd
@@ -32,32 +38,40 @@ from src.historian.config import paths
 
 logger = logging.getLogger(__name__)
 
-VEHICLE_FIXES_PARQUET_SCHEMA = pa.schema(
-    [
-        ("service_date", pa.string()),
-        ("vehicle_type", pa.string()),
-        ("vehicle_number", pa.string()),
-        ("route_id", pa.string()),
-        ("brigade", pa.string()),
-        ("lat", pa.float64()),
-        ("lon", pa.float64()),
-        ("gps_timestamp_utc", pa.int64()),
-        ("gps_time_str", pa.string()),
-        ("tick_ts", pa.int64()),
-        ("hour_utc", pa.string()),
-    ]
+VEHICLE_FIXES_PARQUET_SCHEMA = (
+    pa.schema(
+        [
+            ("service_date", pa.string()),
+            ("vehicle_type", pa.string()),
+            ("vehicle_number", pa.string()),
+            ("route_id", pa.string()),
+            ("brigade", pa.string()),
+            ("lat", pa.float64()),
+            ("lon", pa.float64()),
+            ("gps_timestamp_utc", pa.int64()),
+            ("gps_time_str", pa.string()),
+            ("tick_ts", pa.int64()),
+            ("hour_utc", pa.string()),
+        ]
+    )
+    if pa is not None
+    else None
 )
 
-ZBK_FORECASTS_PARQUET_SCHEMA = pa.schema(
-    [
-        ("service_date", pa.string()),
-        ("trip_id", pa.string()),
-        ("stop_sequence", pa.int32()),
-        ("forecast_kind", pa.string()),
-        ("forecast_val", pa.int64()),
-        ("tick_ts", pa.int64()),
-        ("hour_utc", pa.string()),
-    ]
+ZBK_FORECASTS_PARQUET_SCHEMA = (
+    pa.schema(
+        [
+            ("service_date", pa.string()),
+            ("trip_id", pa.string()),
+            ("stop_sequence", pa.int32()),
+            ("forecast_kind", pa.string()),
+            ("forecast_val", pa.int64()),
+            ("tick_ts", pa.int64()),
+            ("hour_utc", pa.string()),
+        ]
+    )
+    if pa is not None
+    else None
 )
 
 
@@ -386,6 +400,12 @@ class HourlyBronzeCompactor:
           - bronze_parquet/date={date_str}/zbk_forecasts.parquet
         Preserves exact chronological ordering for 100% parity with raw .tar.zst reconstruction.
         """
+        if pd is None or pa is None or pq is None:
+            logger.warning(
+                "Skipping daily Parquet materialization because 'pandas'/'pyarrow' are not installed in this Python interpreter."
+            )
+            return {"status": "SKIPPED_NO_PYARROW", "date": date_str}
+
         t0 = time.time()
         date_pq_dir = self.bronze_parquet_dir / f"date={date_str}"
         manifest_path = date_pq_dir / "_manifest.json"
@@ -749,6 +769,52 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
+
+    # If running on a Docker host where bare system python3 lacks pandas/pyarrow,
+    # automatically delegate execution into a transient container using the historian image.
+    if (pd is None or pa is None) and not args.skip_parquet and os.getenv("IN_DOCKER_COMPACT") != "1":
+        if shutil.which("docker"):
+            docker_img = ""
+            for cname in ("warsaw_historian_daemon", "warsaw_telemetry_daemon"):
+                try:
+                    out = subprocess.check_output(
+                        ["docker", "inspect", "--format={{.Config.Image}}", cname],
+                        stderr=subprocess.DEVNULL,
+                        text=True,
+                    ).strip()
+                    if out:
+                        docker_img = out
+                        break
+                except Exception:
+                    continue
+
+            if docker_img:
+                proj_root = str(paths.root)
+                uid_gid = f"{os.getuid()}:{os.getgid()}"
+                cmd = [
+                    "docker",
+                    "run",
+                    "--rm",
+                    "-e",
+                    "IN_DOCKER_COMPACT=1",
+                    "--user",
+                    uid_gid,
+                    "-v",
+                    f"{proj_root}/src:/app/src",
+                    "-v",
+                    f"{proj_root}/data:/app/data",
+                    "-w",
+                    "/app",
+                    docker_img,
+                    "python3",
+                    "-m",
+                    "src.historian.compact",
+                    *sys.argv[1:],
+                ]
+                logger.info(
+                    f"Host python3 lacks pandas/pyarrow; delegating compaction & Parquet materialization to Docker image '{docker_img}'..."
+                )
+                os.execvp("docker", cmd)
 
     compactor = HourlyBronzeCompactor(compression_level=args.level)
     sources = [args.source] if args.source else None
