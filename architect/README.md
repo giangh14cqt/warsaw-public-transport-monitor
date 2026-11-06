@@ -236,7 +236,7 @@ flowchart LR
 
 2. **Gold Stop Events to Modeling Design Matrix ("Mat Matrix")**:
    - Out-of-core DuckDB vectorized SQL query pipeline scanning `stop_events.parquet`.
-   - Computes autoregressive lag features (`prev_stop_delay`, `prev2_stop_delay`, $\Delta t_{\text{run}}$, $\Delta t_{\text{dwell}}$, $\text{trip\_progress}$) partitioned by `trip_instance_key`.
+   - Computes autoregressive lag features (`prev_stop_delay`, `prev2_stop_delay`, $\Delta t_{\text{run}}$, $\Delta t_{\text{dwell}}$, `trip_progress`) partitioned by `trip_instance_key`.
    - Computes inter-vehicle headway deviations partitioned by `(route_id, stop_id)`.
    - Executes four concurrent exogenous joins (IMGW synoptic weather, OSMnx road corridor topology, Polish calendar, transit hubs).
    - Filters origin stops, terminal turnaround layovers (*pętle*), and extreme outliers.

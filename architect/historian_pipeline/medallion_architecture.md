@@ -221,14 +221,14 @@ Given fix $(t_{\text{out}}, d_{\text{out}})$ outside the buffer and $(t_{\text{i
 $$\text{ratio} = \frac{d_{\text{out}} - R}{d_{\text{out}} - d_{\text{in}}}$$
 $$t_{\text{boundary}} = t_{\text{out}} + \text{ratio} \cdot (t_{\text{in}} - t_{\text{out}})$$
 
-- **Physical Arrival Epoch**: $t_{\text{actual\_arrival}} = \text{round}(t_{\text{boundary, entry}})$
-- **Physical Departure Epoch**: $t_{\text{actual\_departure}} = \text{round}(t_{\text{boundary, exit}})$
-- **Measured Dwell Duration**: $\Delta t_{\text{dwell}} = \max(0, t_{\text{actual\_departure}} - t_{\text{actual\_arrival}})$
-- **Ground-Truth Delay**: $\text{arrival\_delay\_seconds} = t_{\text{actual\_arrival}} - t_{\text{scheduled\_arrival}}$
+- **Physical Arrival Epoch**: $t_{\text{arr}} = \text{round}(t_{\text{boundary, entry}})$
+- **Physical Departure Epoch**: $t_{\text{dep}} = \text{round}(t_{\text{boundary, exit}})$
+- **Measured Dwell Duration**: $\Delta t_{\text{dwell}} = \max(0, t_{\text{dep}} - t_{\text{arr}})$
+- **Ground-Truth Delay**: $\Delta t_{\text{arr}} = t_{\text{arr}} - t_{\text{sched}}$
 
 #### 5. Live GTFS-RT Companion Forecast Matching
 The Historian concurrently ingests raw `zbk_rt` GTFS-RT Protobuf feeds from `api.zbiorkom.live`. Stop events are cross-referenced by composite key `(trip_id, stop_sequence)` to extract the operator's predicted delay at that exact moment:
-$$\text{forecast\_error\_s} = \text{arrival\_delay\_seconds} - \text{zbk\_forecast\_delay\_s}$$
+$$\Delta t_{\text{error}} = \Delta t_{\text{arr}} - \Delta t_{\text{forecast}}$$
 This isolates pure operator prediction error from underlying physical road congestion.
 
 ---
@@ -283,8 +283,8 @@ stateDiagram-v2
 ### 🎯 Trip Completeness Invariant (Start-to-Terminal Filtering)
 
 To guarantee statistically unbiased dwell times and valid autoregressive lag features for downstream modeling:
-- **Starting Stop Requirement**: The trip's scheduled initial stop ($s_{\min} = \min(\text{stop\_sequence})$ in GTFS) must be observed (`STOPPED` or `PASSED`).
-- **Terminal Stop Requirement**: The trip's scheduled final destination ($s_{\max} = \max(\text{stop\_sequence})$ in GTFS) must be observed (`STOPPED` or `PASSED`).
+- **Starting Stop Requirement**: The trip's scheduled initial stop ($s_{\min} = \min(\text{stop sequence})$ in GTFS) must be observed (`STOPPED` or `PASSED`).
+- **Terminal Stop Requirement**: The trip's scheduled final destination ($s_{\max} = \max(\text{stop sequence})$ in GTFS) must be observed (`STOPPED` or `PASSED`).
 - **Incomplete Trip Exclusion**: Partial or truncated trips (e.g., trips clipped mid-route by ingestion startup or shutdown) are dropped from Gold storage. This guarantees downstream Feature Mart fusion operates exclusively on end-to-end trips with authentic origin-to-destination progression.
 
 ---
@@ -333,8 +333,8 @@ Location: `data/historian/gold/stop_events/date=YYYY-MM-DD/stop_events.parquet`
 | `scheduled_departure_utc`| `INT64` | Timetable scheduled departure epoch (UTC) |
 | `actual_arrival_utc` | `INT64` | **Observed physical arrival epoch** via sub-10s interpolation |
 | `actual_departure_utc`| `INT64` | **Observed physical departure epoch** via sub-10s interpolation |
-| `arrival_delay_seconds`| `INT32` | Ground truth arrival delay ($s$) ($t_{\text{actual\_arr}} - t_{\text{sched\_arr}}$) |
-| `departure_delay_seconds`| `INT32`| Ground truth departure delay ($s$) ($t_{\text{actual\_dep}} - t_{\text{sched\_dep}}$) |
+| `arrival_delay_seconds`| `INT32` | Ground truth arrival delay ($s$) ($t_{\text{arr}} - t_{\text{sched}}$) |
+| `departure_delay_seconds`| `INT32`| Ground truth departure delay ($s$) ($t_{\text{dep}} - t_{\text{sched}}$) |
 | `dwell_seconds` | `INT32` | Measured dwell time at stop ($s$) ($\max(0, t_{\text{dep}} - t_{\text{arr}})$) |
 | `zbk_forecast_delay_s`| `INT32` | Operator live GTFS-RT forecast delay ($s$) |
 | `forecast_error_s` | `INT32` | **Forecast Error: $\text{Delay}_{\text{actual}} - \text{Delay}_{\text{forecast}}$** |

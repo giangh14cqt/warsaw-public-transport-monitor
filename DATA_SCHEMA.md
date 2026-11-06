@@ -302,7 +302,7 @@ erDiagram
 | `corridor_name` | `VARCHAR` | Yes | Topology | Name of primary arterial corridor (e.g., `'Puławska'`, `'Trasa W-Z'`) |
 | `segment_length_meters` | `DOUBLE` | No | Topology | Stop-to-stop road segment traversal length (meters) |
 | `actual_path_length_meters`| `DOUBLE` | No | Topology | True roadway centerline path distance (meters) |
-| `tortuosity_ratio` | `DOUBLE` | No | Topology | Route curve ratio: $\text{actual\_path\_length} / \text{euclidean\_distance}$ |
+| `tortuosity_ratio` | `DOUBLE` | No | Topology | Route curve ratio: $d_{\text{actual}} / d_{\text{euclidean}}$ |
 | `signalized_intersection_count` | `BIGINT` | No | Topology | Number of traffic signals along the road segment |
 | `is_dedicated_right_of_way` | `BOOLEAN` | No | Topology | Physical right-of-way segregation: `true` for tram tracks / bus lanes |
 | `lane_capacity` | `BIGINT` | No | Topology | Total mixed-traffic vehicular travel lanes on the corridor |
@@ -318,7 +318,7 @@ The columns of the feature mart are organized into distinct modeling subsets dep
 ### A. Econometric Baseline: Two-Way Fixed Effects (TWFE) Panel Regression
 * **Objective**: Measure causal, ceteris paribus marginal effects of exogenous infrastructure and weather shocks.
 * **Equation**:
-  $$\text{arrival\_delay}_{i,s,t} = \alpha_i + \gamma_t + \beta_1 \text{precip}_t + \beta_2 \text{temp}_t + \beta_3 \text{signals}_s + \beta_4 \text{dedicated\_row}_s + \rho \text{prev\_delay}_{i,s-1,t} + \varepsilon_{i,s,t}$$
+  $$\text{Delay}_{i,s,t} = \alpha_i + \gamma_t + \beta_1 \text{Precip}_t + \beta_2 \text{Temp}_t + \beta_3 \text{Signals}_s + \beta_4 \text{DedicatedROW}_s + \rho \, \text{PrevDelay}_{i,s-1,t} + \varepsilon_{i,s,t}$$
 * **Dependent Variable ($Y$)**: `arrival_delay_seconds`
 * **Entity Fixed Effects ($\alpha_i$)**: `route_id` (absorbing route-level unobserved heterogeneity)
 * **Time Fixed Effects ($\gamma_t$)**: `hour_of_day` (absorbing citywide diurnal traffic demand)

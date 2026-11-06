@@ -94,13 +94,13 @@ flowchart TD
 
 ### 2.1 Medallion Tier Specifications
 * **Bronze Tier (`data/historian/bronze/`)**: Verbatim JSON payloads compressed into hourly Zstandard archives (`hour=HH.tar.zst`) partitioned by `source` (`um_bus`, `um_tram`, `zbk_rt`) and `date=YYYY-MM-DD`.
-* **Silver Tier (`data/historian/silver/`)**: Clean vehicle trajectory coordinates localized to `Europe/Warsaw`, filtered for stale transponder fixes ($|\text{tick\_ts} - \text{gps\_ts}| \le 300\text{s}$), resolved across DST fold boundaries, with forward kinematic velocities ($v$) and accelerations ($a$).
+* **Silver Tier (`data/historian/silver/`)**: Clean vehicle trajectory coordinates localized to `Europe/Warsaw`, filtered for stale transponder fixes ($|t_{\text{tick}} - t_{\text{gps}}| \le 300\text{s}$), resolved across DST fold boundaries, with forward kinematic velocities ($v$) and accelerations ($a$).
 * **Gold Tier (`data/historian/gold/stop_events/`)**: Reconstructed arrival and departure events at every transit stop along scheduled trips. Employs sub-10s linear interpolation, dominant-vehicle assignment ($0$ multi-vehicle collisions), dwell continuation for stationary vehicles, and $100\%$ active calendar compliance.
 * **Fused Feature Mart (`data/historian/processed/feature_mart_observed.parquet`)**: The primary analytical matrix uniting transit delays with exogenous dynamics across **$7{,}125{,}516$ adjacent stop-to-stop observations**.
 
 ### 2.2 Primary Target Variable: Running Delay Differential ($\Delta t_{\text{run}}$)
 To strip out trivial autoregressive delay persistence and isolate actual physical congestion on each street link, the primary modeling target is the link running delay increment:
-$$\Delta t_{\text{run}} = \text{arrival\_delay}_{s} - \text{departure\_delay}_{s-1}$$
+$$\Delta t_{\text{run}} = \Delta t_{\text{arr}, s} - \Delta t_{\text{dep}, s-1}$$
 where $\Delta t_{\text{run}} > 0$ represents incremental delay accumulated while traversing between stop $s-1$ and stop $s$.
 
 ---

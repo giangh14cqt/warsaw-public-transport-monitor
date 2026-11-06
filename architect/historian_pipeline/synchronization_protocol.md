@@ -12,8 +12,8 @@ $$\text{Drift Accumulation: } t_{k} = t_0 + k \cdot 10 + \sum_{i=1}^k \delta t_i
 
 To eliminate drift, [`src/historian/clock.py`](file:///Users/truonggiangdo/Data/LearningMaterials/UW/Thesis/DelayTraffic/playground/src/historian/clock.py) dynamically aligns every execution to absolute **POSIX wall-clock epochs**:
 
-$$t_{\text{next\_target}} = \lceil t_{\text{current}} / 10 \rceil \times 10$$
-$$\text{sleep\_duration} = \max\left(0.01, t_{\text{next\_target}} - t_{\text{current}}\right)$$
+$$t_{\text{target}} = \lceil t_{\text{current}} / 10 \rceil \times 10$$
+$$\Delta t_{\text{sleep}} = \max\left(0.01, t_{\text{target}} - t_{\text{current}}\right)$$
 
 ```mermaid
 %%{init: {

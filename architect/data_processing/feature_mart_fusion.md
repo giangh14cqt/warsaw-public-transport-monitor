@@ -86,22 +86,22 @@ flowchart TD
 At each transit stop $i$ along trip $k$, the Feature Mart decomposes delay propagation using window functions:
 
 ### 1. Cumulative Arrival Delay
-$$\text{delay}_i = t_{\text{actual\_arrival}, i} - t_{\text{scheduled\_arrival}, i}$$
+$$\text{delay}_i = t_{\text{arr}, i} - t_{\text{sched}, i}$$
 
 ### 2. Upstream Propagation Delay ($\text{delay}_{i-1}$)
-$$\text{prev\_stop\_delay} = \text{LAG}(\text{delay}_i, 1) \text{ OVER } (\text{PARTITION BY } k \text{ ORDER BY } \text{sequence})$$
+$$\text{delay}_{i-1} = \text{LAG}(\text{delay}_i, 1) \text{ OVER } (\text{PARTITION BY } k \text{ ORDER BY } s)$$
 
 ### 3. Inter-Stop Section Delay Delta ($\Delta t_{\text{run}}$)
 The pure incremental delay incurred strictly between stop $i-1$ and stop $i$ (stripping upstream shock):
-$$\Delta t_{\text{run}} = \text{delay}_i - \text{prev\_stop\_delay}$$
+$$\Delta t_{\text{run}} = \text{delay}_i - \text{delay}_{i-1}$$
 
 ### 4. Dwell Time ($\Delta t_{\text{dwell}}$) - Historian Observed Only
 The real physical door-open boarding/alighting duration:
-$$\Delta t_{\text{dwell}} = t_{\text{actual\_departure}, i} - t_{\text{actual\_arrival}, i}$$
+$$\Delta t_{\text{dwell}} = t_{\text{dep}, i} - t_{\text{arr}, i}$$
 
 ### 5. Operator Forecast Error ($\Delta t_{\text{error}}$) - Historian Observed Only
 The deviation between operator GTFS-RT forecast and ground-truth arrival:
-$$\text{forecast\_error\_s} = \text{delay}_{\text{forecast}, i} - \text{delay}_{\text{observed}, i}$$
+$$\Delta t_{\text{error}} = \text{delay}_{\text{forecast}, i} - \text{delay}_{\text{observed}, i}$$
 
 ---
 
@@ -246,14 +246,14 @@ LAG(actual_departure_utc) OVER (
 
 From these window lags, the engine extracts the core econometric variables:
 - **Incremental Running Delay Shock ($\Delta t_{\text{run}}$)**:
-  $$\Delta t_{\text{run}} = \text{arrival\_delay\_seconds} - \text{prev\_stop\_delay}$$
+  $$\Delta t_{\text{run}} = \text{delay}_i - \text{delay}_{i-1}$$
   This strips away all upstream delay inherited from previous segments, isolating the pure local shock incurred across the current corridor segment $[i-1 \to i]$.
 - **Dwell Time Shock ($\Delta t_{\text{dwell}}$)**:
-  $$\Delta t_{\text{dwell}} = \text{departure\_delay\_seconds} - \text{arrival\_delay\_seconds}$$
+  $$\Delta t_{\text{dwell}} = t_{\text{dep}, i} - t_{\text{arr}, i}$$
 - **Observed Segment Run Time**:
-  $$\text{observed\_run\_time\_s} = t_{\text{actual\_arrival}, i} - t_{\text{actual\_departure}, i-1}$$
+  $$t_{\text{run}, i} = t_{\text{arr}, i} - t_{\text{dep}, i-1}$$
 - **Trip Progress Ratio**:
-  $$\text{trip\_progress} = \frac{s_i - s_{\min}}{s_{\max} - s_{\min}} \in [0.0, 1.0]$$
+  $$\text{progress}_i = \frac{s_i - s_{\min}}{s_{\max} - s_{\min}} \in [0.0, 1.0]$$
 
 #### 3. Inter-Trip Headway Window Matching
 To capture vehicle bunching and headway degradation, the engine executes a cross-trip window partition by `(route_id, stop_id)` chronologically ordered by arrival time:
@@ -264,7 +264,7 @@ rt_arrival_time - LAG(rt_arrival_time) OVER (
 ) AS headway_actual_s
 ```
 Headway deviation is calculated against the running median headway for that specific line and stop post:
-$$\text{headway\_deviation} = \text{headway\_actual\_s} - \text{median}(\text{headway\_actual\_s})$$
+$$\Delta h = h_{\text{actual}} - \text{median}(h_{\text{actual}})$$
 Excessive headway deviation directly signals downstream passenger overcrowding and extended dwell times.
 
 #### 4. Exogenous Database Matching & Joins
@@ -278,7 +278,7 @@ The engine executes four simultaneous out-of-core relational and spatial joins:
 | **4. Interchanges** | `v_interchange` (Warsaw Transit Hubs) | `t.stop_id = hub.stop_id` | `interchange_line_count`, `is_metro_proximity` (M1/M2 station transfer flag) |
 
 #### 5. Filtering Origin Stops & Terminal Turnarounds
-- **Origin Stop Filter (`WHERE t.prev_stop_id IS NOT NULL`)**: Drops the first scheduled stop of each trip ($s = s_{\min}$) because initial dispatch has no upstream running segment or lag features ($\text{prev\_stop\_delay} = \text{null}$).
+- **Origin Stop Filter (`WHERE t.prev_stop_id IS NOT NULL`)**: Drops the first scheduled stop of each trip ($s = s_{\min}$) because initial dispatch has no upstream running segment or lag features (`prev_stop_delay` is NULL).
 - **Terminal Layover Filter (`AND t.is_terminal_stop = false`)**: Transit operators schedule statutory 10–25 minute driver recovery layovers at terminal turnaround loops (*pętle*). Retaining terminal departure delays would severely contaminate running speed and congestion models with scheduled rest pauses.
 - **Extreme Run Shock Clipping (`AND ABS(t.delta_t_run) <= 1800`)**: Discards segment outliers $>30$ minutes caused by emergency detours or severe traffic police blockades.
 
@@ -292,36 +292,36 @@ $$\mathbf{y} = \begin{bmatrix} \Delta t_{\text{run}, 1} \\ \Delta t_{\text{run},
 
 #### Design Matrix Column Taxonomy:
 1. **Operational Sub-Matrix $\mathbf{X}_{\text{oper}} \in \mathbb{R}^{N \times 7}$**:
-   - $\text{prev\_stop\_delay} \in \mathbb{R}$ (Autoregressive lag-1 delay)
-   - $\text{prev2\_stop\_delay} \in \mathbb{R}$ (Autoregressive lag-2 delay)
-   - $\text{trip\_progress} \in [0, 1]$ (Fractional distance along scheduled route)
-   - $\text{headway\_deviation} \in \mathbb{R}$ (Deviation from nominal dispatch headway)
-   - $\text{headway\_actual\_s} \in \mathbb{R}^+$ (Observed inter-vehicle gap in seconds)
-   - $\text{is\_origin\_stop} \in \{0, 1\}$
-   - $\text{is\_tram} \in \{0, 1\}$ (Rail track physics vs. pneumatic tire bus physics)
+   - `prev_stop_delay` $\in \mathbb{R}$ (Autoregressive lag-1 delay)
+   - `prev2_stop_delay` $\in \mathbb{R}$ (Autoregressive lag-2 delay)
+   - `trip_progress` $\in [0, 1]$ (Fractional distance along scheduled route)
+   - `headway_deviation` $\in \mathbb{R}$ (Deviation from nominal dispatch headway)
+   - `headway_actual_s` $\in \mathbb{R}^+$ (Observed inter-vehicle gap in seconds)
+   - `is_origin_stop` $\in \{0, 1\}$
+   - `is_tram` $\in \{0, 1\}$ (Rail track physics vs. pneumatic tire bus physics)
 
 2. **Infrastructure Sub-Matrix $\mathbf{X}_{\text{infra}} \in \mathbb{R}^{N \times 9}$**:
-   - $\text{signalized\_intersection\_count} \in \mathbb{N}$ (Number of traffic signal phases crossed)
-   - $\text{segment\_length\_meters} \in \mathbb{R}^+$ (Euclidean displacement between stop posts)
-   - $\text{actual\_path\_length\_meters} \in \mathbb{R}^+$ (Physical street centerline distance)
-   - $\text{tortuosity\_ratio} = \frac{L_{\text{path}}}{L_{\text{euclid}}} \ge 1.0$ (Corridor winding coefficient)
-   - $\text{interchange\_line_count} \in \mathbb{N}$ (Number of overlapping bus/tram lines at stop)
-   - $\text{is\_metro\_proximity} \in \{0, 1\}$ (Station within 150m walking radius of M1/M2)
-   - $\text{is\_dedicated\_right\_of\_way} \in \{0, 1\}$ (Exclusive bus lane *buspas* or separated tramway)
-   - $\text{lane\_capacity} \in \mathbb{N}$ (Total vehicular lanes on corridor segment)
-   - $\text{is\_study\_corridor} \in \{0, 1\}$ (Key arterial monitor corridor)
+   - `signalized_intersection_count` $\in \mathbb{N}$ (Number of traffic signal phases crossed)
+   - `segment_length_meters` $\in \mathbb{R}^+$ (Euclidean displacement between stop posts)
+   - `actual_path_length_meters` $\in \mathbb{R}^+$ (Physical street centerline distance)
+   - `tortuosity_ratio` $= \frac{L_{\text{path}}}{L_{\text{euclid}}} \ge 1.0$ (Corridor winding coefficient)
+   - `interchange_line_count` $\in \mathbb{N}$ (Number of overlapping bus/tram lines at stop)
+   - `is_metro_proximity` $\in \{0, 1\}$ (Station within 150m walking radius of M1/M2)
+   - `is_dedicated_right_of_way` $\in \{0, 1\}$ (Exclusive bus lane *buspas* or separated tramway)
+   - `lane_capacity` $\in \mathbb{N}$ (Total vehicular lanes on corridor segment)
+   - `is_study_corridor` $\in \{0, 1\}$ (Key arterial monitor corridor)
 
 3. **Temporal Sub-Matrix $\mathbf{X}_{\text{temp}} \in \mathbb{R}^{N \times 8}$**:
-   - $\text{hour\_of\_day} \in \{0, \dots, 23\}$, $\text{day\_of\_week} \in \{0, \dots, 6\}$
-   - $\text{is\_peak\_hour} \in \{0, 1\}$, $\text{is\_morning\_peak} \in \{0, 1\}$, $\text{is\_evening\_peak} \in \{0, 1\}$
-   - $\text{is\_weekend} \in \{0, 1\}$, $\text{is\_school\_day} \in \{0, 1\}$, $\text{is\_public\_holiday} \in \{0, 1\}$
+   - `hour_of_day` $\in \{0, \dots, 23\}$, `day_of_week` $\in \{0, \dots, 6\}$
+   - `is_peak_hour` $\in \{0, 1\}$, `is_morning_peak` $\in \{0, 1\}$, `is_evening_peak` $\in \{0, 1\}$
+   - `is_weekend` $\in \{0, 1\}$, `is_school_day` $\in \{0, 1\}$, `is_public_holiday` $\in \{0, 1\}$
 
 4. **Meteorological Sub-Matrix $\mathbf{X}_{\text{meteo}} \in \mathbb{R}^{N \times 5}$**:
-   - $\text{temperature\_c} \in \mathbb{R}$
-   - $\text{precipitation\_mm} \in \mathbb{R}^+$ (Hourly rain/snow liquid equivalent)
-   - $\text{wind\_speed\_ms} \in \mathbb{R}^+$
-   - $\text{relative\_humidity} \in [0, 100]$
-   - $\text{freezing\_rain\_flag} \in \{0, 1\}$ (Temperature $\le 0^\circ\text{C}$ with active rain)
+   - `temperature_c` $\in \mathbb{R}$
+   - `precipitation_mm` $\in \mathbb{R}^+$ (Hourly rain/snow liquid equivalent)
+   - `wind_speed_ms` $\in \mathbb{R}^+$
+   - `relative_humidity` $\in [0, 100]$
+   - `freezing_rain_flag` $\in \{0, 1\}$ (Temperature $\le 0^\circ\text{C}$ with active rain)
 
 ---
 

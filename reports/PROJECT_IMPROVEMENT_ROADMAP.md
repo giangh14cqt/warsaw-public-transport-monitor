@@ -117,7 +117,7 @@ The goal is to provide clear, actionable recommendations across all project area
 * **Causal Enhancement**: To provide firm policy advice to Warsaw ZTM on whether investing tens of millions of PLN in a dedicated bus lane will *cause* delay reductions:
   * **Double Machine Learning (DML / EconML)**:
     Estimate the **Partially Linear Treatment Effect**:
-    $$Y = \theta(X) \cdot \text{Dedicated\_ROW} + g(X) + \epsilon$$
+    $$Y = \theta(X) \cdot \text{Dedicated ROW} + g(X) + \epsilon$$
     $$D = m(X) + \eta$$
     where $g(X)$ and $m(X)$ are estimated via LightGBM, and $\theta(X)$ captures the **Heterogeneous Treatment Effect (HTE)** of dedicated transit infrastructure conditioned on traffic density and weather shocks.
 
