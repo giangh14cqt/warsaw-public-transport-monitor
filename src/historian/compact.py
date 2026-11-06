@@ -790,15 +790,12 @@ if __name__ == "__main__":
 
             if docker_img:
                 proj_root = str(paths.root)
-                uid_gid = f"{os.getuid()}:{os.getgid()}"
                 cmd = [
                     "docker",
                     "run",
                     "--rm",
                     "-e",
                     "IN_DOCKER_COMPACT=1",
-                    "--user",
-                    uid_gid,
                     "-v",
                     f"{proj_root}/src:/app/src",
                     "-v",
