@@ -21,6 +21,7 @@ class HistorianPaths:
 
     # Storage tiers
     bronze_dir: Path = field(init=False)
+    bronze_parquet_dir: Path = field(init=False)
     silver_dir: Path = field(init=False)
     gold_dir: Path = field(init=False)
     gtfs_dir: Path = field(init=False)
@@ -28,6 +29,7 @@ class HistorianPaths:
 
     def __post_init__(self):
         object.__setattr__(self, "bronze_dir", self.base_dir / "bronze")
+        object.__setattr__(self, "bronze_parquet_dir", self.base_dir / "bronze_parquet")
         object.__setattr__(self, "silver_dir", self.base_dir / "silver")
         object.__setattr__(self, "gold_dir", self.base_dir / "gold")
         object.__setattr__(self, "gtfs_dir", self.base_dir / "gtfs")
@@ -35,7 +37,14 @@ class HistorianPaths:
 
     def ensure_directories(self) -> None:
         """Create storage root directories if they do not exist."""
-        for path in (self.bronze_dir, self.silver_dir, self.gold_dir, self.gtfs_dir, self.processed_dir):
+        for path in (
+            self.bronze_dir,
+            self.bronze_parquet_dir,
+            self.silver_dir,
+            self.gold_dir,
+            self.gtfs_dir,
+            self.processed_dir,
+        ):
             path.mkdir(parents=True, exist_ok=True)
 
 

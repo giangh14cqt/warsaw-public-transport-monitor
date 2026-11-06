@@ -12,7 +12,7 @@ import logging
 import os
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 from zoneinfo import ZoneInfo
 
 import duckdb
@@ -115,8 +115,19 @@ def _extract_single_hour_fixes(task_args: Tuple[str, str, str, str, str]) -> Lis
 class SilverTrajectoryProcessor:
     """Transforms raw Bronze vehicle telemetry into deduplicated, trajectory-linked Silver Parquet tables."""
 
-    def __init__(self, bronze_dir: Optional[Path] = None, silver_dir: Optional[Path] = None):
+    def __init__(
+        self,
+        bronze_dir: Optional[Path] = None,
+        silver_dir: Optional[Path] = None,
+        bronze_parquet_dir: Optional[Path] = None,
+    ):
         self.bronze_dir = bronze_dir or paths.bronze_dir
+        if bronze_parquet_dir is not None:
+            self.bronze_parquet_dir = bronze_parquet_dir
+        elif bronze_dir is not None and bronze_dir != paths.bronze_dir:
+            self.bronze_parquet_dir = bronze_dir.parent / "bronze_parquet"
+        else:
+            self.bronze_parquet_dir = paths.bronze_parquet_dir
         self.silver_dir = silver_dir or paths.silver_dir
         self.silver_dir.mkdir(parents=True, exist_ok=True)
         self.gtfs_versioner = HistorianGTFSVersioner()
@@ -125,16 +136,66 @@ class SilverTrajectoryProcessor:
         """Parses Warsaw local datetime string 'YYYY-MM-DD HH:MM:SS' into UTC epoch seconds."""
         return _parse_warsaw_time_to_utc(time_str, tick_ts)
 
+    def extract_raw_fixes_df(
+        self,
+        date_str: str,
+        max_hours: Optional[List[str]] = None,
+        max_workers: Optional[int] = None,
+        use_raw_bronze: bool = False,
+    ) -> pd.DataFrame:
+        """
+        Loads raw GPS fixes for a given date as a DataFrame.
+        Prefers the pre-unpacked daily Parquet partition (bronze_parquet/date=YYYY-MM-DD/vehicle_fixes.parquet)
+        unless use_raw_bronze=True or the Parquet partition is absent, in which case it falls back to
+        decompressing raw Bronze .tar.zst/.gz archives.
+        """
+        pq_file = self.bronze_parquet_dir / f"date={date_str}" / "vehicle_fixes.parquet"
+        if not use_raw_bronze and pq_file.exists() and pq_file.stat().st_size > 0:
+            try:
+                df = pq.read_table(pq_file).to_pandas()
+                if max_hours and "hour_utc" in df.columns:
+                    df = df[df["hour_utc"].isin(max_hours)].reset_index(drop=True)
+                if "hour_utc" in df.columns:
+                    df = df.drop(columns=["hour_utc"])
+                logger.info(
+                    f"Fast-loaded {len(df):,} raw fixes for {date_str} directly from {pq_file} (zero decompression)."
+                )
+                return df
+            except Exception as e:
+                logger.warning(
+                    f"Failed reading daily Bronze Parquet {pq_file}, falling back to raw .tar.zst archives: {e}"
+                )
+
+        fixes = self.extract_raw_fixes(
+            date_str=date_str,
+            max_hours=max_hours,
+            max_workers=max_workers,
+            use_raw_bronze=True,
+        )
+        return pd.DataFrame(fixes) if fixes else pd.DataFrame()
+
     def extract_raw_fixes(
         self,
         date_str: str,
         max_hours: Optional[List[str]] = None,
         max_workers: Optional[int] = None,
+        use_raw_bronze: bool = False,
     ) -> List[Dict[str, Any]]:
         """
-        Extracts and normalizes raw GPS fixes from all Bronze json.gz/tar.zst files for a given date.
-        Uses ProcessPoolExecutor to decompress and parse hourly archives in parallel across CPU cores.
+        Extracts and normalizes raw GPS fixes from Bronze for a given date.
+        Uses pre-unpacked bronze_parquet if available (unless use_raw_bronze=True),
+        otherwise decompresses hourly .tar.zst/.gz archives in parallel across CPU cores.
         """
+        pq_file = self.bronze_parquet_dir / f"date={date_str}" / "vehicle_fixes.parquet"
+        if not use_raw_bronze and pq_file.exists() and pq_file.stat().st_size > 0:
+            df = self.extract_raw_fixes_df(
+                date_str=date_str,
+                max_hours=max_hours,
+                max_workers=max_workers,
+                use_raw_bronze=False,
+            )
+            return df.to_dict("records") if not df.empty else []
+
         tasks: List[Tuple[str, str, str, str, str]] = []
 
         for v_type, source_name in [("bus", "um_bus"), ("tram", "um_tram")]:
@@ -180,15 +241,21 @@ class SilverTrajectoryProcessor:
         logger.info(f"Parallel Bronze extraction complete for {date_str}: {len(fixes):,} raw fixes gathered.")
         return fixes
 
-    def deduplicate_and_compute_kinematics(self, raw_fixes: List[Dict[str, Any]]) -> pd.DataFrame:
+    def deduplicate_and_compute_kinematics(
+        self, raw_fixes: Union[List[Dict[str, Any]], pd.DataFrame]
+    ) -> pd.DataFrame:
         """
         Sorts fixes chronologically by vehicle, collapses repeated identical pings,
         and computes inter-fix delta distance, delta time, and speed.
         """
-        if not raw_fixes:
-            return pd.DataFrame(columns=[f.name for f in SILVER_SCHEMA])
-
-        df = pd.DataFrame(raw_fixes)
+        if isinstance(raw_fixes, pd.DataFrame):
+            if raw_fixes.empty:
+                return pd.DataFrame(columns=[f.name for f in SILVER_SCHEMA])
+            df = raw_fixes.copy()
+        else:
+            if not raw_fixes:
+                return pd.DataFrame(columns=[f.name for f in SILVER_SCHEMA])
+            df = pd.DataFrame(raw_fixes)
 
         # Sort chronologically per physical vehicle
         df.sort_values(
@@ -439,7 +506,12 @@ class SilverTrajectoryProcessor:
 
         return df
 
-    def process_date(self, date_str: str, force: bool = False) -> Optional[Path]:
+    def process_date(
+        self,
+        date_str: str,
+        force: bool = False,
+        use_raw_bronze: bool = False,
+    ) -> Optional[Path]:
         """
         Executes end-to-end Silver trajectory generation for a given date.
         Saves output to data/historian/silver/date=YYYY-MM-DD/trajectories.parquet.
@@ -454,12 +526,12 @@ class SilverTrajectoryProcessor:
             return out_file
 
         logger.info(f"Processing Silver trajectories for {date_str}...")
-        raw_fixes = self.extract_raw_fixes(date_str)
-        if not raw_fixes:
+        raw_fixes_df = self.extract_raw_fixes_df(date_str, use_raw_bronze=use_raw_bronze)
+        if raw_fixes_df.empty:
             logger.warning(f"No Bronze fixes found for date {date_str}.")
             return None
 
-        clean_df = self.deduplicate_and_compute_kinematics(raw_fixes)
+        clean_df = self.deduplicate_and_compute_kinematics(raw_fixes_df)
         matched_df = self.match_trips_using_gtfs(clean_df, date_str)
 
         out_partition_dir.mkdir(parents=True, exist_ok=True)

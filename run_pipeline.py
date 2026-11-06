@@ -126,7 +126,12 @@ def main():
     parser.add_argument(
         "--force-rebuild",
         action="store_true",
-        help="Force rebuild of feature_mart.parquet even if already present.",
+        help="Force rebuild of feature_mart.parquet (or Silver/Gold) even if already present.",
+    )
+    parser.add_argument(
+        "--use-raw-bronze",
+        action="store_true",
+        help="Force Silver/Gold reconstruction to read cold raw Bronze .tar.zst/.gz archives instead of daily bronze_parquet.",
     )
     parser.add_argument(
         "--cohort",

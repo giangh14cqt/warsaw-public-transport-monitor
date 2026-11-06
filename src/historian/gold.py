@@ -72,10 +72,19 @@ class GoldStopEventReconstructor:
         bronze_dir: Optional[Path] = None,
         stop_radius_meters: float = 25.0,
         require_complete_trips: bool = True,
+        bronze_parquet_dir: Optional[Path] = None,
     ):
         self.silver_dir = silver_dir or paths.silver_dir
         self.gold_dir = gold_dir or paths.gold_dir
         self.bronze_dir = bronze_dir or paths.bronze_dir
+        if bronze_parquet_dir is not None:
+            self.bronze_parquet_dir = bronze_parquet_dir
+        elif bronze_dir is not None and bronze_dir != paths.bronze_dir:
+            self.bronze_parquet_dir = bronze_dir.parent / "bronze_parquet"
+        elif gold_dir is not None and gold_dir != paths.gold_dir:
+            self.bronze_parquet_dir = gold_dir.parent / "bronze_parquet"
+        else:
+            self.bronze_parquet_dir = paths.bronze_parquet_dir
         self.stop_radius = stop_radius_meters
         self.require_complete_trips = require_complete_trips
         (self.gold_dir / "stop_events").mkdir(parents=True, exist_ok=True)
@@ -112,13 +121,39 @@ class GoldStopEventReconstructor:
         except Exception:
             return 0
 
-    def load_zbk_forecast_delays(self, date_str: str) -> Dict[tuple, Any]:
+    def load_zbk_forecast_delays(
+        self, date_str: str, use_raw_bronze: bool = False
+    ) -> Dict[tuple, Any]:
         """
-        Parses Bronze zbk_rt protobuf files for the given date to extract the latest
-        forecasted arrival delay or timestamp for each (trip_id, stop_sequence).
+        Loads GTFS-RT forecast delays for the given date.
+        Prefers the pre-unpacked daily Parquet partition (bronze_parquet/date=YYYY-MM-DD/zbk_forecasts.parquet)
+        unless use_raw_bronze=True or the Parquet partition is absent, in which case it falls back to
+        parsing Bronze zbk_rt protobuf files.
         Returns mapping: (trip_id, seq) -> ("delay"|"time", value)
         """
         forecasts: Dict[tuple, Any] = {}
+        pq_file = self.bronze_parquet_dir / f"date={date_str}" / "zbk_forecasts.parquet"
+        if not use_raw_bronze and pq_file.exists() and pq_file.stat().st_size > 0:
+            try:
+                zbk_df = pq.read_table(
+                    pq_file,
+                    columns=["trip_id", "stop_sequence", "forecast_kind", "forecast_val"],
+                ).to_pandas()
+                forecasts = dict(
+                    zip(
+                        zip(zbk_df["trip_id"].tolist(), zbk_df["stop_sequence"].tolist()),
+                        zip(zbk_df["forecast_kind"].tolist(), zbk_df["forecast_val"].tolist()),
+                    )
+                )
+                logger.info(
+                    f"Fast-loaded {len(forecasts):,} GTFS-RT stop forecasts for {date_str} directly from {pq_file}."
+                )
+                return forecasts
+            except Exception as e:
+                logger.warning(
+                    f"Failed reading daily zbk_forecasts Parquet {pq_file}, falling back to raw protobufs: {e}"
+                )
+
         from src.historian.bronze import iter_bronze_ticks
 
         for tick_ts, content, filename in iter_bronze_ticks(
@@ -153,7 +188,9 @@ class GoldStopEventReconstructor:
 
         return forecasts
 
-    def process_date(self, date_str: str, force: bool = False) -> Optional[Path]:
+    def process_date(
+        self, date_str: str, force: bool = False, use_raw_bronze: bool = False
+    ) -> Optional[Path]:
         """
         Reconstructs all stop arrival/departure events and actual delays for a given date.
         If force=False and gold partition exists, reuses existing file for fast multi-date processing.
@@ -221,7 +258,7 @@ class GoldStopEventReconstructor:
         con.close()
 
         # Load zbiorkom benchmark forecasts
-        zbk_forecasts = self.load_zbk_forecast_delays(date_str)
+        zbk_forecasts = self.load_zbk_forecast_delays(date_str, use_raw_bronze=use_raw_bronze)
 
         # Group fixes by trip_id
         fixes_by_trip = {tid: grp.sort_values("gps_timestamp_utc") for tid, grp in matched_df.groupby("matched_trip_id")}

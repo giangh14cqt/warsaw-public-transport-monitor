@@ -50,38 +50,101 @@ if ! command -v rclone &> /dev/null; then
 fi
 
 # Optional flags processing
+# Default behavior ("Good Case"): skip raw bronze/source=*/** (.tar.zst / .gz) and pull
+# only daily partitioned bronze_parquet/, bronze/_ticks/, silver/, gold/, and gtfs/*.zip.
+# Pass --with-raw-bronze (optionally with --date YYYY-MM-DD) for cold backup recovery.
 EXTRA_RCLONE_FLAGS=()
-for arg in "$@"; do
-    case "$arg" in
+PULL_RAW_BRONZE=0
+TARGET_DATE=""
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
         --no-bronze)
-            EXTRA_RCLONE_FLAGS+=(--exclude "bronze/**")
-            echo "Option: Excluded Bronze raw telemetry (--no-bronze)." | tee -a "$LOG_FILE"
+            PULL_RAW_BRONZE=0
+            shift
             ;;
-        --compacted-only)
-            EXTRA_RCLONE_FLAGS+=(--exclude "bronze/**/hour=*/**")
-            echo "Option: Excluded loose tick files, pulling only hourly bundles (--compacted-only)." | tee -a "$LOG_FILE"
+        --with-raw-bronze|--compacted-only)
+            PULL_RAW_BRONZE=1
+            shift
+            ;;
+        --date)
+            if [[ -n "${2:-}" ]]; then
+                TARGET_DATE="$2"
+                shift 2
+            else
+                echo "ERROR: --date requires a YYYY-MM-DD argument." | tee -a "$LOG_FILE"
+                exit 1
+            fi
+            ;;
+        --date=*)
+            TARGET_DATE="${1#*=}"
+            shift
             ;;
         *)
-            EXTRA_RCLONE_FLAGS+=("$arg")
+            EXTRA_RCLONE_FLAGS+=("$1")
+            shift
             ;;
     esac
 done
 
+if [[ -n "$TARGET_DATE" ]]; then
+    if [[ "$PULL_RAW_BRONZE" -eq 1 ]]; then
+        echo "Option: Recovery Mode — pulling cold raw Bronze (.tar.zst) + daily Parquet for date=$TARGET_DATE." | tee -a "$LOG_FILE"
+        EXTRA_RCLONE_FLAGS+=(
+            --include "/bronze/source=*/date=${TARGET_DATE}/*.tar.zst"
+            --include "/bronze_parquet/date=${TARGET_DATE}/**"
+            --include "/bronze/_ticks/date=${TARGET_DATE}/**"
+            --include "/silver/date=${TARGET_DATE}/**"
+            --include "/gold/stop_events/date=${TARGET_DATE}/**"
+        )
+    else
+        echo "Option: Fast Mode — pulling daily Parquet partitions for date=$TARGET_DATE." | tee -a "$LOG_FILE"
+        EXTRA_RCLONE_FLAGS+=(
+            --include "/bronze_parquet/date=${TARGET_DATE}/**"
+            --include "/bronze/_ticks/date=${TARGET_DATE}/**"
+            --include "/silver/date=${TARGET_DATE}/**"
+            --include "/gold/stop_events/date=${TARGET_DATE}/**"
+        )
+    fi
+else
+    if [[ "$PULL_RAW_BRONZE" -eq 1 ]]; then
+        EXTRA_RCLONE_FLAGS+=(--exclude "bronze/**/hour=*/**")
+        echo "Option: Recovery Mode (--with-raw-bronze) — pulling cold hourly .tar.zst archives in addition to daily Parquet." | tee -a "$LOG_FILE"
+    else
+        EXTRA_RCLONE_FLAGS+=(--exclude "bronze/source=*/**")
+        echo "Option: Fast Parquet Mode (default) — skipping cold raw bronze/source=*/** archives (use --with-raw-bronze to pull raw .tar.zst backup)." | tee -a "$LOG_FILE"
+    fi
+fi
+
 # Run rclone copy (downloads only new/updated files; preserves local files)
 # Excludes active temporary files and extracted GTFS text/duckdb files
-rclone copy "$FULL_SOURCE" "$TARGET_DIR" \
-    --fast-list \
-    --transfers=8 \
-    --checkers=16 \
-    --update \
-    --stats=5s \
-    --exclude "*.tmp" \
-    --exclude "gtfs/*/**" \
-    ${EXTRA_RCLONE_FLAGS[@]+"${EXTRA_RCLONE_FLAGS[@]}"} \
-    --log-file="$LOG_FILE" \
-    --log-level=INFO \
-    --stats-log-level=NOTICE \
-    -P
+if [[ -n "$TARGET_DATE" ]]; then
+    rclone copy "$FULL_SOURCE" "$TARGET_DIR" \
+        --fast-list \
+        --transfers=8 \
+        --checkers=16 \
+        --update \
+        --stats=5s \
+        ${EXTRA_RCLONE_FLAGS[@]+"${EXTRA_RCLONE_FLAGS[@]}"} \
+        --log-file="$LOG_FILE" \
+        --log-level=INFO \
+        --stats-log-level=NOTICE \
+        -P
+else
+    rclone copy "$FULL_SOURCE" "$TARGET_DIR" \
+        --fast-list \
+        --transfers=8 \
+        --checkers=16 \
+        --update \
+        --stats=5s \
+        --exclude "*.tmp" \
+        --exclude "gtfs/*/**" \
+        ${EXTRA_RCLONE_FLAGS[@]+"${EXTRA_RCLONE_FLAGS[@]}"} \
+        --log-file="$LOG_FILE" \
+        --log-level=INFO \
+        --stats-log-level=NOTICE \
+        -P
+fi
 
 echo "[$(date -u '+%Y-%m-%d %H:%M:%SZ')] Synchronization complete." | tee -a "$LOG_FILE"
 echo "==================================================================" | tee -a "$LOG_FILE"

@@ -214,14 +214,19 @@ def run_stage_gold(args: argparse.Namespace) -> Dict[str, Any]:
 
     t0 = time.time()
     force_rebuild = getattr(args, "force_rebuild", False)
+    use_raw_bronze = getattr(args, "use_raw_bronze", False)
     start_date = getattr(args, "start_date", None)
     end_date = getattr(args, "end_date", None)
 
     silver_proc = SilverTrajectoryProcessor()
     gold_rec = GoldStopEventReconstructor()
 
-    # Discover all bronze date partitions
+    # Discover all bronze date partitions (across both fast bronze_parquet/ and cold raw bronze/)
     bronze_dates = set()
+    if hist_paths.bronze_parquet_dir.exists():
+        for d_dir in hist_paths.bronze_parquet_dir.glob("date=*"):
+            if d_dir.is_dir():
+                bronze_dates.add(d_dir.name.split("=", 1)[1])
     for src_dir in hist_paths.bronze_dir.glob("source=*"):
         for d_dir in src_dir.glob("date=*"):
             bronze_dates.add(d_dir.name.split("=", 1)[1])
@@ -233,8 +238,8 @@ def run_stage_gold(args: argparse.Namespace) -> Dict[str, Any]:
 
     processed_dates = []
     for d_str in sorted_dates:
-        silver_proc.process_date(d_str, force=force_rebuild)
-        gold_rec.process_date(d_str, force=force_rebuild)
+        silver_proc.process_date(d_str, force=force_rebuild, use_raw_bronze=use_raw_bronze)
+        gold_rec.process_date(d_str, force=force_rebuild, use_raw_bronze=use_raw_bronze)
         processed_dates.append(d_str)
 
     duration = time.time() - t0

@@ -39,15 +39,24 @@ flowchart TD
 ```
 
 ### Step 1: Pull Latest Telemetry Partitions from Google Drive
-Runs `rclone copy` with `--update`, fetching only newly uploaded hourly and daily partitions while preserving existing local files:
-```bash
-./pull_historian_from_gdrive.sh
-```
-*Note: To exclude loose raw tick files and only fetch hourly archives, pass `--compacted-only`.*
+- **Good Case (Standard Fast Daily Parquet Sync — Default)**:
+  Runs `rclone copy` with `--update`, skipping cold raw `bronze/source=*/**` (`.tar.zst`) archives and downloading only the pre-unpacked daily Parquet partitions (`bronze_parquet/date=YYYY-MM-DD/{vehicle_fixes.parquet, zbk_forecasts.parquet}`), `bronze/_ticks/`, `silver/`, `gold/`, and `gtfs/*.zip`:
+  ```bash
+  ./pull_historian_from_gdrive.sh
+  ```
+- **Not-So-Good Case (Cold Backup Recovery — Pulling Raw `.tar.zst` Archives)**:
+  If you ever need to re-parse raw Warsaw City API JSONs or Zbiorkom GTFS-RT Protobufs from the cold backup vault on Google Drive, pass `--with-raw-bronze` (optionally scoped to a single `--date YYYY-MM-DD`):
+  ```bash
+  # Pull cold .tar.zst archives for a specific date:
+  ./pull_historian_from_gdrive.sh --with-raw-bronze --date 2026-11-02
+
+  # Or pull all cold .tar.zst archives across all dates:
+  ./pull_historian_from_gdrive.sh --with-raw-bronze
+  ```
 *Audit log: `logs/pull_historian_gdrive.log`.*
 
 ### Step 2: Audit Temporal Bounds
-Check the date boundaries across Bronze, Gold, Weather, GTFS, and OSM sources:
+Check the date boundaries across Bronze Parquet, Gold, Weather, GTFS, and OSM sources:
 ```bash
 .venv/bin/python run_pipeline.py --check-ranges
 ```
@@ -61,12 +70,17 @@ Harvest IMGW-PIB hourly synoptic observations covering the expanded calendar win
 *Example: `.venv/bin/python run_pipeline.py --stage exogenous --start-date 2026-10-18 --end-date 2026-10-30`.*
 
 ### Step 4: Reconstruct Silver Trajectories & Gold Stop Events for New Dates
-> **CRITICAL**: The gold reconstructor processes Bronze GPS points into Silver clean trajectories and then into Gold stop arrival/departure events. It automatically caches and reuses existing dates instantaneously, running only the newly acquired dates:
+> **CRITICAL**: The Silver/Gold reconstructor automatically uses the fast daily Parquet partitions (`data/historian/bronze_parquet/date=YYYY-MM-DD/`) without unzipping raw archives, and caches/reuses existing Gold dates instantaneously:
 ```bash
+# Good Case (Fast Path — reads daily bronze_parquet directly):
 .venv/bin/python run_pipeline.py --stage gold --start-date <NEW_START_DATE> --end-date <NEW_END_DATE>
+
+# Not-So-Good Case (Fallback Path — forces reading cold raw .tar.zst archives or rebuilding bronze_parquet):
+.venv/bin/python -m src.historian.compact --date <DATE> --backfill-parquet --force
+.venv/bin/python run_pipeline.py --stage gold --start-date <DATE> --end-date <DATE> --force-rebuild --use-raw-bronze
 ```
 *Example: `.venv/bin/python run_pipeline.py --stage gold --start-date 2026-10-28 --end-date 2026-10-30`.*
-*(Note: `--stage all` does not re-run `--stage gold` by default; always run `--stage gold` when new raw partitions are synced).*
+*(Note: `--stage all` does not re-run `--stage gold` by default; always run `--stage gold` when new partitions are synced).*
 
 ### Step 5: Rebuild the Unified Fused Feature Mart
 Fuse all Gold stop events across all available dates with hourly weather, OSMnx corridor topology, school/holiday calendars, and Metro transfer hubs into `data/historian/processed/feature_mart_observed.parquet`:

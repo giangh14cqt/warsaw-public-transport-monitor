@@ -119,6 +119,9 @@ def inspect_available_ranges(data_dir: Optional[str] = None) -> Dict[str, Any]:
     """
     base_data_dir = data_dir or str(paths.data_dir)
     raw_pattern = os.path.join(base_data_dir, "raw", "**", "*.parquet")
+    historian_bronze_pq_pattern = os.path.join(
+        base_data_dir, "historian", "bronze_parquet", "date=*", "vehicle_fixes.parquet"
+    )
     historian_pattern = os.path.join(base_data_dir, "historian", "gold", "stop_events", "date=*", "*.parquet")
     weather_path = os.path.join(base_data_dir, "processed", "imgw_weather_hourly.parquet")
     gtfs_dir = os.path.join(base_data_dir, "gtfs")
@@ -184,6 +187,47 @@ def inspect_available_ranges(data_dir: Optional[str] = None) -> Dict[str, Any]:
             "total_files": 0,
             "total_records": 0,
             "guidance": "Run ./pull_from_gdrive.sh to pull daily raw partitions from Google Drive.",
+        }
+
+    # 1a. Historian Daily Bronze Parquet Partitions (Unpacked Vehicle Fixes)
+    bronze_pq_files = glob.glob(historian_bronze_pq_pattern)
+    if bronze_pq_files:
+        try:
+            bpq_dates = sorted(
+                list(
+                    {
+                        os.path.basename(os.path.dirname(f)).replace("date=", "")
+                        for f in bronze_pq_files
+                        if "date=" in f
+                    }
+                )
+            )
+            bpq_rows_res = con.execute(
+                f"SELECT COUNT(*) FROM read_parquet('{historian_bronze_pq_pattern}')"
+            ).fetchone()
+            bpq_rows = int(bpq_rows_res[0]) if bpq_rows_res and bpq_rows_res[0] is not None else 0
+            report["sources"]["historian_bronze_parquet"] = {
+                "status": "AVAILABLE",
+                "total_files": len(bronze_pq_files),
+                "total_records": bpq_rows,
+                "start_date": bpq_dates[0] if bpq_dates else None,
+                "end_date": bpq_dates[-1] if bpq_dates else None,
+                "partition_dates": bpq_dates,
+                "path_pattern": historian_bronze_pq_pattern,
+            }
+        except Exception as e:
+            logger.warning(f"Error querying historian bronze parquet: {e}")
+            report["sources"]["historian_bronze_parquet"] = {
+                "status": "ERROR",
+                "error": str(e),
+                "total_files": len(bronze_pq_files),
+            }
+    else:
+        report["sources"]["historian_bronze_parquet"] = {
+            "status": "MISSING",
+            "total_files": 0,
+            "total_records": 0,
+            "guidance": "Run 'python -m src.historian.compact --backfill-parquet' or './pull_historian_from_gdrive.sh'.",
         }
 
     # 1b. Historian Observed Ground-Truth Stop Events
@@ -536,6 +580,17 @@ def format_range_report(
     lines.append(subsep)
 
     sources = report.get("sources", {})
+
+    # Historian Bronze Parquet (Daily Unpacked Fixes)
+    hbp = sources.get("historian_bronze_parquet", {})
+    if hbp:
+        hbp_status = hbp.get("status", "N/A")
+        hbp_start = hbp.get("start_date", "-") or "-"
+        hbp_end = hbp.get("end_date", "-") or "-"
+        hbp_rec = f"{hbp.get('total_records', 0):,} fixes ({hbp.get('total_files', 0)} days)"
+        lines.append(
+            f"{'Historian Bronze Parquet':<26} | {hbp_status:<11} | {hbp_start:<20} | {hbp_end:<20} | {hbp_rec}"
+        )
 
     # Historian Gold (Primary Ground Truth)
     hg = sources.get("historian_gold", {})
